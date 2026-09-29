@@ -3,9 +3,15 @@ package br.com.itau.challenge.balance.support
 import org.apache.kafka.clients.admin.AdminClient
 import org.apache.kafka.clients.admin.AdminClientConfig
 import org.apache.kafka.clients.admin.NewTopic
+import org.apache.kafka.clients.admin.OffsetSpec
+import org.apache.kafka.clients.consumer.ConsumerConfig
+import org.apache.kafka.clients.consumer.ConsumerRecord
+import org.apache.kafka.clients.consumer.KafkaConsumer
 import org.apache.kafka.clients.producer.KafkaProducer
 import org.apache.kafka.clients.producer.ProducerConfig
 import org.apache.kafka.clients.producer.ProducerRecord
+import org.apache.kafka.common.TopicPartition
+import org.apache.kafka.common.serialization.ByteArrayDeserializer
 import org.apache.kafka.common.serialization.ByteArraySerializer
 import org.awaitility.Awaitility
 import org.awaitility.kotlin.await
@@ -22,20 +28,13 @@ import java.util.concurrent.TimeUnit
  * DESLIGADA no broker, entao o topico principal (12 particoes) e o `.DLT` (3) exclusivos do teste, `it-<uuid>`, sao criados
  * aqui via `AdminClient`. O grupo de consumo tambem e exclusivo, para o teste nunca competir com o grupo `consulta-saldo` nem
  * com execucoes anteriores. Os topicos criados sao removidos ao fim da JVM (melhor esforco).
+ *
+ * O conjunto [shared] (topico, DLT e grupo) e o dos ITs que herdam de [KafkaIngestionITBase] e compartilham UM contexto Spring.
+ * Um IT que precisa de um contexto proprio (outra configuracao, `@TestConfiguration`) DEVE usar um [TopicSet] proprio: dois
+ * contextos no mesmo grupo dividiriam as particoes e um deles processaria as mensagens do outro.
  */
 object IntegrationInfra {
     val bootstrapServers: String = System.getenv("KAFKA_BOOTSTRAP_SERVERS")?.takeIf { it.isNotBlank() } ?: "localhost:19092"
-
-    private val runId: String = UUID.randomUUID().toString()
-
-    /** Topico principal exclusivo desta execucao. */
-    val topic: String = "it-$runId"
-
-    /** DLT exclusivo desta execucao. */
-    val dltTopic: String = "$topic.DLT"
-
-    /** Grupo de consumo exclusivo desta execucao. */
-    val groupId: String = "it-group-$runId"
 
     const val MAIN_PARTITIONS = 12
     const val DLT_PARTITIONS = 3
@@ -46,39 +45,22 @@ object IntegrationInfra {
         Awaitility.setDefaultPollInterval(Duration.ofMillis(100))
     }
 
-    private val topicsCreated: Boolean by lazy {
-        adminClient().use { admin ->
-            admin
-                .createTopics(
-                    listOf(
-                        NewTopic(topic, MAIN_PARTITIONS, 1.toShort()),
-                        NewTopic(dltTopic, DLT_PARTITIONS, 1.toShort()).configs(mapOf("retention.ms" to "1209600000")),
-                    ),
-                ).all()
-                .get(30, TimeUnit.SECONDS)
-        }
-        Runtime.getRuntime().addShutdownHook(
-            Thread {
-                runCatching { adminClient().use { it.deleteTopics(listOf(topic, dltTopic)).all().get(10, TimeUnit.SECONDS) } }
-            },
-        )
-        true
-    }
+    /** Conjunto de topicos e grupo compartilhado pelos ITs que herdam de [KafkaIngestionITBase]. */
+    val shared: TopicSet by lazy { TopicSet("it") }
 
-    private fun adminClient(): AdminClient =
+    /** Topico principal exclusivo desta execucao (conjunto compartilhado). */
+    val topic: String get() = shared.topic
+
+    /** DLT exclusivo desta execucao (conjunto compartilhado). */
+    val dltTopic: String get() = shared.dltTopic
+
+    /** Grupo de consumo exclusivo desta execucao (conjunto compartilhado). */
+    val groupId: String get() = shared.groupId
+
+    internal fun adminClient(): AdminClient =
         AdminClient.create(mapOf(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG to bootstrapServers, AdminClientConfig.REQUEST_TIMEOUT_MS_CONFIG to "15000"))
 
-    /** Registra as propriedades do teste (`@DynamicPropertySource`); cria os topicos antes de o contexto subir. */
-    fun registerProperties(registry: DynamicPropertyRegistry) {
-        check(topicsCreated)
-        registry.add("balance.events.topic") { topic }
-        registry.add("balance.events.dlt-topic") { dltTopic }
-        registry.add("spring.kafka.bootstrap-servers") { bootstrapServers }
-        registry.add("spring.kafka.consumer.group-id") { groupId }
-        registry.add("spring.kafka.listener.auto-startup") { "true" }
-    }
-
-    private val producer: KafkaProducer<ByteArray, ByteArray> by lazy {
+    internal val producer: KafkaProducer<ByteArray, ByteArray> by lazy {
         KafkaProducer<ByteArray, ByteArray>(
             mapOf(
                 ProducerConfig.BOOTSTRAP_SERVERS_CONFIG to bootstrapServers,
@@ -89,24 +71,93 @@ object IntegrationInfra {
         )
     }
 
+    /** Registra as propriedades do conjunto compartilhado (`@DynamicPropertySource`); cria os topicos antes de o contexto subir. */
+    fun registerProperties(registry: DynamicPropertyRegistry) = shared.registerProperties(registry)
+
+    /** Publica os bytes no topico principal compartilhado, sem chave (como o autorizador), e espera a confirmacao do broker. */
+    fun publish(payload: ByteArray) = shared.publish(payload)
+
+    fun publish(payload: String) = shared.publish(payload)
+
+    /** Publica com [key] no conjunto compartilhado; ver [TopicSet.publishKeyed]. */
+    fun publishKeyed(
+        key: String,
+        payload: String,
+    ) = shared.publishKeyed(key, payload)
+
+    /** Espera as 12 particoes do topico compartilhado estarem atribuidas aos containers do listener. */
+    fun awaitAssignment(registry: KafkaListenerEndpointRegistry) = shared.awaitAssignment(registry)
+}
+
+/**
+ * Topico principal (12 particoes), opcionalmente o `.DLT` (3 particoes, retencao de 14 dias) e o grupo de consumo, todos
+ * exclusivos. Com `createDlt = false` o DLT NAO existe (auto-criacao desligada no broker): serve ao teste de DLT ausente, que
+ * o cria depois com [createDlt].
+ */
+class TopicSet(
+    prefix: String,
+    private val createDltOnStart: Boolean = true,
+) {
+    private val runId: String = UUID.randomUUID().toString()
+    val topic: String = "$prefix-$runId"
+    val dltTopic: String = "$topic.DLT"
+    val groupId: String = "$prefix-group-$runId"
+
+    private val topicsCreated: Boolean by lazy {
+        IntegrationInfra.adminClient().use { admin ->
+            val topics = mutableListOf(NewTopic(topic, IntegrationInfra.MAIN_PARTITIONS, 1.toShort()))
+            if (createDltOnStart) topics += dltDefinition()
+            admin.createTopics(topics).all().get(30, TimeUnit.SECONDS)
+        }
+        Runtime.getRuntime().addShutdownHook(
+            Thread {
+                runCatching { IntegrationInfra.adminClient().use { it.deleteTopics(listOf(topic, dltTopic)).all().get(10, TimeUnit.SECONDS) } }
+            },
+        )
+        true
+    }
+
+    private fun dltDefinition(): NewTopic =
+        NewTopic(dltTopic, IntegrationInfra.DLT_PARTITIONS, 1.toShort()).configs(mapOf("retention.ms" to "1209600000"))
+
+    /** Cria o `.DLT` depois do inicio (teste de DLT ausente). */
+    fun createDlt() {
+        IntegrationInfra.adminClient().use { it.createTopics(listOf(dltDefinition())).all().get(30, TimeUnit.SECONDS) }
+    }
+
+    /** Registra as propriedades do teste (`@DynamicPropertySource`); cria os topicos antes de o contexto subir. */
+    fun registerProperties(registry: DynamicPropertyRegistry) {
+        check(topicsCreated)
+        registry.add("balance.events.topic") { topic }
+        registry.add("balance.events.dlt-topic") { dltTopic }
+        registry.add("spring.kafka.bootstrap-servers") { IntegrationInfra.bootstrapServers }
+        registry.add("spring.kafka.consumer.group-id") { groupId }
+        registry.add("spring.kafka.listener.auto-startup") { "true" }
+    }
+
     /** Publica os bytes no topico principal, sem chave (como o autorizador), e espera a confirmacao do broker. */
     fun publish(payload: ByteArray) {
-        producer.send(ProducerRecord<ByteArray, ByteArray>(topic, null, payload)).get(15, TimeUnit.SECONDS)
+        IntegrationInfra.producer.send(ProducerRecord<ByteArray, ByteArray>(topic, null, payload)).get(15, TimeUnit.SECONDS)
     }
 
     fun publish(payload: String) = publish(payload.toByteArray(Charsets.UTF_8))
 
     /**
      * Publica com [key]: registros com a mesma chave caem na MESMA particao e sao consumidos em ordem de publicacao. Serve so
-     * aos testes que precisam de uma ordem de chegada deterministica (contagem exata de desfechos); o autorizador real
-     * publica sem chave e o servico converge em qualquer ordem.
+     * aos testes que precisam de uma ordem de chegada deterministica (contagem exata de desfechos, vizinha na mesma particao); o
+     * autorizador real publica sem chave e o servico converge em qualquer ordem.
      */
     fun publishKeyed(
         key: String,
-        payload: String,
+        payload: ByteArray,
     ) {
-        producer.send(ProducerRecord<ByteArray, ByteArray>(topic, key.toByteArray(Charsets.UTF_8), payload.toByteArray(Charsets.UTF_8))).get(15, TimeUnit.SECONDS)
+        IntegrationInfra.producer.send(ProducerRecord<ByteArray, ByteArray>(topic, key.toByteArray(Charsets.UTF_8), payload)).get(15, TimeUnit.SECONDS)
     }
+
+    fun publishKeyed(
+        key: String,
+        payload: String,
+    ) = publishKeyed(key, payload.toByteArray(Charsets.UTF_8))
 
     /**
      * Espera todas as particoes do topico estarem atribuidas aos containers do listener. Sem isso o primeiro teste mediria o
@@ -120,7 +171,62 @@ object IntegrationInfra {
                     .flatMap { it.assignedPartitions.orEmpty() }
                     .filter { it.topic() == topic }
                     .toSet()
-            check(assigned.size == MAIN_PARTITIONS) { "particoes atribuidas: ${assigned.size} de $MAIN_PARTITIONS" }
+            check(assigned.size == IntegrationInfra.MAIN_PARTITIONS) { "particoes atribuidas: ${assigned.size} de ${IntegrationInfra.MAIN_PARTITIONS}" }
         }
+    }
+
+    // ----- DLT e lag ---------------------------------------------------------------------------------------------------
+
+    private fun dltPartitions(): List<TopicPartition> = (0 until IntegrationInfra.DLT_PARTITIONS).map { TopicPartition(dltTopic, it) }
+
+    /** Offset final de cada particao do DLT (retencao e o inicio do intervalo dos testes seguintes). */
+    fun dltEndOffsets(): Map<TopicPartition, Long> =
+        IntegrationInfra.adminClient().use { admin ->
+            admin
+                .listOffsets(dltPartitions().associateWith { OffsetSpec.latest() })
+                .all()
+                .get(15, TimeUnit.SECONDS)
+                .mapValues { it.value.offset() }
+        }
+
+    /** Quantas mensagens o DLT recebeu desde [from] (soma das diferencas de offset final). */
+    fun dltCountSince(from: Map<TopicPartition, Long>): Int = dltEndOffsets().entries.sumOf { (partition, end) -> end - (from[partition] ?: 0L) }.toInt()
+
+    /** Todas as mensagens do DLT desde [from], lidas sem grupo (atribuicao manual), com os headers. */
+    fun dltRecordsSince(from: Map<TopicPartition, Long>): List<ConsumerRecord<ByteArray, ByteArray>> {
+        val ends = dltEndOffsets()
+        val records = mutableListOf<ConsumerRecord<ByteArray, ByteArray>>()
+        KafkaConsumer<ByteArray, ByteArray>(
+            mapOf(
+                ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG to IntegrationInfra.bootstrapServers,
+                ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG to ByteArrayDeserializer::class.java.name,
+                ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG to ByteArrayDeserializer::class.java.name,
+                ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG to "false",
+            ),
+        ).use { consumer ->
+            val partitions = ends.filter { (partition, end) -> end > (from[partition] ?: 0L) }.keys.toList()
+            if (partitions.isEmpty()) return emptyList()
+            consumer.assign(partitions)
+            partitions.forEach { consumer.seek(it, from[it] ?: 0L) }
+            val deadline = System.nanoTime() + Duration.ofSeconds(15).toNanos()
+            while (partitions.any { consumer.position(it) < ends.getValue(it) } && System.nanoTime() < deadline) {
+                consumer.poll(Duration.ofMillis(200)).forEach { records += it }
+            }
+        }
+        return records
+    }
+
+    /** Mensagens do topico principal ainda nao confirmadas pelo grupo (soma do lag; particao sem commit conta desde o inicio). */
+    fun groupLag(): Long =
+        IntegrationInfra.adminClient().use { admin ->
+            val committed = admin.listConsumerGroupOffsets(groupId).partitionsToOffsetAndMetadata().get(15, TimeUnit.SECONDS)
+            val partitions = (0 until IntegrationInfra.MAIN_PARTITIONS).map { TopicPartition(topic, it) }
+            val ends = admin.listOffsets(partitions.associateWith { OffsetSpec.latest() }).all().get(15, TimeUnit.SECONDS)
+            partitions.sumOf { partition -> ends.getValue(partition).offset() - (committed[partition]?.offset() ?: 0L) }
+        }
+
+    /** Espera o grupo confirmar TODAS as mensagens publicadas (o commit e em lote, depois de processar o poll). */
+    fun awaitLagZero(atMost: Duration = Duration.ofSeconds(30)) {
+        await.atMost(atMost).untilAsserted { check(groupLag() == 0L) { "lag do grupo: ${groupLag()}" } }
     }
 }

@@ -25,21 +25,23 @@ import java.time.Duration
 import kotlin.test.assertEquals
 
 /**
- * Base dos ITs de ingestao ponta a ponta (Redpanda e DynamoDB Local reais). A `@DynamicPropertySource` vive AQUI, de modo que
- * todas as subclasses compartilham o MESMO contexto Spring em cache: um unico listener no grupo de consumo exclusivo da
- * execucao (dois contextos no mesmo grupo dividiriam as particoes e um deles processaria as mensagens do outro).
+ * Comportamento comum dos ITs de ingestao ponta a ponta (Redpanda e DynamoDB Local reais): consulta HTTP, contas de teste e
+ * espera de saldo. O conjunto de topicos e grupo ([topics]) e definido pela subclasse.
+ *
+ * Um IT com contexto Spring PROPRIO (outras propriedades ou `@TestConfiguration`) estende esta classe com um [TopicSet] proprio e
+ * a sua `@DynamicPropertySource`; os ITs sem contexto proprio estendem [KafkaIngestionITBase], que compartilha um unico contexto
+ * (dois contextos no mesmo grupo dividiriam as particoes e um deles processaria as mensagens do outro).
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
-abstract class KafkaIngestionITBase {
+abstract class KafkaITBase {
     companion object {
-        @JvmStatic
-        @DynamicPropertySource
-        fun properties(registry: DynamicPropertyRegistry) = IntegrationInfra.registerProperties(registry)
-
         /** SLO de consulta apos a publicacao (SC-002). */
         val SLO: Duration = Duration.ofSeconds(5)
     }
+
+    /** Topicos e grupo do contexto deste IT. */
+    protected abstract val topics: TopicSet
 
     @LocalServerPort
     protected var port: Int = 0
@@ -58,7 +60,7 @@ abstract class KafkaIngestionITBase {
     @BeforeEach
     fun setUp() {
         raw = DynamoDbTestSupport.rawClient()
-        IntegrationInfra.awaitAssignment(registry)
+        topics.awaitAssignment(registry)
     }
 
     @AfterEach
@@ -73,7 +75,7 @@ abstract class KafkaIngestionITBase {
     protected fun get(accountId: String): HttpResponse<String> =
         http.send(HttpRequest.newBuilder(URI.create("http://localhost:$port/balances/$accountId")).GET().build(), HttpResponse.BodyHandlers.ofString())
 
-    protected fun publish(payload: String) = IntegrationInfra.publish(payload)
+    protected fun publish(payload: String) = topics.publish(payload)
 
     /** Espera, em ate [SLO] apos a publicacao, a consulta responder 200 com [amount] e [owner]. */
     protected fun awaitBalance(
@@ -90,5 +92,20 @@ abstract class KafkaIngestionITBase {
             assertEquals(owner, body["owner"].asString())
             updatedAt?.let { assertEquals(it, body["updated_at"].asString()) }
         }
+    }
+}
+
+/**
+ * Base dos ITs de ingestao que compartilham UM contexto Spring em cache: a `@DynamicPropertySource` vive AQUI, de modo que todas
+ * as subclasses usam o mesmo conjunto [IntegrationInfra.shared] e um unico listener no grupo de consumo exclusivo da execucao.
+ */
+abstract class KafkaIngestionITBase : KafkaITBase() {
+    override val topics: TopicSet
+        get() = IntegrationInfra.shared
+
+    companion object {
+        @JvmStatic
+        @DynamicPropertySource
+        fun properties(registry: DynamicPropertyRegistry) = IntegrationInfra.registerProperties(registry)
     }
 }
