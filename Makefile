@@ -40,7 +40,7 @@ http: ## Call all .http files against the running app (no local deps, runs via D
 	docker run --rm \
 		--add-host=host.docker.internal:host-gateway \
 		-v "$(CURDIR)/$(HTTP_DIR)":/http -w /http \
-		node:20-alpine sh -c "npx --yes httpyac send hello.http --all -e docker"
+		node:20-alpine sh -c "npx --yes httpyac send *.http --all -e docker"
 
 .PHONY: db-up
 db-up: ## Start DynamoDB Local + web console and (re)seed the GreetingMessages table
