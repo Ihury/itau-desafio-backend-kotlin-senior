@@ -26,10 +26,26 @@ dependencies {
 	implementation("org.jetbrains.kotlin:kotlin-reflect")
 	implementation("tools.jackson.module:jackson-module-kotlin")
 	implementation("software.amazon.awssdk:dynamodb")
+	// O cliente HTTP sincrono do SDK (`apache5-client`) e transitivo de `dynamodb` apenas em runtime
+	// (nao esta no classpath de compilacao). Declarado aqui para o adapter configurar pool e timeouts
+	// de forma explicita com Apache5HttpClient (Constitution V). Versao gerenciada pelo BOM do SDK.
+	implementation("software.amazon.awssdk:apache5-client")
 	implementation("org.springframework.boot:spring-boot-starter-kafka")
+	// Observabilidade: Actuator + Micrometer/Prometheus (versoes gerenciadas pelo BOM do Spring Boot 4.1.0).
+	implementation("org.springframework.boot:spring-boot-starter-actuator")
+	implementation("io.micrometer:micrometer-registry-prometheus")
+	// Circuit breaker programatico (somente o core; sem starter Spring). Versoes fixas, ver research.md secao 1.
+	implementation("io.github.resilience4j:resilience4j-circuitbreaker:2.4.0")
+	implementation("io.github.resilience4j:resilience4j-micrometer:2.4.0")
 	testImplementation("org.springframework.boot:spring-boot-starter-webmvc-test")
 	testImplementation("org.jetbrains.kotlin:kotlin-test-junit5")
 	testImplementation("com.lemonappdev:konsist:0.17.3")
+	// Teste de propriedade (convergencia sob permutacao e duplicacao) e espera assincrona nos testes.
+	testImplementation("io.kotest:kotest-property:6.2.5")
+	testImplementation("org.awaitility:awaitility-kotlin")
+	// Parser YAML do teste anti-drift do OpenAPI: `org.yaml:snakeyaml` (2.6) ja esta no classpath de
+	// compilacao de teste por transitividade de `spring-boot-starter` (verificado com
+	// `./gradlew dependencies --configuration testCompileClasspath`); nao precisa ser declarado.
 	testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
