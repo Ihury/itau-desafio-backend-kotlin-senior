@@ -8,12 +8,14 @@ import br.com.itau.challenge.balance.domain.model.BalanceSnapshot
 import br.com.itau.challenge.balance.port.input.GetBalanceUseCase
 import br.com.itau.challenge.balance.port.output.BalanceSnapshotReader
 import org.slf4j.LoggerFactory
+import org.springframework.stereotype.Service
 
 /**
  * Consulta de saldo: a decisao e funcao exclusiva do snapshot vigente (FR-011). Falhas do armazenamento
  * ([br.com.itau.challenge.balance.domain.exception.BalanceStoreUnavailableException]) propagam intactas e jamais viram
  * "conta nao encontrada". Nunca registra saldo nem titular.
  */
+@Service
 class GetBalanceService(
     private val reader: BalanceSnapshotReader,
 ) : GetBalanceUseCase {

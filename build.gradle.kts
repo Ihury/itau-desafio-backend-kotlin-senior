@@ -66,6 +66,14 @@ sourceSets {
 	}
 }
 
+// O source set de integracao enxerga os membros `internal` de `main` (mapper e tradutor do adapter DynamoDB),
+// como o source set `test` ja enxerga.
+kotlin {
+	target {
+		compilations.getByName("integrationTest").associateWith(compilations.getByName("main"))
+	}
+}
+
 configurations["integrationTestImplementation"].extendsFrom(configurations.testImplementation.get())
 configurations["integrationTestRuntimeOnly"].extendsFrom(configurations.testRuntimeOnly.get())
 
