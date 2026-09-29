@@ -51,8 +51,11 @@ existe, então a idempotência tem que estar no handler e na escrita.
 
 - Valores monetários DEVEM ser `BigDecimal` ponta a ponta — desserialização, domínio,
   persistência e resposta. `Double`/`Float` são PROIBIDOS para dinheiro em qualquer camada.
-- Nenhuma conversão com perda silenciosa (arredondamento, truncamento de escala ou de
-  precisão de timestamp) é permitida.
+- Nenhuma conversão com perda silenciosa de VALOR é permitida: arredondamento, truncamento de
+  dígitos significativos e perda de precisão de timestamp são PROIBIDOS. A normalização de
+  zeros à direita (ex.: `183.10` ≡ `183.1`, como faz o tipo numérico do armazenamento e como
+  JSON Number já trata) NÃO é perda de valor. A apresentação de valores monetários DEVE
+  exibir no mínimo as casas decimais padrão da moeda, sem NUNCA arredondar.
 - Moedas DEVEM ser códigos ISO 4217 válidos; timestamps DEVEM preservar a precisão de
   microssegundos da origem; datas expostas DEVEM seguir ISO 8601 com offset.
 - Validação de formato ocorre na borda (adapter); invariantes de negócio são garantidas no
@@ -96,11 +99,16 @@ automatizada e reproduzível pelo avaliador.
   Dados pessoais e valores de saldo NÃO DEVEM ser logados.
 - Todo desfecho de processamento DEVE gerar métrica (processado, obsoleto, duplicado,
   inválido por motivo, enviado à DLT), assim como latências (p50/p99) de API e de escrita.
-- Health checks DEVEM distinguir liveness de readiness e refletir as dependências críticas.
+- Health checks DEVEM distinguir liveness de readiness, e ambos DEVEM refletir o estado do
+  próprio processo. A saúde das dependências críticas DEVE ser exposta separadamente (grupo de
+  health próprio e métrica) e NÃO DEVE retirar instâncias de rotação quando a indisponibilidade
+  da dependência é compartilhada por todas as instâncias — a API já responde a indisponibilidade
+  de forma explícita (Princípio V).
 - Nenhum `catch` pode engolir exceção sem log e métrica correspondentes.
 
 **Rationale**: em missão crítica, o que não é medido não é operável; é também critério
-explícito de production readiness.
+explícito de production readiness. Retirar todas as instâncias de rotação por falha de uma
+dependência compartilhada só converte degradação explícita em indisponibilidade total.
 
 ### VIII. Simplicidade e Decisões Registradas
 
@@ -153,4 +161,4 @@ explícito de production readiness.
   `/speckit-analyze` antes da implementação e na revisão de cada entrega.
 - Orientações operacionais de desenvolvimento ficam no `README.md` e em `docs/adr/`.
 
-**Version**: 1.0.0 | **Ratified**: 2026-09-29 | **Last Amended**: 2026-09-29
+**Version**: 1.0.1 | **Ratified**: 2026-09-29 | **Last Amended**: 2026-09-29
