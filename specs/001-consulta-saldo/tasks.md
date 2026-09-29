@@ -1,0 +1,580 @@
+---
+
+description: "Lista de tarefas da feature 001-consulta-saldo (Consulta de Saldo)"
+---
+
+# Tasks: Consulta de Saldo
+
+**Input**: Design documents de `/specs/001-consulta-saldo/` (`spec.md` com Clarifications, `plan.md`, `research.md`, `data-model.md`, `contracts/*`, `quickstart.md`) e `.specify/memory/constitution.md` v1.0.1
+
+**Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/, quickstart.md (todos presentes)
+
+**Tests**: OBRIGATÓRIOS. A Constitution VI (não negociável) exige TDD: em cada unidade abaixo as tarefas de teste vêm ANTES da implementação e descrevem o que o teste prova; o teste deve ser executado e falhar (vermelho: erro de compilação contra a assinatura ainda inexistente ou falha de asserção) antes de escrever a implementação. Nunca commitar vermelho.
+
+## Resumo
+
+- **Total**: 179 tarefas em 39 unidades de commit (10 fases).
+- **Ponto de MVP**: fim da Phase 5 (US1 + US2 + US3), unidade `C22`.
+- **Opcional**: unidade `C39` (k6), marcada OPCIONAL e sempre por último.
+
+| Fase | Escopo | Tarefas | Intervalo |
+|------|--------|---------|-----------|
+| 1 | Setup (limpeza do starter, contexto de teste e infraestrutura base) | 20 | T001-T020 |
+| 2 | Foundational (modelo de domínio compartilhado por todas as stories) | 18 | T021-T038 |
+| 3 | User Story 1 - Consultar o saldo mais atual de uma conta (Priority: P1) (MVP) | 32 | T039-T070 |
+| 4 | User Story 2 - Manter o snapshot da transação mais recente a partir dos eventos (Priority: P1) (MVP) | 27 | T071-T097 |
+| 5 | User Story 3 - Convergir para o estado correto sob duplicidade, desordem e concorrência (Priority: P1) (MVP) | 13 | T098-T110 |
+| 6 | User Story 4 - Isolar mensagens inválidas sem perdê-las nem parar o processamento (Priority: P2) | 14 | T111-T124 |
+| 7 | User Story 5 - Continuar correto quando o armazenamento fica indisponível (Priority: P2) | 9 | T125-T133 |
+| 8 | User Story 6 - Operar o serviço em produção com visibilidade (Priority: P3) | 21 | T134-T154 |
+| 9 | Polish & Cross-Cutting (produção, CI e documentação) | 15 | T155-T169 |
+| 10 | Validação final e itens opcionais | 10 | T170-T179 |
+
+| Story | Prioridade | Tarefas |
+|-------|-----------|---------|
+| US1 | P1 | 32 |
+| US2 | P1 | 27 |
+| US3 | P1 | 13 |
+| US4 | P2 | 14 |
+| US5 | P2 | 9 |
+| US6 | P3 | 21 |
+
+**Organization**: tarefas agrupadas por user story (spec.md) e, dentro de cada fase, em **unidades de commit**. Cada unidade é um commit coeso, com teste + implementação que o faz passar, e termina com `./gradlew check` verde.
+
+## Format: `- [ ] [ID] [P?] [Story?] Descrição com caminho`
+
+- **[P]**: pode rodar em paralelo (arquivos diferentes, sem dependência de tarefa incompleta e sem arquivo compartilhado)
+- **[USx]**: user story da spec (obrigatório só nas fases de user story; Setup, Foundational, Polish e Validação não levam rótulo)
+- Cada grupo é precedido por um cabeçalho `Commit Cnn: <tipo(escopo): descricao>` (Conventional Commits em português, sem acentos nem caracteres especiais, **sem trailer de co-autoria de IA**)
+
+## Path Conventions (projeto único Gradle, arquitetura hexagonal por bounded context)
+
+Os atalhos abaixo são expandidos nos caminhos deste arquivo; todos os caminhos são relativos à raiz do repositório.
+
+- Código de produção: `src/main/kotlin/br/com/itau/challenge/balance/{domain,port,application,adapter,config}`
+- Testes unitários (sem infraestrutura): `src/test/kotlin/br/com/itau/challenge/balance/...` (espelha `main`)
+- Testes de integração (DynamoDB Local + Redpanda reais): `src/integrationTest/kotlin/br/com/itau/challenge/balance/...`
+- Recursos: `src/main/resources/application.yaml`, `src/main/resources/static/openapi.yaml`, `src/test/resources/application-test.yaml`
+- Infra e operação: `infra/**`, `docker-compose.yml`, `Makefile`, `Dockerfile`, `.github/workflows/**`, `http/**`; documentação: `docs/adr/`, `docs/metodologia-ia.md`, `README.md`
+
+## Regras que valem para TODAS as unidades de commit
+
+1. **Gate por commit** (Constitution "Fluxo e Quality Gates"): `./gradlew check` verde = testes unitários sem infra + JaCoCo >= 90% de instruções + Konsist. Unidades que criam ou alteram testes de integração também rodam `make integration-test` (DynamoDB Local + Redpanda via compose) antes do commit.
+2. **Cobertura**: NUNCA baixar `coverageMinimum` (0.90) nem acrescentar exclusões em `build.gradle.kts` (`jacocoCoverageExclusions` fica só com `Application`). Se uma unidade derrubar o gate, acrescente teste do comportamento faltante na mesma unidade.
+3. **Konsist**: nenhuma unidade pode deixar `ArchitectureTest` vermelho (domain puro, application só domain+port+`@Service`+slf4j, adapters isolados por tecnologia, ninguém depende de `config`).
+4. **Ordem interna**: (a) portas/assinaturas mínimas, (b) testes que provam o comportamento e falham, (c) implementação, (d) ADR da decisão, quando houver. Tarefas de ADR e de documentação são `[P]` porque tocam arquivo próprio.
+5. **Mensagem de commit**: `tipo(escopo): descricao` em português, sem acentos/caracteres especiais e sem trailer `Co-Authored-By` de IA (Constitution: commits não carregam co-autoria de IA).
+6. **Privacidade**: nenhum log, mensagem de exceção, header do DLT ou corpo de erro pode conter saldo, titular, payload ou mensagem de parser.
+
+## Decisões de implementação derivadas destas tarefas (a validar na revisão; ver lacunas no relatório de geração)
+
+- `InvalidEventException(reason, detail?)`: `detail` opcional com o **caminho do campo** (ex.: `transaction.currency`), preenchido pelo parser; alimenta `x-rejection-detail` (`kafka-events.md` seção 5). Nunca recebe valores do payload.
+- `BalanceStoreUnavailableException(cause: StoreFailureCause)` com `THROTTLED | UNAVAILABLE | TIMEOUT`, para a tag `cause` de `balance.consumer.backpressure`.
+- `Money` compara por valor numérico (`compareTo == 0`, `hashCode` sobre `stripTrailingZeros()`): `183.10 == 183.1`, pois o DynamoDB normaliza a escala. Sem isso os testes de contrato (fake x DynamoDB) divergiriam por escala.
+- `EventInstant` converte µs em `Instant` com `Math.floorDiv/floorMod` (valores negativos, `account.created_at` de 1900 a 1970, não podem quebrar a conversão); o limite inferior de `account.created_at` é `1900-01-01` (negativo em µs), como no `transaction-event.schema.json`.
+- A tolerância de futuro entra na `application` como bean `FutureTolerance` (tipo simples em `application/`), porque a regra Konsist (b) proíbe `@Value` na camada `application`.
+- O parser Kafka constrói o **próprio** `JsonMapper` (não é `@Bean`): um bean `JsonMapper` customizado desativaria o `JsonMapper` auto-configurado do Spring MVC.
+- Propriedade de convergência: o conteúdo de um evento é derivado deterministicamente da chave `(timestamp, transactionId)` (mesma chave = mesmo conteúdo); duplicatas com conteúdo divergente são a anomalia `conflicting_duplicate`, testada à parte, e não são convergentes por definição (vale o primeiro).
+- Precisão do `Money`: limite de 38 dígitos medido com `BigDecimal.precision()` do valor recebido (conservador; um teste documenta o caso com zeros à direita).
+- Falhas do SDK na **leitura** viram sempre 503 (`BalanceStoreUnavailableException`), nunca 404; na **escrita**, apenas `ValidationException` é permanente (`BalanceStoreRejectedException`); `ResourceNotFoundException` e erros de credencial/permissão são tratados como indisponibilidade (a mensagem válida nunca é isolada por falha de infraestrutura, FR-017).
+- Nenhuma unidade pode permitir que falha transitória leve mensagem válida ao DLT: o handler de erro já nasce (US4) com backoff ilimitado para `BalanceStoreUnavailableException`; a pausa do container, o jitter e as métricas de backpressure entram na US5.
+
+---
+
+## Phase 1: Setup (limpeza do starter, contexto de teste e infraestrutura base)
+
+**Purpose**: remover o exemplo `hello`, corrigir o contexto de teste (não depender de broker), generalizar o teste de arquitetura, adicionar dependências e criar a tabela/tópicos definitivos. Sem código de negócio ainda.
+
+### Commit C01: `test(config): isola contexto de teste do broker via perfil test`
+
+- [ ] T001 Registrar o baseline: executar `./gradlew clean check` no starter e anotar o resumo de cobertura impresso pelo `jacocoTestReport`; executar `docker compose config -q` para validar o compose. Nenhuma alteração de arquivo.
+- [ ] T002 Teste vermelho em `src/test/kotlin/br/com/itau/challenge/ApplicationTests.kt`: anotar com `@ActiveProfiles("test")`, injetar `KafkaListenerEndpointRegistry` e afirmar que nenhum `listenerContainers` está `isRunning`. Prova que o contexto completo sobe sem broker; falha hoje porque o `@KafkaListener` do exemplo (`greeting-templates`) inicia sozinho.
+- [ ] T003 Criar `src/test/resources/application-test.yaml` com `spring.kafka.listener.auto-startup: false` (o teste anterior passa a verde). Executar `./gradlew check` com o Redpanda parado.
+
+### Commit C02: `refactor: remove exemplo hello e generaliza teste de arquitetura para todos os contextos`
+
+- [ ] T004 [P] Escrever `src/test/kotlin/br/com/itau/challenge/ArchitectureTest.kt` (Konsist, `Konsist.scopeFromProduction()`), descobrindo os contextos como subpacotes diretos de `br.com.itau.challenge`. Regras por contexto: (0) direção das camadas via `assertArchitecture` (`domain` depende de nada; `port` não depende de `application` nem `adapter`; `application` não depende de `adapter`), tolerando camadas ainda vazias; (a) imports do `domain` limitados a `kotlin.*`, `java.*` e o próprio domínio (nada de Spring, AWS, Kafka, Jackson, Micrometer, Resilience4j); (b) imports da `application` limitados a domain, port, `org.springframework.stereotype.Service`, `org.slf4j`, `kotlin.*`, `java.*`; (c) cada adapter de tecnologia (`input.web`, `input.kafka`, `output.dynamodb`, `output.metrics`) não importa os demais; (d) nenhum arquivo fora de `config` importa `..config..`; (e) guarda: todo subpacote direto de `br.com.itau.challenge` é um contexto cujos subpacotes pertencem a `{domain, port, application, adapter, config}`. Prova a direção de dependências para TODOS os contextos, presentes e futuros.
+- [ ] T005 Sanidade da regra (mutação manual descartável, ainda com `hello` presente): acrescentar temporariamente `import org.springframework.stereotype.Component` em `src/main/kotlin/br/com/itau/challenge/hello/domain/model/Greeting.kt`, confirmar que `ArchitectureTest` falha, e reverter. Prova que o teste não é vacuoso.
+- [ ] T006 Remover o exemplo `hello`: diretório `src/main/kotlin/br/com/itau/challenge/hello/` (serviços, portas, modelos, exceções, `GreetingController`, `GreetingTemplateConsumer`, `DynamoDbGreetingTemplate*`, `DynamoDbConfig`, DTOs), `src/test/kotlin/br/com/itau/challenge/hello/` (inclui `HexagonalArchitectureTest.kt`) e `src/integrationTest/kotlin/br/com/itau/challenge/hello/`.
+- [ ] T007 Remover `http/hello.http`; no `Makefile`, apontar o alvo `http` para todos os arquivos (`httpyac send *.http --all -e docker`) em vez de `hello.http`. (Os seeds e o compose são tratados na unidade de infra seguinte; até lá eles ainda referenciam o exemplo, sem efeito sobre `./gradlew check`.)
+- [ ] T008 Limpar `src/main/resources/application.yaml`: remover `greeting-templates`, `dynamodb.table-name`, `consumer.group-id/deserializers` do exemplo; definir `spring.application.name: consulta-saldo` e manter somente `spring.kafka.bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:19092}`.
+- [ ] T009 Executar `./gradlew clean check`: confirmar que `ArchitectureTest` e `ApplicationTests` passam e que `jacocoTestCoverageVerification` não falha com apenas `Application.kt` (excluída) em `main`. Se o JaCoCo falhar por ausência de classes, NÃO criar exclusão: registrar e antecipar a unidade `feat(domain): identificadores...` para antes desta.
+- [ ] T010 [P] `docs/adr/0001-arquitetura-hexagonal-por-bounded-context.md` (contexto, decisão, alternativas, consequências; `research.md` R-01): contexto `balance` com `domain/port/application/adapter/config`, remoção do `hello`, Konsist cobrindo todos os contextos com imports proibidos, `@Service` como único stereotype em `application`.
+
+### Commit C03: `build: adiciona dependencias de resiliencia e metricas e teste de propriedade`
+
+- [ ] T011 Editar `build.gradle.kts`: `implementation` de `org.springframework.boot:spring-boot-starter-actuator`, `io.micrometer:micrometer-registry-prometheus` (versão do BOM Boot 4.1.0, Micrometer 1.17.0), `io.github.resilience4j:resilience4j-circuitbreaker:2.4.0` e `io.github.resilience4j:resilience4j-micrometer:2.4.0`; `testImplementation` de `io.kotest:kotest-property:6.2.5` e `org.awaitility:awaitility-kotlin` (BOM 4.3.0; `integrationTestImplementation` herda por `extendsFrom`). Versões fixas conforme `research.md` seção 1; nada de `resilience4j-spring-boot4`, springdoc, jqwik ou Testcontainers.
+- [ ] T012 Confirmar o escopo do parser YAML e do cliente HTTP: verificar se `org.yaml:snakeyaml` está no classpath de compilação de teste (necessário ao teste anti-drift do OpenAPI) e, se não estiver, declarar `testImplementation("org.yaml:snakeyaml")` (versão do BOM); verificar que `software.amazon.awssdk:apache5-client` é transitivo de `dynamodb` (senão declarar explicitamente). Registrar o resultado em comentário no `build.gradle.kts`.
+- [ ] T013 Verificar: `./gradlew dependencies --configuration runtimeClasspath | grep -E "resilience4j|micrometer-registry-prometheus|actuator"` e `--configuration testRuntimeClasspath | grep -E "kotest|awaitility"` resolvem sem conflito; `./gradlew check` continua verde (o actuator não pode quebrar `ApplicationTests`).
+
+### Commit C04: `feat(infra): cria tabela AccountBalances e topicos de entrada e dlt`
+
+- [ ] T014 Verificação vermelha (antes de mexer nos seeds): subir `docker compose up -d dynamodb dynamodb-seed redpanda redpanda-seed` e confirmar que `aws dynamodb describe-table --table-name AccountBalances` e `rpk topic describe transacoes-financeiras-processadas.DLT` FALHAM (tabela e tópicos ainda inexistentes). Guardar os comandos: são o critério de aceite desta unidade.
+- [ ] T015 [P] Criar `infra/dynamodb/account-balances.json` com o item de exemplo do enunciado (consumido por `put-item`, que aceita condição e não depende de `batch-write-item`): `pk=ACCOUNT#5b19c8b6-0cc4-4c72-a989-0c2ee15fa975`, `sk=BALANCE`, `schemaVersion=1`, `ownerId=315e3cfe-f4af-4cd2-b298-a449e614349a`, `accountStatus=ENABLED`, `balanceAmount` (N) `183.12`, `balanceCurrency=BRL`, `accountCreatedAtMicros=1634874339000000`, `lastTxTsMicros=1751749453433000` (= `2025-07-05T18:04:13.433-03:00`, o `updated_at` do quickstart seção 3), `lastTxId=8e8ae808-b154-48b5-9f3e-553935cc4543`; remover `infra/dynamodb/greeting-messages.json`.
+- [ ] T016 Reescrever `infra/dynamodb/seed.sh`: tabela `${BALANCE_TABLE_NAME:-AccountBalances}` com `AttributeName=pk,KeyType=HASH` (S) e `sk,KeyType=RANGE` (S), `--billing-mode PAY_PER_REQUEST`, sem GSI/TTL/streams; idempotente (pula criação se existir); grava o item de `account-balances.json` com `aws dynamodb put-item`; imprime a contagem. Mantém o loop de espera do DynamoDB Local.
+- [ ] T017 [P] Reescrever `infra/redpanda/seed.sh`: criar `${BALANCE_EVENTS_TOPIC:-transacoes-financeiras-processadas}` com `--partitions 12 --replicas 1` e `${BALANCE_EVENTS_DLT_TOPIC:-${BALANCE_EVENTS_TOPIC}.DLT}` com `--partitions 3 --replicas 1 -c retention.ms=1209600000`, ambos idempotentes; NÃO publicar mensagens; remover `infra/redpanda/greeting-templates-seed.jsonl`. `infra/redpanda/config.sh` permanece inalterado (auto-criação de tópicos continua desligada).
+- [ ] T018 `docker-compose.yml`: nos serviços `dynamodb-seed` e `redpanda-seed` (e no `app`), substituir `GREETING_TABLE_NAME`/`GREETING_TEMPLATES_TOPIC` por `BALANCE_TABLE_NAME: AccountBalances`, `BALANCE_EVENTS_TOPIC: transacoes-financeiras-processadas`, `BALANCE_EVENTS_DLT_TOPIC: transacoes-financeiras-processadas.DLT`. `Makefile`: `db-scan` passa a listar `AccountBalances` e os textos de ajuda de `db-up`, `kafka-up`, `kafka-seed` deixam de citar `GreetingMessages`/`greeting-templates`.
+- [ ] T019 Verificação verde e idempotência: reexecutar `make db-seed` e `make kafka-seed` duas vezes; conferir `aws dynamodb describe-table` (KeySchema `pk` HASH + `sk` RANGE, `BillingModeSummary` PAY_PER_REQUEST, sem GSI), `aws dynamodb get-item` do item de exemplo, `rpk topic describe -p` (12 partições no principal e 3 no `.DLT`, `retention.ms=1209600000`) e que `docker compose wait dynamodb-seed redpanda-seed` retorna 0.
+- [ ] T020 [P] `docs/adr/0002-modelagem-dynamodb-snapshot-por-conta.md` (`research.md` R-03, `data-model.md` seção 4): tabela `AccountBalances`, `pk=ACCOUNT#<id>`/`sk=BALANCE`, on-demand, sem GSI e sem ledger na v1; padrões de acesso AP1/AP2; por que o `sk` é constante; ledger e GSI por titular como evolução (gatilhos e desenho).
+
+**Checkpoint**: repositório sem o exemplo, contexto de teste sem broker, dependências resolvidas, infraestrutura local com tabela e tópicos definitivos. `./gradlew check` verde.
+
+---
+
+## Phase 2: Foundational (modelo de domínio compartilhado por todas as stories)
+
+**Purpose**: value objects, precedência, snapshot e exceções de domínio, em Kotlin puro (Constitution I). BLOQUEIA todas as user stories.
+
+**CRITICAL**: nenhuma user story começa antes desta fase.
+
+### Commit C05: `feat(domain): identificadores canonicos com codigo de moeda e motivos de rejeicao`
+
+- [ ] T021 [P] Teste vermelho `src/test/kotlin/br/com/itau/challenge/balance/domain/model/IdentifiersTest.kt` (`AccountId`, `TransactionId`, `OwnerId`): aceita UUID 8-4-4-4-12 em minúsculas e maiúsculas e normaliza para minúsculas; rejeita com `InvalidEventException(INVALID_IDENTIFIER)` `1-1-1-1-1` (que o `UUID.fromString` do JDK aceita), string vazia, sem hífens, 36 caracteres com não-hex, `{...}`, prefixo `urn:uuid:`, espaços nas pontas; igualdade por valor canônico. Prova a armadilha do parse leniente e a canonização.
+- [ ] T022 [P] Teste vermelho `src/test/kotlin/br/com/itau/challenge/balance/domain/model/CurrencyCodeTest.kt`: aceita `BRL`, `USD`, `JPY`; rejeita `brl`, `BR`, `BRLL`, `ZZZ` (fora de `java.util.Currency.getAvailableCurrencies()`) com `INVALID_CURRENCY`. Prova ISO 4217 com letras maiúsculas.
+- [ ] T023 [P] Teste vermelho `src/test/kotlin/br/com/itau/challenge/balance/domain/model/RejectionReasonTest.kt`: o enum expõe exatamente os 8 códigos estáveis de `kafka-events.md` seção 4 (`malformed_payload`, `missing_field`, `invalid_identifier`, `invalid_value`, `invalid_currency`, `invalid_timestamp`, `unknown_domain_value`, `unprocessable_event`), únicos, com `fromCode` reversível. Prova o catálogo enumerado e estável (FR-016).
+- [ ] T024 [P] Teste vermelho `src/test/kotlin/br/com/itau/challenge/balance/domain/exception/InvalidEventExceptionTest.kt`: carrega `reason` e `detail` opcional; `withDetail(path)` devolve cópia com o caminho; `message` é só o código do motivo (nunca valores). Prova que a exceção não vaza payload.
+- [ ] T025 Implementar `src/main/kotlin/br/com/itau/challenge/balance/domain/model/RejectionReason.kt` (enum com `code`) e `src/main/kotlin/br/com/itau/challenge/balance/domain/exception/InvalidEventException.kt` (`reason`, `detail: String? = null`, `withDetail`).
+- [ ] T026 Implementar `src/main/kotlin/br/com/itau/challenge/balance/domain/model/CanonicalUuid.kt` (função interna com regex estrita `^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$` e `lowercase()`, sem `UUID.fromString`), `src/main/kotlin/br/com/itau/challenge/balance/domain/model/AccountId.kt`, `TransactionId.kt`, `OwnerId.kt` (`@JvmInline value class` sobre a string canônica, `parse(raw)`), e `src/main/kotlin/br/com/itau/challenge/balance/domain/model/CurrencyCode.kt`.
+
+### Commit C06: `feat(domain): valor monetario exato e instante de evento com limites de plausibilidade`
+
+- [ ] T027 [P] Teste vermelho `src/test/kotlin/br/com/itau/challenge/balance/domain/model/MoneyTest.kt`: aceita 38 dígitos (`12345678901234567890.123456789012345678`); 39 dígitos, escala > 38 e `1E999999999` -> `INVALID_VALUE` (o último rejeitado sem expandir, concluindo rápido); `1E+3` expandido para `1000` (só se `precisão - escala <= 38`); zero e negativo válidos; igualdade numérica (`183.10 == 183.1`, mesmo `hashCode`); `withCurrencyFractionDigits()`: BRL `183.1`->`183.10`, `100`->`100.00`, `10.123`->`10.123`, `0`->`0.00`, `-5`->`-5.00`; JPY `500`->`500`, `500.5`->`500.5`; XAU (`defaultFractionDigits = -1`) inalterado; em todos os casos `compareTo` igual ao original (NUNCA arredonda); `toPlainString` sem notação científica (`0.0000001`). Documenta o caso de precisão com zeros à direita medida por `precision()`. Prova FR-018 e a formatação da resposta.
+- [ ] T028 [P] Teste vermelho `src/test/kotlin/br/com/itau/challenge/balance/domain/model/EventInstantTest.kt`: `transaction.timestamp` exatamente `2000-01-01T00:00:00Z` (`946684800000000`) aceito e `-1` rejeitado; valor em milissegundos (`1751749453433`) e em segundos rejeitados (`INVALID_TIMESTAMP`, detecta unidade errada); `account.created_at` com mínimo `1900-01-01T00:00:00Z` (`-2208988800000000`): aceita conta de 1998 (`899251200000000`), de 1950 (µs negativos) e `0`; rejeita `-2208988800000001` (1850); conversão para `Instant` sem perda de µs (`1751749453433123` -> `...433123Z`) e para negativos (`-1` µs -> `1969-12-31T23:59:59.999999Z`, exige `floorDiv/floorMod`); ordenação por µs. Prova FR-019 e as duas regras distintas de mínimo.
+- [ ] T029 Implementar `src/main/kotlin/br/com/itau/challenge/balance/domain/model/Money.kt` (`BigDecimal` + `CurrencyCode`; precisão <= 38, escala positiva <= 38, escala negativa expandida só se `precisão - escala <= 38`; igualdade numérica; `withCurrencyFractionDigits()` = `setScale(max(scale, defaultFractionDigits))` quando `defaultFractionDigits >= 0`; nunca `Double`/`Float`) e `src/main/kotlin/br/com/itau/challenge/balance/domain/model/EventInstant.kt` (`@JvmInline value class` em µs, fábricas `transactionTimestamp(micros, minimum: Instant)` e `accountCreatedAt(micros, minimum: Instant)`, `toInstant()` com `floorDiv/floorMod`).
+- [ ] T030 [P] `docs/adr/0005-representacao-de-dinheiro-e-tempo.md` (`research.md` R-06, `data-model.md` seções 4.2 e 5): `BigDecimal` ponta a ponta, `N` no DynamoDB (`toPlainString`/`BigDecimal(String)`), normalização de zeros não é perda, escala completada às casas da moeda só na resposta, teto de 38 dígitos, alternativas `S` e centavos, µs em `Long`, `updated_at` ISO com offset `America/Sao_Paulo`.
+
+### Commit C07: `feat(domain): evento de transacao com precedencia e snapshot e excecoes de dominio`
+
+- [ ] T031 [P] Teste vermelho `src/test/kotlin/br/com/itau/challenge/balance/domain/model/PrecedenceTest.kt`: ordem total por `timestamp` numérico e, no empate, por `transactionId` lexicográfico da string canônica minúscula; iguais = mesmo evento; **armadilha `UUID.compareTo`**: `TransactionId` `ffffffff-ffff-4fff-8fff-ffffffffff01` > `00000000-0000-4000-8000-000000000001` na `Precedence` embora `java.util.UUID.compareTo` diga o contrário (comparação de `long` com sinal); laço com 2.000 pares aleatórios (`Random(42)`) provando que a ordem == `String.compareTo` das minúsculas e que difere de `UUID.compareTo` em ao menos um par; maiúsculas normalizadas antes de comparar; as 7 linhas da tabela de `data-model.md` seção 2.1 (`supersedes`).
+- [ ] T032 [P] Teste vermelho `src/test/kotlin/br/com/itau/challenge/balance/domain/model/BalanceSnapshotTest.kt`: `BalanceSnapshot.from(event)` copia dono, status da conta, saldo, moeda e `created_at` do MESMO evento e usa `Precedence(transaction.timestamp, transaction.id)` (FR-013); `supersedes(current)`: atual ausente -> `true`; ts maior -> `true`; ts menor -> `false`; empate com id maior -> `true`; menor -> `false`; igual -> `false`; eventos `DECLINED` e conta `DISABLED` supersedem como qualquer outro (FR-010/FR-011: não há filtro por status); tipo/valor/status da transação não são guardados no snapshot.
+- [ ] T033 [P] Teste vermelho `src/test/kotlin/br/com/itau/challenge/balance/domain/model/TransactionEventModelTest.kt`: `TransactionType` (`CREDIT`/`DEBIT`), `TransactionStatus` (`APPROVED`/`DECLINED`), `AccountStatus` (`ENABLED`/`DISABLED`) com `parse` exato e sensível a maiúsculas: `credit`, `TRANSFER`, `PENDING`, `SUSPENDED`, `enabled` -> `UNKNOWN_DOMAIN_VALUE`; `Transaction.amount` `>= 0` (negativo -> `INVALID_VALUE`, zero válido); `ApplyResult` com `Applied`, `Obsolete`, `Duplicate(conflicting)`.
+- [ ] T034 [P] Teste vermelho `src/test/kotlin/br/com/itau/challenge/balance/domain/exception/DomainExceptionsTest.kt`: `AccountNotFoundException` e `AccountDisabledException` só carregam `accountId` (mensagem sem saldo/titular); `BalanceStoreUnavailableException` carrega `StoreFailureCause` (`THROTTLED`, `UNAVAILABLE`, `TIMEOUT`) e a causa original e é a exceção transitória; `BalanceStoreRejectedException` é a permanente.
+- [ ] T035 Implementar `src/main/kotlin/br/com/itau/challenge/balance/domain/model/TransactionType.kt`, `TransactionStatus.kt`, `AccountStatus.kt`, `Transaction.kt`, `AccountState.kt`, `TransactionEvent.kt`.
+- [ ] T036 Implementar `src/main/kotlin/br/com/itau/challenge/balance/domain/model/Precedence.kt`, `BalanceSnapshot.kt` (`from(event)`, `supersedes(current: BalanceSnapshot?)`) e `ApplyResult.kt` (`sealed`: `Applied`, `Obsolete`, `Duplicate(conflicting: Boolean)`).
+- [ ] T037 Implementar `src/main/kotlin/br/com/itau/challenge/balance/domain/model/StoreFailureCause.kt` e as exceções `src/main/kotlin/br/com/itau/challenge/balance/domain/exception/AccountNotFoundException.kt`, `AccountDisabledException.kt`, `BalanceStoreUnavailableException.kt`, `BalanceStoreRejectedException.kt`.
+- [ ] T038 Estender `src/test/kotlin/br/com/itau/challenge/ArchitectureTest.kt`: teste "existe ao menos um contexto de negócio e `balance` possui `domain`" (a regra deixa de ser vacuosa a partir daqui) e verificação de que `balance.domain` não importa nada fora de `kotlin.*`/`java.*`.
+
+**Checkpoint**: fundação de domínio pronta e testada. As user stories podem começar.
+
+---
+
+## Phase 3: User Story 1 - Consultar o saldo mais atual de uma conta (Priority: P1) (MVP)
+
+**Goal**: `GET /balances/{accountId}` responde 200/400/404/409/503 em Problem Details (RFC 9457), com `BigDecimal` exato, escala da moeda completada sem arredondar e microssegundos preservados.
+
+**Independent Test**: com o item de exemplo do seed (conta `5b19c8b6-0cc4-4c72-a989-0c2ee15fa975`, `183.12`) e itens inseridos direto no DynamoDB, consultar conta existente, inexistente, DISABLED, id malformado e simular indisponibilidade; cada resposta é explícita e distinta (`quickstart.md` seções 3 e 7).
+
+### Commit C08: `feat(application): consulta de saldo com regra de conta desabilitada`
+
+- [ ] T039 [US1] Criar as portas `src/main/kotlin/br/com/itau/challenge/balance/port/input/GetBalanceUseCase.kt` (`fun getBalance(accountId: AccountId): BalanceSnapshot`, lança `AccountNotFoundException`/`AccountDisabledException`) e `src/main/kotlin/br/com/itau/challenge/balance/port/output/BalanceSnapshotReader.kt` (`fun find(accountId: AccountId): BalanceSnapshot?`, lança `BalanceStoreUnavailableException`). Só contratos, sem comportamento.
+- [ ] T040 [US1] Criar o fake de teste `src/test/kotlin/br/com/itau/challenge/balance/testing/InMemoryBalanceStore.kt` (parte de leitura: implementa `BalanceSnapshotReader`; `seed(snapshot)`, `failReadsWith(exception)`); a parte de escrita entra na US2.
+- [ ] T041 [P] [US1] Teste vermelho `src/test/kotlin/br/com/itau/challenge/balance/application/GetBalanceServiceTest.kt` (com o fake): snapshot ENABLED -> devolve o snapshot; conta ausente -> `AccountNotFoundException` (nunca saldo zerado); snapshot DISABLED -> `AccountDisabledException` sem dados de saldo; DISABLED substituído por ENABLED mais novo -> sucesso (a decisão é só função do snapshot vigente, FR-011); `BalanceStoreUnavailableException` do reader propaga intacta (jamais vira "não encontrada", FR-025); snapshot proveniente de evento DECLINED é servido normalmente.
+- [ ] T042 [US1] Implementar `src/main/kotlin/br/com/itau/challenge/balance/application/GetBalanceService.kt` (`@Service`, único stereotype permitido; depende só do port; slf4j sem saldo/titular).
+
+### Commit C09: `feat(dynamodb): mapeamento do item e leitura fortemente consistente do snapshot`
+
+- [ ] T043 [P] [US1] Teste vermelho `src/test/kotlin/br/com/itau/challenge/balance/adapter/output/dynamodb/BalanceItemMapperTest.kt`: `toItem(snapshot)` gera exatamente os atributos de `data-model.md` 4.1 (`pk=ACCOUNT#<minúsculo>`, `sk=BALANCE`, `schemaVersion` N `1`, `ownerId` S, `accountStatus` S, `balanceAmount` N via `toPlainString()` sem notação científica inclusive `0.0000001` e 38 dígitos, `balanceCurrency` S, `accountCreatedAtMicros` N, `lastTxTsMicros` N, `lastTxId` S); **round-trip do saldo `N`**: `fromItem` de um item com `balanceAmount="183.1"` devolve `Money` numericamente igual a `183.10` (e `withCurrencyFractionDigits()` -> `183.10`), negativo e 38 dígitos exatos, µs `1751749453433123` intactos; item corrompido (atributo ausente, `N` inválido, status desconhecido) -> `IllegalStateException` (nunca dado errado).
+- [ ] T044 [P] [US1] Teste vermelho `src/test/kotlin/br/com/itau/challenge/balance/adapter/output/dynamodb/DynamoDbExceptionTranslatorTest.kt`: matriz de traduções: `ProvisionedThroughputExceededException`, `RequestLimitExceededException` e código `ThrottlingException` -> `BalanceStoreUnavailableException(THROTTLED)`; `ApiCallTimeoutException`/`ApiCallAttemptTimeoutException` -> `TIMEOUT`; `DynamoDbException` 500/503, `InternalServerErrorException`, `SdkClientException` (conexão), `ResourceNotFoundException` e erros de credencial/permissão -> `UNAVAILABLE`; `ValidationException`: na escrita -> `BalanceStoreRejectedException`, na leitura -> `UNAVAILABLE`; exceção desconhecida não é traduzida. Prova FR-017/FR-025 (falha de infraestrutura nunca vira "não encontrada" nem isola mensagem válida).
+- [ ] T045 [P] [US1] Teste vermelho `src/test/kotlin/br/com/itau/challenge/balance/adapter/output/dynamodb/DynamoDbClientsConfigTest.kt` (cliente de leitura): retry `standard` com `maxAttempts=2`, `apiCallAttemptTimeout` 0,6 s e `apiCallTimeout` 1,5 s, conexão/aquisição 0,3 s, pool de 100; com `dynamodb.endpoint` definido usa `endpointOverride` + credenciais estáticas locais, sem endpoint usa a `DefaultCredentialsProvider`. Prova uma única camada de retry na leitura com timeouts explícitos (Constitution V).
+- [ ] T046 [P] [US1] Teste vermelho `src/test/kotlin/br/com/itau/challenge/balance/adapter/output/dynamodb/DynamoDbBalanceSnapshotReaderTest.kt` (`DynamoDbClient` mockado): `GetItem` com tabela, chave `pk/sk` e `consistentRead=true` por padrão (e `false` quando `DYNAMODB_READ_CONSISTENT=false`); item ausente -> `null`; item presente -> snapshot mapeado; QUALQUER exceção do SDK -> `BalanceStoreUnavailableException` (jamais `null`), item corrompido propaga `IllegalStateException`.
+- [ ] T047 [US1] Implementar `src/main/kotlin/br/com/itau/challenge/balance/adapter/output/dynamodb/BalanceItemMapper.kt` (`toItem`, `fromItem`, `keyOf`; constantes de nomes de atributos) e `src/main/kotlin/br/com/itau/challenge/balance/adapter/output/dynamodb/DynamoDbExceptionTranslator.kt`.
+- [ ] T048 [US1] Implementar `src/main/kotlin/br/com/itau/challenge/balance/adapter/output/dynamodb/DynamoDbClientsConfig.kt` com `DynamoDbClientProperties` própria do adapter (a regra (d) impede depender de `config`) e o cliente de leitura `dynamoDbReadClient` (`Apache5HttpClient` com pool/timeouts, `AwsRetryStrategy` standard `maxAttempts=2`, `endpointOverride` + credenciais estáticas só se `DYNAMODB_ENDPOINT` estiver definido; substitui o `DynamoDbConfig` removido) e `src/main/kotlin/br/com/itau/challenge/balance/adapter/output/dynamodb/DynamoDbBalanceSnapshotReader.kt` (`GetItem`, `ConsistentRead` configurável, tradução de exceções).
+- [ ] T049 [US1] `src/main/resources/application.yaml`: seção `dynamodb.*` (endpoint, região, `table-name`, `read.consistent`, timeouts, tentativas e pools de leitura) com os nomes e defaults de `contracts/configuration.md` (`DYNAMODB_ENDPOINT`, `DYNAMODB_REGION`, `BALANCE_TABLE_NAME`, `DYNAMODB_READ_*`, `DYNAMODB_CONNECT_TIMEOUT`, `DYNAMODB_ACQUIRE_TIMEOUT`, `DYNAMODB_READ_MAX_CONNECTIONS`).
+- [ ] T050 [US1] Teste de integração `src/integrationTest/kotlin/br/com/itau/challenge/balance/adapter/output/dynamodb/DynamoDbBalanceSnapshotReaderIT.kt` (DynamoDB Local real, conta aleatória por teste): grava via `PutItem` `balanceAmount` `N` `183.10` e prova que o DynamoDB devolve `183.1` no `GetItem` cru (normalização documentada) e que o reader entrega `Money` == `183.10`; 38 dígitos exatos; 39 dígitos rejeitados pelo banco com `ValidationException` (motivo do teto no domínio); item ausente -> `null`; item de exemplo do seed lido com `lastTxTsMicros=1751749453433000`. Executar `make integration-test`.
+- [ ] T051 [P] [US1] `docs/adr/0011-leitura-fortemente-consistente.md` (`research.md` R-05): `ConsistentRead=true` por flag, custo 2x aceito para FR-027, indisponibilidade em partição vira 503, alternativas leitura eventual e cache local.
+
+### Commit C10: `feat(dynamodb): circuit breaker na leitura com resilience4j programatico`
+
+- [ ] T052 [P] [US1] Teste vermelho `src/test/kotlin/br/com/itau/challenge/balance/adapter/output/dynamodb/CircuitBreakingBalanceSnapshotReaderTest.kt` (configuração minúscula, delegate falso): falhas `BalanceStoreUnavailableException` acima do limiar abrem o circuito e a chamada seguinte falha com `BalanceStoreUnavailableException(UNAVAILABLE)` SEM invocar o delegate; snapshot encontrado e `null` (não encontrada) contam como sucesso; outras exceções (`IllegalStateException`) não contam como falha; chamadas lentas (`>` limite) em proporção `>=` limite também abrem; `OPEN -> HALF_OPEN` automático após a espera, N chamadas de teste com sucesso fecham e uma falha reabre; `Retry-After` exposto = espera em OPEN configurada. Prova falha rápida (Constitution V, FR-025).
+- [ ] T053 [P] [US1] Teste vermelho `src/test/kotlin/br/com/itau/challenge/balance/config/ResilienceConfigTest.kt`: `CircuitBreakerProperties` mapeia os defaults de `contracts/configuration.md` (janela `PT10S`, mínimo 20 chamadas, 50% de falha, lenta `PT0.5S` a 80%, espera `PT10S`, 5 chamadas em HALF_OPEN); registro `dynamodb-read`; `TaggedCircuitBreakerMetrics` expõe `resilience4j.circuitbreaker.state` em um `SimpleMeterRegistry` (compatibilidade Micrometer 1.17, risco R1).
+- [ ] T054 [US1] Implementar `src/main/kotlin/br/com/itau/challenge/balance/adapter/output/dynamodb/CircuitBreakingBalanceSnapshotReader.kt` (decorator do port; converte `CallNotPermittedException` em `BalanceStoreUnavailableException`; só `BalanceStoreUnavailableException` conta como falha) e `src/main/kotlin/br/com/itau/challenge/balance/config/CircuitBreakerProperties.kt` + `src/main/kotlin/br/com/itau/challenge/balance/config/ResilienceConfig.kt` (registry e binding Micrometer).
+- [ ] T055 [US1] `application.yaml`: `balance.circuit-breaker.*` com `BALANCE_CB_WINDOW`, `BALANCE_CB_MIN_CALLS`, `BALANCE_CB_FAILURE_RATE`, `BALANCE_CB_SLOW_CALL`, `BALANCE_CB_SLOW_RATE`, `BALANCE_CB_OPEN_WAIT`, `BALANCE_CB_HALF_OPEN_CALLS`.
+- [ ] T056 [P] [US1] `docs/adr/0010-circuit-breaker-na-leitura-com-resilience4j.md` (`research.md` R-11): core 2.4.0 programático num decorator do port, o Spring Framework 7 não tem circuit breaker, por que não `resilience4j-spring-boot4`, 503 + `Retry-After`, escrita sem circuit breaker.
+
+### Commit C11: `feat(web): endpoint de consulta de saldo com problem details e correlation id`
+
+- [ ] T057 [P] [US1] Teste vermelho `src/test/kotlin/br/com/itau/challenge/balance/adapter/input/web/dto/BalanceResponseTest.kt`: serialização exata `{"id":...,"owner":...,"balance":{"amount":183.10,"currency":"BRL"},"updated_at":"..."}` (nomes `updated_at`), com `WRITE_BIGDECIMAL_AS_PLAIN`: `183.1`->`183.10`, `100`->`100.00`, `10.123`->`10.123`, JPY `500`->`500`, `1E+3`->`1000.00` e `0.0000001` sem notação científica (**formatação da resposta**); `updated_at`: `1751749453433000` -> `2025-07-05T18:04:13.433-03:00` (exemplo do cliente), `...433123` -> `.433123`, segundo inteiro sem fração, `2018-01-15` -> offset `-02:00` (prova `ZoneId` e não offset fixo); id em minúsculas.
+- [ ] T058 [P] [US1] Teste vermelho `src/test/kotlin/br/com/itau/challenge/balance/adapter/input/web/BalanceControllerTest.kt` (`@WebMvcTest(BalanceController::class)`, `@Import` do advice e do filtro, `@MockitoBean GetBalanceUseCase`): 200 com `Content-Type: application/json`, `Cache-Control: no-store` e `X-Correlation-Id`; 400 (`abc`, `1-1-1-1-1`, 35 caracteres) e use case NUNCA invocado (`verifyNoInteractions`, o armazenamento não é consultado, FR-024); 404 (`AccountNotFoundException`) com `type` `urn:problem-type:consulta-saldo:conta-nao-encontrada`; 409 (`AccountDisabledException`) `conta-desabilitada` com corpo SEM `balance`, `owner` nem `updated_at`; 503 (`BalanceStoreUnavailableException`) `servico-indisponivel` com `Retry-After: 10`; `RuntimeException("tabela AccountBalances")` -> 500 `erro-interno` sem pilha nem a mensagem; `application/problem+json` com `status`, `title`, `detail`, `instance`; UUID maiúsculo aceito e repassado em minúsculas; `X-Correlation-Id` válido é ecoado, inválido (`bad id!`, 65 caracteres) é substituído por UUID gerado, ausente é gerado, e o header aparece também nas respostas de erro; rota inexistente e `POST` -> 404/405 em problem+json (`spring.mvc.problemdetails`).
+- [ ] T059 [US1] Implementar `src/main/kotlin/br/com/itau/challenge/balance/adapter/input/web/dto/BalanceResponse.kt` (usa `Money.withCurrencyFractionDigits()` e `ZoneId` de exibição; `ISO_OFFSET_DATE_TIME`) e `src/main/kotlin/br/com/itau/challenge/balance/adapter/input/web/CorrelationIdFilter.kt` (`OncePerRequestFilter`, valida `^[A-Za-z0-9._-]{1,64}$`, MDC `correlationId` sempre limpo em `finally`).
+- [ ] T060 [US1] Implementar `src/main/kotlin/br/com/itau/challenge/balance/adapter/input/web/ProblemDetailsAdvice.kt` (`@RestControllerAdvice` sobre `ResponseEntityExceptionHandler`; `type` = `urn:problem-type:consulta-saldo:<slug>`, `Retry-After` vindo de `balance.circuit-breaker.open-wait`, 500 genérico com log e sem detalhes internos) e `src/main/kotlin/br/com/itau/challenge/balance/adapter/input/web/BalanceController.kt` (`GET /balances/{accountId}` recebe `String`, chama `AccountId.parse` ANTES do use case, `Cache-Control: no-store`, MDC `accountId`).
+- [ ] T061 [US1] Implementar o composition root `src/main/kotlin/br/com/itau/challenge/balance/config/BalanceBeansConfig.kt`: bean `Clock` (`Clock.systemUTC()`), `ZoneId` de exibição a partir de `balance.display-zone`, `DynamoDbBalanceSnapshotReader` decorado por `CircuitBreakingBalanceSnapshotReader` como `@Primary BalanceSnapshotReader` (o leitor cru não é `@Component`), e o `CircuitBreaker` do registry. Nada fora de `config` pode importar este pacote.
+- [ ] T062 [US1] `application.yaml`: `server.port: ${SERVER_PORT:8080}`, `spring.mvc.problemdetails.enabled: true`, `spring.jackson.write.write-bigdecimal-as-plain: true` (confirmar o nome da propriedade no Jackson 3 do Boot 4.1), `balance.display-zone: ${BALANCE_DISPLAY_ZONE:America/Sao_Paulo}`.
+- [ ] T063 [US1] Endurecer a guarda (e) de `src/test/kotlin/br/com/itau/challenge/ArchitectureTest.kt`: agora que `balance` tem `domain`, `port`, `application`, `adapter` e `config`, exigir as quatro camadas em todo contexto; rodar `./gradlew check` e confirmar cobertura >= 90% (incluindo classes `@Configuration` cobertas por `ApplicationTests`).
+
+### Commit C12: `feat(web): contrato openapi servido e verificado contra as respostas reais`
+
+- [ ] T064 [P] [US1] Teste vermelho `src/test/kotlin/br/com/itau/challenge/balance/adapter/input/web/OpenApiContractTest.kt` (anti-drift; lê APENAS o classpath `static/openapi.yaml`, porque o estágio `test` do Dockerfile não copia `specs/`): parseia o YAML (SnakeYAML) e prova que o caminho `/balances/{accountId}` `GET` documenta exatamente os status `200, 400, 404, 409, 500, 503`; para cada status exercita o controller real (mock do use case) e compara status, media type (`application/json` / `application/problem+json`), `type`/`status` constantes do documento, propriedades obrigatórias, ausência de propriedades além do schema (`additionalProperties: false`; no 409 sem `balance/owner/updated_at`), headers declarados (`Cache-Control` no 200, `Retry-After` no 503, `X-Correlation-Id` em todos), `pattern` do `accountId` == regex do controller e `pattern` de `X-Correlation-Id` == regex do filtro; exemplos do documento (`183.12`, `updated_at`) casam com o formato real; `GET /openapi.yaml` (`@SpringBootTest` + `MockMvc`, perfil test) devolve o mesmo conteúdo; se `specs/001-consulta-saldo/contracts/openapi.yaml` existir (`Assumptions`), a cópia do classpath é idêntica byte a byte.
+- [ ] T065 [US1] Copiar `specs/001-consulta-saldo/contracts/openapi.yaml` para `src/main/resources/static/openapi.yaml` (verbatim) e confirmar que o handler estático padrão do Spring MVC o serve em `/openapi.yaml` com `application/yaml` (só criar `WebMvcConfigurer` em `adapter/input/web` se necessário).
+- [ ] T066 [P] [US1] `docs/adr/0012-api-problem-details-e-openapi-contract-first.md` (`research.md` R-12): `type` URN estável, mapeamento 400/404/409/503/500, `Retry-After` fixo, OpenAPI 3.1 estático com teste anti-drift, sem springdoc (motivação de superfície e avisos de segurança).
+
+### Commit C13: `feat(consulta): integracao ponta a ponta da consulta com exemplos http e alvo make`
+
+- [ ] T067 [US1] Teste de integração `src/integrationTest/kotlin/br/com/itau/challenge/balance/adapter/input/web/BalanceQueryIT.kt` (`@SpringBootTest(webEnvironment = RANDOM_PORT)`, `@ActiveProfiles("test")`, DynamoDB Local real, itens gravados via SDK com conta aleatória): item do seed -> corpo idêntico ao exemplo do cliente (`183.12`, `2025-07-05T18:04:13.433-03:00`); `balanceAmount` armazenado `183.1` -> resposta `183.10`; DISABLED -> 409 sem campos de saldo; conta inexistente -> 404 (nunca saldo zerado); `abc` e `1-1-1-1-1` -> 400 com `DynamoDbClient` espionado (`@MockitoSpyBean`) sem NENHUMA chamada; DISABLED substituído por ENABLED mais novo -> 200; µs preservados; eco de `X-Correlation-Id`. Executar `make integration-test`.
+- [ ] T068 [P] [US1] Criar `http/balances.http` (para `make http`): conta de exemplo (200), conta inexistente (404), `abc` (400), `1-1-1-1-1` (400) e chamada com `X-Correlation-Id`; `http/http-client.env.json` permanece.
+- [ ] T069 [US1] `Makefile`: alvo `balance-get ACCOUNT=<uuid>` (`curl -si http://localhost:8080/balances/$(ACCOUNT)` com validação de `ACCOUNT`), e `http` apontando para `balances.http`.
+- [ ] T070 [US1] Validação manual: `make up`, `make balance-get ACCOUNT=5b19c8b6-0cc4-4c72-a989-0c2ee15fa975` -> `200` e corpo do `quickstart.md` seção 3; executar os casos 400/404 da seção 7.
+
+**Checkpoint**: US1 funcional e testável sozinha (consulta com dados pré-existentes).
+
+---
+
+## Phase 4: User Story 2 - Manter o snapshot da transação mais recente a partir dos eventos (Priority: P1) (MVP)
+
+**Goal**: consumir `transacoes-financeiras-processadas` e manter, por conta, o snapshot do evento de maior precedência, sem somar nem subtrair transações.
+
+**Independent Test**: publicar um evento válido para conta nova e ver a consulta refletir o saldo; publicar um evento mais recente e ver a atualização (`quickstart.md` seção 5.3 passos 1-2).
+
+### Commit C14: `feat(application): processamento de evento de transacao com snapshot mais recente`
+
+- [ ] T071 [US2] Criar as portas `src/main/kotlin/br/com/itau/challenge/balance/port/input/ProcessTransactionEventUseCase.kt` (`fun process(event: TransactionEvent): ApplyResult`), `src/main/kotlin/br/com/itau/challenge/balance/port/output/BalanceSnapshotWriter.kt` (`fun applyIfNewer(snapshot: BalanceSnapshot): ApplyResult`, lança `BalanceStoreUnavailableException`/`BalanceStoreRejectedException`) e `src/main/kotlin/br/com/itau/challenge/balance/port/output/ProcessingMetrics.kt` (`applied()`, `obsolete()`, `duplicate(conflicting: Boolean)`).
+- [ ] T072 [US2] Completar o fake `src/test/kotlin/br/com/itau/challenge/balance/testing/InMemoryBalanceStore.kt` com `BalanceSnapshotWriter` (arbitragem atômica com `ConcurrentHashMap.compute` usando `BalanceSnapshot.supersedes`, semântica completa `Applied/Obsolete/Duplicate`, `current(accountId)`, `failWritesWith(exception)`) e criar o dublê `src/test/kotlin/br/com/itau/challenge/balance/testing/RecordingProcessingMetrics.kt`.
+- [ ] T073 [P] [US2] Teste vermelho `src/test/kotlin/br/com/itau/challenge/balance/application/ProcessTransactionEventServiceTest.kt`: conta sem snapshot + evento válido -> `Applied` e snapshot com os dados do evento (dono, status, saldo e µs); evento mais novo substitui saldo, titular e instante; eventos de contas diferentes intercalados não interferem; `DECLINED` com precedência maior substitui o snapshot (FR-010) e `DECLINED` menor é `Obsolete`; um desfecho contabilizado por evento; `BalanceStoreUnavailableException` propaga sem contar desfecho e sem ser engolida; todos os campos vêm do MESMO evento (FR-013).
+- [ ] T074 [US2] Implementar `src/main/kotlin/br/com/itau/challenge/balance/application/ProcessTransactionEventService.kt` (`@Service`; `BalanceSnapshot.from(event)`, `writer.applyIfNewer`, `metrics`; logs INFO/DEBUG/WARN por desfecho conforme `data-model.md` seção 6, com `accountId`/`transactionId` e SEM saldo/titular).
+
+### Commit C15: `feat(metrics): contadores de desfecho de processamento`
+
+- [ ] T075 [P] [US2] Teste vermelho `src/test/kotlin/br/com/itau/challenge/balance/adapter/output/metrics/MicrometerProcessingMetricsTest.kt` (`SimpleMeterRegistry`): `balance.events{outcome=processed,reason=none}`, `obsolete` e `duplicate` incrementam um contador cada; `duplicate(conflicting=true)` incrementa também `balance.events.anomalies{type=conflicting_duplicate}` e o desfecho continua contado uma única vez como `duplicate`.
+- [ ] T076 [US2] Implementar `src/main/kotlin/br/com/itau/challenge/balance/adapter/output/metrics/MicrometerProcessingMetrics.kt` (`@Component`, contadores de `contracts/observability.md`).
+
+### Commit C16: `feat(dynamodb): escrita condicional atomica do snapshot com clientes de leitura e escrita separados`
+
+- [ ] T077 [US2] Criar o contrato abstrato `src/test/kotlin/br/com/itau/challenge/balance/testing/BalanceSnapshotWriterContract.kt` (fixture com `writer` e `currentOf(accountId)`), com os casos desta story: evento inicial cria (`Applied`); evento mais novo substitui todos os campos de forma coerente; evento mais antigo é `Obsolete` e não altera; isolamento entre contas; µs preservados; saldo com `12345678901234567890.123456789012345678` e `0.10` lidos de volta numericamente idênticos; `DECLINED`/`DISABLED` participam. Prova que o fake e o banco real obedecem ao mesmo contrato.
+- [ ] T078 [P] [US2] Teste `src/test/kotlin/br/com/itau/challenge/balance/testing/InMemoryBalanceStoreContractTest.kt` (estende o contrato com o fake; sem infraestrutura).
+- [ ] T079 [P] [US2] Teste vermelho `src/test/kotlin/br/com/itau/challenge/balance/adapter/output/dynamodb/DynamoDbBalanceSnapshotWriterTest.kt` (`DynamoDbClient` mockado): a requisição é UMA `UpdateItem` com a `UpdateExpression` de 8 atributos e a `ConditionExpression` exata `attribute_not_exists(pk) OR lastTxTsMicros < :ts OR (lastTxTsMicros = :ts AND lastTxId < :tx)` e `ReturnValuesOnConditionCheckFailure=ALL_OLD`; valores `:ts` N, `:tx` S minúsculo, `:amt` N plano; sucesso -> `Applied`; `ConditionalCheckFailedException` -> `Obsolete` (refinado na US3); falhas do SDK traduzidas pela matriz (`THROTTLED`, `TIMEOUT`, `UNAVAILABLE`, `ValidationException` -> `BalanceStoreRejectedException`) e jamais engolidas; NENHUM `getItem` (proíbe read-modify-write). Prova a escrita condicional atômica (Constitution II).
+- [ ] T080 [P] [US2] Estender `src/test/kotlin/br/com/itau/challenge/balance/adapter/output/dynamodb/DynamoDbClientsConfigTest.kt` (cliente de escrita): `AwsRetryStrategy.doNotRetry()` (uma tentativa), `apiCallAttemptTimeout`/`apiCallTimeout` de 2 s, conexão/aquisição 0,3 s, pool de 50; leitura e escrita são clientes e pools DISTINTOS (`@Qualifier`). Prova que a única camada de retry da escrita é a do consumer.
+- [ ] T081 [US2] Implementar `src/main/kotlin/br/com/itau/challenge/balance/adapter/output/dynamodb/DynamoDbClientsConfig.kt` (cliente `dynamoDbWriteClient`) e `src/main/kotlin/br/com/itau/challenge/balance/adapter/output/dynamodb/DynamoDbBalanceSnapshotWriter.kt` (`UpdateItem` condicional, tradução de exceções com o translator).
+- [ ] T082 [US2] `application.yaml`: `dynamodb.write.*` (`DYNAMODB_WRITE_ATTEMPT_TIMEOUT`, `DYNAMODB_WRITE_CALL_TIMEOUT`, `DYNAMODB_WRITE_MAX_CONNECTIONS`); `src/main/kotlin/br/com/itau/challenge/balance/config/BalanceBeansConfig.kt`: beans do writer e de `MicrometerProcessingMetrics`.
+- [ ] T083 [US2] Teste de integração `src/integrationTest/kotlin/br/com/itau/challenge/balance/adapter/output/dynamodb/DynamoDbBalanceSnapshotWriterContractIT.kt`: estende `BalanceSnapshotWriterContract` contra o DynamoDB Local (conta aleatória por teste) e prova que a normalização `183.10` -> `183.1` não quebra a igualdade numérica. Executar `make integration-test`.
+- [ ] T084 [P] [US2] `docs/adr/0003-precedencia-deterministica-e-escrita-condicional-atomica.md` (`research.md` R-04, `data-model.md` 2.1 e 4.4): `(timestamp µs, txId)`, `UpdateItem` + `ConditionExpression`, sem read-modify-write nem lock local, armadilha `UUID.compareTo` e minúsculas, custo de WCU em escrita com condição falsa.
+- [ ] T085 [P] [US2] `docs/adr/0009-uma-camada-de-retry-e-clientes-dynamodb-separados.md` (`research.md` R-10): escrita com retry só no consumer, leitura com SDK `standard` (2 tentativas), timeouts e pools isolados, por que dois `DynamoDbClient`.
+
+### Commit C17: `feat(kafka): parser estrito do evento de transacao com catalogo de motivos de rejeicao`
+
+- [ ] T086 [P] [US2] Teste vermelho `src/test/kotlin/br/com/itau/challenge/balance/adapter/input/kafka/TransactionEventParserTest.kt`, uma linha por motivo de `kafka-events.md` seção 3/4 (este parser alimenta o isolamento da US4): (a) caminho feliz com o exemplo do schema (`97.07` exato, `1751641364589998` µs, UUID maiúsculo normalizado, campos extras ignorados, `1E+3` expandido); (b) `malformed_payload`: nulo, vazio, 64 KiB + 1 (exatamente 64 KiB é aceito), UTF-8 inválido (`0xC3 0x28`), `{not json`, chave duplicada, tokens após o documento, `NaN`, profundidade 501, número com 1.001 caracteres, raiz array/string/null, `transaction`/`account`/`account.balance` que não são objeto; (c) `missing_field`: cada um dos 12 campos ausente e `null` (24 casos), `detail` = caminho do campo; (d) valores, um caso por rejeição e na ordem fixa: `invalid_identifier` (`1-1-1-1-1`, número, vazio), `invalid_value` (string `"10.00"`, booleano, objeto, `transaction.amount` negativo, 39 dígitos, escala 39, `1E999999999` rejeitado sem expandir, saldo string), `invalid_currency` (`brl`, `BR`, `ZZZ`), `unknown_domain_value` (`TRANSFER`, `credit`, `PENDING`, `SUSPENDED`, `enabled`), `invalid_timestamp` (`1751641364589998.0`, `1.75E15`, string, acima de `Long.MAX_VALUE`, milissegundos, segundos, transação de 1999-12-31, `created_at` de 1850; conta de 1998 é aceita); (e) o primeiro campo inválido na ordem documentada determina o motivo (id inválido + moeda inválida -> `invalid_identifier`; ausente vence inválido); (f) `detail` e `message` NUNCA contêm valores do payload (marcador `SEGREDO-123` num campo inválido não aparece). Prova a validação estrita sem coerção silenciosa (Constitution IV).
+- [ ] T087 [US2] Implementar `src/main/kotlin/br/com/itau/challenge/balance/adapter/input/kafka/TransactionEventParser.kt`: `JsonMapper` PRIVADO (não `@Bean`) com `USE_BIG_DECIMAL_FOR_FLOATS`, `STRICT_DUPLICATE_DETECTION`, falha em tokens finais, `StreamReadConstraints` (número <= 1.000 caracteres, aninhamento <= 500), limite de 64 KiB e decodificação UTF-8 estrita; percorre a árvore na ordem documentada; usa as fábricas do domínio e anexa o caminho do campo com `withDetail`; mínimos de timestamp injetados de `balance.min-event-timestamp` e `balance.min-account-created-at`.
+- [ ] T088 [US2] `application.yaml`: `balance.min-event-timestamp: ${BALANCE_MIN_EVENT_TIMESTAMP:2000-01-01T00:00:00Z}` e `balance.min-account-created-at: ${BALANCE_MIN_ACCOUNT_CREATED_AT:1900-01-01T00:00:00Z}`.
+- [ ] T089 [P] [US2] `docs/adr/0006-validacao-estrita-e-catalogo-de-motivos.md` (`kafka-events.md`, `research.md` R-06): parser de árvore no adapter, 7 motivos + `unprocessable_event`, tolerância de futuro de 5 min, mínimos 2000-01-01 (`transaction.timestamp`) e 1900-01-01 (`account.created_at`), por que não `ErrorHandlingDeserializer`.
+
+### Commit C18: `feat(kafka): consumer com entrega at least once do topico de transacoes`
+
+- [ ] T090 [P] [US2] Teste vermelho `src/test/kotlin/br/com/itau/challenge/balance/adapter/input/kafka/TransactionEventListenerTest.kt`: bytes válidos -> parser -> use case invocado uma vez com o evento; MDC `accountId`, `transactionId` e `correlationId=<topic>-<partition>@<offset>` presentes durante a chamada e removidos depois (inclusive quando lança); falha do parser propaga `InvalidEventException` sem chamar o use case; exceção do use case propaga (não é engolida); registro com valor nulo -> `malformed_payload`; a assinatura do listener não recebe `Acknowledgment` (o commit é do container, Constitution III); nada do payload é logado.
+- [ ] T091 [P] [US2] Teste vermelho `src/test/kotlin/br/com/itau/challenge/balance/adapter/input/kafka/KafkaConsumerSettingsTest.kt` (`@SpringBootTest`, perfil test): propriedades efetivas `enable.auto.commit=false`, `ByteArrayDeserializer` para chave e valor, `CooperativeStickyAssignor`, `max.poll.records=100`, `max.poll.interval.ms=300000`, `auto.offset.reset=earliest`, grupo `consulta-saldo`, `ack-mode=BATCH`, `concurrency=4`, `immediate-stop=true`; invariante `max.poll.records x DYNAMODB_WRITE_CALL_TIMEOUT < max.poll.interval.ms` (100 x 2 s = 200 s < 300 s); com o perfil test nenhum container do listener está rodando.
+- [ ] T092 [US2] Implementar `src/main/kotlin/br/com/itau/challenge/balance/adapter/input/kafka/TransactionEventListener.kt` (`@KafkaListener` por registro sobre `ConsumerRecord<ByteArray?, ByteArray?>`, tópico `${balance.events.topic}`, parser + `ProcessTransactionEventUseCase`, MDC em `try/finally`, sem `Acknowledgment`).
+- [ ] T093 [US2] `application.yaml`: seção `spring.kafka` com `bootstrap-servers`, `consumer` (`group-id: ${KAFKA_CONSUMER_GROUP_ID:consulta-saldo}`, `enable-auto-commit: false`, `ByteArrayDeserializer`, `auto-offset-reset: earliest`, `max-poll-records`, `partition.assignment.strategy` cooperativo), `listener` (`ack-mode: batch`, `concurrency: ${KAFKA_LISTENER_CONCURRENCY:4}`, `immediate-stop: true`) e `balance.events.topic`/`balance.events.dlt-topic` (`BALANCE_EVENTS_TOPIC`, `BALANCE_EVENTS_DLT_TOPIC`), com os nomes de `contracts/configuration.md`.
+- [ ] T094 [US2] `src/main/kotlin/br/com/itau/challenge/balance/config/BalanceBeansConfig.kt`: garantir os beans necessários ao `@Service` `ProcessTransactionEventService` (writer, metrics, `Clock`).
+- [ ] T095 [P] [US2] `docs/adr/0007-consumer-kafka-at-least-once-e-particionamento.md` (`research.md` R-07): listener por registro, bytes verbatim, commit em lote após persistir, 12/3 partições, sem suposição de ordem, `CooperativeStickyAssignor`, concorrência e invariante de `max.poll`.
+
+### Commit C19: `test(integracao): ingestao ponta a ponta com redpanda e dynamodb local`
+
+- [ ] T096 [US2] Criar `src/integrationTest/kotlin/br/com/itau/challenge/balance/support/IntegrationInfra.kt`: helpers de tópico exclusivo `it-<uuid>` (principal com 12 partições e `.DLT` com 3, via `AdminClient`; auto-criação está desligada), grupo de consumo exclusivo, `@DynamicPropertySource` (`balance.events.topic`, `balance.events.dlt-topic`, `spring.kafka.listener.auto-startup=true`, `KAFKA_CONSUMER_GROUP_ID`), produtor de bytes, cliente DynamoDB, contas aleatórias e Awaitility (timeout padrão 30 s).
+- [ ] T097 [US2] Teste de integração `src/integrationTest/kotlin/br/com/itau/challenge/balance/adapter/input/kafka/TransactionEventIngestionIT.kt` (`RANDOM_PORT`): conta nova criada e refletida pela consulta HTTP; evento mais novo substitui saldo, titular e instante; contas intercaladas sem interferência; `updated_at` com µs (`...433123`); `DECLINED` mais novo atualiza o snapshot; consultável em segundos (SC-002). Executar `make integration-test` e `./gradlew check`.
+
+**Checkpoint**: US1 + US2 funcionam juntas (publicar -> consultar).
+
+---
+
+## Phase 5: User Story 3 - Convergir para o estado correto sob duplicidade, desordem e concorrência (Priority: P1) (MVP)
+
+**Goal**: mesmo saldo final para qualquer ordem de chegada, número de reentregas e grau de paralelismo; duplicado x obsoleto x anomalia classificados sem leitura extra.
+
+**Independent Test**: um conjunto de eventos da mesma conta em várias permutações, com duplicatas e em paralelo sempre resulta no snapshot do evento de maior precedência (`quickstart.md` seções 5.1, 5.2 e 10).
+
+### Commit C20: `test(convergencia): propriedade de convergencia sobre o fake com prova de que detecta dependencia de ordem`
+
+- [ ] T098 [US3] Criar `src/test/kotlin/br/com/itau/challenge/balance/testing/NaiveLastWriteWinsStore.kt` (implementação ingênua "último a chegar vence" de `BalanceSnapshotWriter`), usada apenas para demonstrar o vermelho da propriedade.
+- [ ] T099 [US3] Teste vermelho `src/test/kotlin/br/com/itau/challenge/balance/ConvergencePropertyTest.kt` (kotest-property 6.2.5, `PropTestConfig(seed = 20260929L, iterations = 1000)`): para qualquer lista de 1 a 30 eventos de UMA conta (timestamps num intervalo pequeno para forçar empates; `transactionId` de um conjunto fixo que inclui pares onde `UUID.compareTo` diverge da ordem textual; status ENABLED/DISABLED e transação APPROVED/DECLINED; saldos `BigDecimal`), qualquer permutação, duplicação e intercalação entrega o mesmo snapshot final = evento de maior `(timestamp, transactionId minúsculo por String.compareTo)`; o conteúdo é derivado deterministicamente da chave (mesma chave = mesmo conteúdo); o oráculo NÃO usa `UUID.compareTo`; propriedade multi-conta (duas contas intercaladas sem interferência); cada evento entregue produz exatamente um de `Applied/Obsolete/Duplicate`. Inclui o meta-teste `assertFailsWith` provando que a MESMA propriedade FALHA contra `NaiveLastWriteWinsStore` (contraexemplo encolhido registrado no relatório do teste). Prova SC-003/SC-004/SC-005 sobre o fake.
+- [ ] T100 [US3] Executar `./gradlew check` e conferir a cobertura; registrar o contraexemplo encolhido do meta-teste para citar no ADR-0014.
+
+### Commit C21: `feat(dynamodb): classificacao de duplicado versus obsoleto e anomalia pelo item antigo`
+
+- [ ] T101 [US3] Estender `src/test/kotlin/br/com/itau/challenge/balance/testing/BalanceSnapshotWriterContract.kt` com os casos da US3: o MESMO evento reentregue -> `Duplicate(conflicting=false)` e nada muda; mesma chave `(timestamp, txId)` com conteúdo divergente (dono, status, moeda ou saldo por `compareTo`) -> `Duplicate(conflicting=true)` e snapshot inalterado; `100.00` x `100` NÃO é divergência; evento mais antigo -> `Obsolete`; reentrega de transação já superada -> `Obsolete` (documentado, sem ledger); empate de timestamp: o `txId` maior vence nas DUAS ordens de chegada (A depois B e B depois A); `txId` em maiúsculas normalizado. O fake já cumpre; o writer do DynamoDB deve falhar (vermelho).
+- [ ] T102 [P] [US3] Estender `src/test/kotlin/br/com/itau/challenge/balance/adapter/output/dynamodb/DynamoDbBalanceSnapshotWriterTest.kt`: `ConditionalCheckFailedException` com `item` de mesma chave -> `Duplicate(false)`; com conteúdo divergente -> `Duplicate(true)`; com chave menor -> `Obsolete`; sem `item` (`hasItem() == false`) -> uma única `GetItem` com `consistentRead=true` para classificar; item inexistente também no fallback -> `BalanceStoreUnavailableException` (transitória, será reentregue).
+- [ ] T103 [P] [US3] Estender `src/test/kotlin/br/com/itau/challenge/balance/application/ProcessTransactionEventServiceTest.kt`: `Duplicate(false)` -> `metrics.duplicate(false)` sem anomalia; `Duplicate(true)` -> `metrics.duplicate(true)` + log WARN com `accountId`/`transactionId` e sem saldo/titular; `Obsolete` -> `metrics.obsolete()` sem erro nem WARN.
+- [ ] T104 [US3] Refinar `src/main/kotlin/br/com/itau/challenge/balance/adapter/output/dynamodb/DynamoDbBalanceSnapshotWriter.kt` (classificação por `ALL_OLD`, comparação de conteúdo com `compareTo`, fallback `GetItem` consistente) e, se necessário, os níveis de log em `src/main/kotlin/br/com/itau/challenge/balance/application/ProcessTransactionEventService.kt`.
+- [ ] T105 [P] [US3] `docs/adr/0004-classificacao-de-desfechos-duplicado-versus-obsoleto.md` (`research.md` R-04): `ALL_OLD`, duplicado = igual ao vigente, obsoleto = inferior (inclui reentrega já superada), anomalia `conflicting_duplicate`, ledger recusado e por quê.
+
+### Commit C22: `test(integracao): concorrencia real com convergencia e cenarios de corretude contra infraestrutura real`
+
+- [ ] T106 [P] [US3] Teste de integração `src/integrationTest/kotlin/br/com/itau/challenge/balance/adapter/output/dynamodb/ConcurrentWritesIT.kt`: 32 threads liberadas por `CountDownLatch`, uma única conta, 400 escritas (100 duplicatas, desordem e empates) contra o `DynamoDbBalanceSnapshotWriter` real; o snapshot final == `max(timestamp, txId)`; `Applied + Obsolete + Duplicate == 400`; nenhuma exceção; repetido com 3 sementes. Prova FR-007 sem lock local.
+- [ ] T107 [P] [US3] Teste de integração `src/integrationTest/kotlin/br/com/itau/challenge/balance/adapter/output/dynamodb/ConvergencePropertyIT.kt`: versão reduzida (50 iterações, `seed` fixa) da propriedade de convergência contra o DynamoDB Local, conta aleatória por iteração.
+- [ ] T108 [P] [US3] Teste de integração `src/integrationTest/kotlin/br/com/itau/challenge/balance/adapter/input/kafka/ConvergenceIngestionIT.kt` (via Kafka, tópico exclusivo): `quickstart.md` 5.1 (desordem + duplicata -> `processed=1, obsolete=2, duplicate=1` por delta do `MeterRegistry`, saldo `300.00`, `updated_at` com µs), 5.2 (empate nas duas ordens em contas distintas), 5.3 (`DECLINED` atualiza; `12345678901234567890.123456789012345678` idêntico; `0.10` -> `0.10`; `100` -> `100.00`; `10.123` permanece), 5.4 (ciclo DISABLED: 200 -> 409 -> 409 com evento antigo -> 200 `70.00`) e reentrega das mesmas mensagens (`US3.6`) sem alterar o estado.
+- [ ] T109 [P] [US3] `docs/adr/0014-estrategia-de-testes-e-evidencia-de-corretude.md` (`research.md` R-14): TDD, kotest-property com seed fixa e meta-teste do naive, contrato fake x DynamoDB Local, integração via compose, chaos por `docker compose pause`, gate de 90%, por que não jqwik nem Testcontainers.
+- [ ] T110 [US3] Executar `make integration-test` e `./gradlew check` e conferir o resumo de cobertura.
+
+**Checkpoint (MVP)**: US1 + US2 + US3 completas: consulta correta e ingestão convergente sob desordem, duplicidade e concorrência. O serviço já entrega o valor de negócio; robustez (US4 e US5) e operação (US6) vêm a seguir.
+
+---
+
+## Phase 6: User Story 4 - Isolar mensagens inválidas sem perdê-las nem parar o processamento (Priority: P2)
+
+**Goal**: mensagens inválidas vão ao `.DLT` com o motivo enumerado nos headers e os bytes originais, sem alterar saldo, sem bloquear a partição e sem descarte silencioso.
+
+**Independent Test**: publicar, intercaladas com válidas, mensagens com cada defeito; as válidas são processadas, nenhuma inválida altera saldo e cada uma está no DLT com o motivo (`quickstart.md` seções 6 e 6.1).
+
+### Commit C23: `feat(application): tolerancia configuravel de timestamp futuro na ingestao`
+
+- [ ] T111 [P] [US4] Teste vermelho `src/test/kotlin/br/com/itau/challenge/balance/application/FutureTimestampToleranceTest.kt` (`Clock.fixed`, tolerância `PT5M`): `transaction.timestamp` = agora + 5 min é aceito (limite inclusivo) e + 1 µs é rejeitado com `InvalidEventException(INVALID_TIMESTAMP, detail = "transaction.timestamp")` sem chamar o writer; `account.created_at` além da tolerância é rejeitado (`detail = "account.created_at"`) e o de 1998 é válido; evento no futuro DENTRO da tolerância é processado normalmente; tolerância configurável (`PT1M`); relógios fixos diferentes não mudam o resultado da precedência (o relógio só valida, FR-003/FR-012).
+- [ ] T112 [US4] Implementar `src/main/kotlin/br/com/itau/challenge/balance/application/FutureTolerance.kt` e injetar `Clock` + `FutureTolerance` em `src/main/kotlin/br/com/itau/challenge/balance/application/ProcessTransactionEventService.kt` (validação antes de `BalanceSnapshot.from`).
+- [ ] T113 [US4] `src/main/kotlin/br/com/itau/challenge/balance/config/BalanceBeansConfig.kt`: bean `FutureTolerance` a partir de `balance.future-tolerance`; `application.yaml`: `balance.future-tolerance: ${BALANCE_FUTURE_TOLERANCE:PT5M}`.
+
+### Commit C24: `feat(kafka): isolamento de mensagens invalidas no dlt com motivo nos headers`
+
+- [ ] T114 [P] [US4] Teste vermelho `src/test/kotlin/br/com/itau/challenge/balance/adapter/input/kafka/RejectionHeadersTest.kt`: headers `x-rejection-reason` (código), `x-rejection-detail` (só o caminho; ausente se nulo) e `x-rejected-at` (ISO 8601 UTC do `Clock` injetado); nunca contêm valores do payload.
+- [ ] T115 [P] [US4] Teste vermelho `src/test/kotlin/br/com/itau/challenge/balance/adapter/input/kafka/FailureClassifierTest.kt`: `InvalidEventException` -> permanente; `BalanceStoreUnavailableException` -> transitória; qualquer outra (inclui `BalanceStoreRejectedException`, `IllegalStateException`, `NullPointerException`) -> não classificada; exceções embrulhadas em `ListenerExecutionFailedException` são desembrulhadas.
+- [ ] T116 [P] [US4] Estender `src/test/kotlin/br/com/itau/challenge/balance/adapter/output/metrics/MicrometerProcessingMetricsTest.kt`: `rejected(reason)` -> `balance.events{outcome=rejected,reason=<código>}` e `dltPublishFailed()` -> `balance.dlt.publish.failures`.
+- [ ] T117 [P] [US4] Teste vermelho `src/test/kotlin/br/com/itau/challenge/balance/adapter/input/kafka/DeadLetterConfigTest.kt` (`KafkaTemplate` mockado, handler chamado diretamente): destino `<tópico>.DLT` com partição `-1` (o padrão "mesma partição" falharia com 12 -> 3); chave e valor em bytes verbatim (inclusive binário); headers de exceção `kafka_dlt-exception-*` AUSENTES e headers padrão `kafka_dlt-original-*` presentes junto com os `x-*` do motivo; `InvalidEventException` vai ao DLT na primeira falha, sem reentrega; não classificada -> 3 entregas (`FixedBackOff(100, 2)`) e DLT `unprocessable_event`; `BalanceStoreUnavailableException` NUNCA chega ao recoverer (50 falhas simuladas -> 0 publicações); `rejected` contado UMA vez e só depois que o DLT confirma; publicação no DLT que falha -> registro NÃO confirmado (reentregue), `balance.dlt.publish.failures` incrementa e o container segue vivo; produtor do DLT com `acks=all`, `enable.idempotence=true`, `max.block.ms=3000` e `waitForSendResultTimeout` de 5 s.
+- [ ] T118 [US4] Estender a porta `src/main/kotlin/br/com/itau/challenge/balance/port/output/ProcessingMetrics.kt` (`rejected(reason: RejectionReason)`, `dltPublishFailed()`), `src/main/kotlin/br/com/itau/challenge/balance/adapter/output/metrics/MicrometerProcessingMetrics.kt` e os dublês em `src/test/kotlin/br/com/itau/challenge/balance/testing/`.
+- [ ] T119 [US4] Implementar `src/main/kotlin/br/com/itau/challenge/balance/adapter/input/kafka/RejectionHeaders.kt` e `src/main/kotlin/br/com/itau/challenge/balance/adapter/input/kafka/FailureClassifier.kt`.
+- [ ] T120 [US4] Implementar `src/main/kotlin/br/com/itau/challenge/balance/adapter/input/kafka/DeadLetterConfig.kt`: `KafkaTemplate<ByteArray, ByteArray>` do DLT, `DeadLetterPublishingRecoverer` (destino `TopicPartition(dlt, -1)`, headers customizados, sem headers de exceção, publicação síncrona), `DefaultErrorHandler` com `addNotRetryableExceptions(InvalidEventException)`, função de backoff (permanente sem retry; não classificada `FixedBackOff(100, 2)`; transitória `ExponentialBackOff(500 ms, 2.0)` SEM esgotar, para que válida jamais chegue ao DLT) e `RetryListener.recovered` -> `metrics.rejected(reason)`; falha ao publicar -> `metrics.dltPublishFailed()`.
+- [ ] T121 [US4] `application.yaml`: produtor do DLT (`key/value` `ByteArraySerializer`, `acks=all`, `enable.idempotence=true`, `max.block.ms=3000`) e `balance.dlt.wait-for-send-result-timeout: 5s`.
+
+### Commit C25: `test(integracao): dlt por motivo com dlt ausente e falha nao classificada`
+
+- [ ] T122 [P] [US4] Teste de integração `src/integrationTest/kotlin/br/com/itau/challenge/balance/adapter/input/kafka/DeadLetterIT.kt` (tópico exclusivo; `quickstart.md` seções 6 e 6.1): 9 mensagens defeituosas (uma por caso: `malformed_payload`, `missing_field`, `invalid_identifier`, `invalid_currency`, `invalid_value`, `invalid_timestamp` x2, `unknown_domain_value` x2) intercaladas com uma válida e outra com futuro DENTRO da tolerância (+60 s): DLT com exatamente 9; contagem por `x-rejection-reason`; valor do DLT == bytes originais (inclui binário `0xC3 0x28` e mensagem de 70 KiB); headers `x-rejection-*`/`kafka_dlt-*` presentes e nenhum `kafka_dlt-exception-*`; as válidas respondem 200 e as contas dos defeitos 404 (saldo intacto); deltas de `balance.events{outcome=rejected,reason}` batem; `created_at` de 1998 -> 200 sem DLT; `created_at` de 1850 -> DLT `invalid_timestamp`; futuro além da tolerância -> DLT.
+- [ ] T123 [P] [US4] Teste de integração `src/integrationTest/kotlin/br/com/itau/challenge/balance/adapter/input/kafka/DeadLetterUnavailableIT.kt`: tópico SEM `.DLT`; mensagem inválida + vizinha válida: a inválida NÃO é confirmada (lag do grupo > 0 via `AdminClient`), nada se perde e `balance.dlt.publish.failures` cresce; ao criar o `.DLT` a inválida chega ao DLT, o lag drena a 0 e a vizinha é processada.
+- [ ] T124 [P] [US4] Teste de integração `src/integrationTest/kotlin/br/com/itau/challenge/balance/adapter/input/kafka/UnclassifiedFailureIT.kt` (`@TestConfiguration` faz o writer lançar `IllegalStateException` para uma conta marcada): 3 entregas, DLT `unprocessable_event` e a mensagem seguinte processada (a partição não trava para sempre). Executar `make integration-test`.
+
+**Checkpoint**: US4 completa: nenhuma inválida perdida, nenhuma bloqueia, todas contadas por motivo.
+
+---
+
+## Phase 7: User Story 5 - Continuar correto quando o armazenamento fica indisponível (Priority: P2)
+
+**Goal**: com o DynamoDB fora, a ingestão não perde nem isola nada e retoma sozinha; a consulta falha rápido com 503 + `Retry-After`.
+
+**Independent Test**: derrubar o armazenamento durante a publicação, restabelecê-lo e verificar que todos os eventos estão refletidos, sem intervenção e sem DLT (`quickstart.md` seção 8).
+
+### Commit C26: `feat(kafka): backpressure com backoff exponencial e pausa para falhas transitorias`
+
+- [ ] T125 [P] [US5] Teste vermelho `src/test/kotlin/br/com/itau/challenge/balance/adapter/input/kafka/BackpressureConfigTest.kt`: função de backoff da transitória = `ExponentialBackOff` com intervalo inicial 500 ms, multiplicador 2,0, máximo 30 s, jitter 250 ms e tentativas ilimitadas (nunca esgota em 1.000 iterações); cada intervalo dentro de `[esperado - jitter, esperado + jitter]` limitado pelo máximo e crescente; `ContainerPausingBackOffHandler` configurado (o container pausa e o poll continua vivo); 50 falhas de `BalanceStoreUnavailableException` -> recoverer NUNCA acionado; `RetryListener.failedDelivery` incrementa `balance.consumer.backpressure` com `cause` `throttled|unavailable|timeout` conforme `StoreFailureCause`; parâmetros configuráveis por `KAFKA_BACKOFF_INITIAL_MS`, `KAFKA_BACKOFF_MAX_MS`, `KAFKA_BACKOFF_JITTER_MS`. Prova FR-028/FR-029 e a ausência de retry em duas camadas.
+- [ ] T126 [P] [US5] Estender `src/test/kotlin/br/com/itau/challenge/balance/adapter/output/metrics/MicrometerProcessingMetricsTest.kt`: `backpressure(cause)` -> `balance.consumer.backpressure{cause}`.
+- [ ] T127 [US5] Implementar: `backpressure(cause: StoreFailureCause)` em `src/main/kotlin/br/com/itau/challenge/balance/port/output/ProcessingMetrics.kt` e `src/main/kotlin/br/com/itau/challenge/balance/adapter/output/metrics/MicrometerProcessingMetrics.kt`; em `src/main/kotlin/br/com/itau/challenge/balance/adapter/input/kafka/DeadLetterConfig.kt`, o `ExponentialBackOff` final (500 ms x2, máx 30 s, jitter 250 ms, ilimitado), o `ContainerPausingBackOffHandler` e o `RetryListener.failedDelivery`.
+- [ ] T128 [US5] `application.yaml`: `balance.consumer.backoff.initial-ms|max-ms|jitter-ms` (`KAFKA_BACKOFF_INITIAL_MS=500`, `KAFKA_BACKOFF_MAX_MS=30000`, `KAFKA_BACKOFF_JITTER_MS=250`).
+- [ ] T129 [P] [US5] `docs/adr/0008-erros-transitorios-permanentes-backpressure-e-dlt.md` (`research.md` R-08): classificação em três classes, backoff exponencial com jitter e pausa do container, DLT fora = não confirma, limite conhecido (R2), alternativas `@RetryableTopic`, retry em memória e pausa manual.
+
+### Commit C27: `test(integracao): indisponibilidade do armazenamento com falhas injetadas e docker pause`
+
+- [ ] T130 [P] [US5] Teste de integração `src/integrationTest/kotlin/br/com/itau/challenge/balance/adapter/input/kafka/TransientFailureIngestionIT.kt` (`@TestConfiguration` decora o cliente de escrita para lançar as exceções REAIS do SDK: `ProvisionedThroughputExceededException`, `SdkClientException` de conexão, `ApiCallTimeoutException` e `DynamoDbException` 503 nas primeiras N chamadas): os eventos válidos são processados depois, o DLT tem exatamente 0 mensagens, `balance.consumer.backpressure` cresce e os intervalos entre tentativas crescem. Prova FR-017/FR-028.
+- [ ] T131 [P] [US5] Teste de integração `src/integrationTest/kotlin/br/com/itau/challenge/balance/adapter/input/kafka/StoreOutageIT.kt` (`@Tag("chaos")`, `assumeTrue` na presença do Docker CLI e do projeto compose; `docker compose unpause dynamodb` SEMPRE em `finally`): `docker compose pause dynamodb`; 20 consultas sucessivas respondem 503 com `Retry-After: 10` e tipo `servico-indisponivel` cada uma em <= 2 s (SC-008) e NUNCA 404 nem saldo antigo; publicar evento válido: DLT inalterado, lag do grupo > 0 (o evento fica no broker), `balance.consumer.backpressure` cresce, circuit breaker OPEN; `unpause`; em <= 60 s o saldo reflete o evento, o circuito fecha (HALF_OPEN -> CLOSED) e o DLT segue inalterado.
+- [ ] T132 [P] [US5] Ampliar `StoreOutageIT` com o backlog: publicar 200 eventos (200 contas) durante a indisponibilidade e provar que, após `unpause`, exatamente 200 itens existem (0 perdas, SC-007), nenhum evento válido no DLT e nenhuma intervenção manual.
+- [ ] T133 [US5] Executar `make integration-test` (o teste de caos roda isolado e sequencial); conferir que o `unpause` sempre ocorre.
+
+**Checkpoint**: US5 completa: correção preservada sob indisponibilidade, retomada automática.
+
+---
+
+## Phase 8: User Story 6 - Operar o serviço em produção com visibilidade (Priority: P3)
+
+**Goal**: métricas por desfecho reconciliáveis, latências, saúde separada (liveness, readiness do processo, dependências), logs JSON sem dados sensíveis e encerramento gracioso.
+
+**Independent Test**: processar um lote com todos os desfechos e conferir que a soma dos desfechos == consumidas, logs sem saldo/PII e, com o DynamoDB pausado, dependências DOWN enquanto liveness e readiness seguem UP (`quickstart.md` seções 8 e 9).
+
+### Commit C28: `feat(observability): latencias de leitura escrita e ingestao com histograma`
+
+- [ ] T134 [P] [US6] Estender `src/test/kotlin/br/com/itau/challenge/balance/adapter/output/dynamodb/DynamoDbBalanceSnapshotReaderTest.kt`: timer `balance.store.read.duration{result=found|not_found|error}` registrado (inclusive quando o SDK lança) e com histograma habilitado.
+- [ ] T135 [P] [US6] Estender `src/test/kotlin/br/com/itau/challenge/balance/adapter/output/dynamodb/DynamoDbBalanceSnapshotWriterTest.kt`: timer `balance.store.write.duration{result=applied|condition_failed|error}`.
+- [ ] T136 [P] [US6] Estender `src/test/kotlin/br/com/itau/challenge/balance/adapter/input/kafka/TransactionEventListenerTest.kt`: `balance.ingest.duration{outcome}` registrado por mensagem (processado/obsoleto/duplicado, `rejected` para `InvalidEventException` e `error` para as demais), sempre em `finally`.
+- [ ] T137 [P] [US6] Teste vermelho `src/test/kotlin/br/com/itau/challenge/balance/config/ObservabilityConfigTest.kt` (`@SpringBootTest(webEnvironment = RANDOM_PORT)`, `@LocalManagementPort`, perfil test): `/actuator/prometheus` na porta de gerenciamento expõe `balance_events_total`, `http_server_requests_seconds_bucket` (SLO 50 ms, 100 ms, 300 ms, 1 s, 2 s) e os buckets dos timers de negócio; `/actuator/prometheus` NÃO responde na porta da API; `spring.kafka.listener.observation-enabled=true`.
+- [ ] T138 [US6] Implementar os timers em `src/main/kotlin/br/com/itau/challenge/balance/adapter/output/dynamodb/DynamoDbBalanceSnapshotReader.kt`, `src/main/kotlin/br/com/itau/challenge/balance/adapter/output/dynamodb/DynamoDbBalanceSnapshotWriter.kt` e `src/main/kotlin/br/com/itau/challenge/balance/adapter/input/kafka/TransactionEventListener.kt` (injetar `MeterRegistry`; Micrometer é permitido em adapters e proibido em `domain`/`application`).
+- [ ] T139 [US6] `application.yaml`: `management.server.port: ${MANAGEMENT_SERVER_PORT:8082}`, `management.endpoints.web.exposure.include: health,info,prometheus`, histogramas/SLO de `http.server.requests` e dos timers de negócio, `spring.kafka.listener.observation-enabled: true`.
+
+### Commit C29: `feat(observability): saude por grupos com dependencias separadas da prontidao`
+
+- [ ] T140 [P] [US6] Teste vermelho `src/test/kotlin/br/com/itau/challenge/balance/adapter/output/dynamodb/DynamoDbHealthIndicatorTest.kt`: probe `DescribeTable` da tabela; `UP` com a tabela ativa e `DOWN` com qualquer exceção; resultado em cache por 5 s (duas chamadas dentro da janela = um probe; após 5 s, novo probe, com relógio controlável); timeout curto por requisição; nenhum detalhe nem nome de infraestrutura na saída (`show-details=never`); gauge `balance.dependency.up{dependency=dynamodb}` = 1/0 acompanha o estado.
+- [ ] T141 [P] [US6] Teste vermelho `src/test/kotlin/br/com/itau/challenge/balance/adapter/output/dynamodb/HealthGroupsTest.kt` (`@SpringBootTest(webEnvironment = RANDOM_PORT)`, `@MockitoBean(name = "dynamoDbReadClient") DynamoDbClient` cujo `describeTable` lança): na porta de gerenciamento `/actuator/health/liveness` 200 `UP`; `/actuator/health/readiness` 200 `UP` com SÓ `readinessState` no grupo (a instância não sai de rotação, FR-033); `/actuator/health/dependencies` 503 `DOWN`; após o mock voltar a responder e o cache expirar, 200 `UP` e gauge 1; `/actuator/health` não é servido na porta da API. Prova a decisão de que a readiness independe do DynamoDB.
+- [ ] T142 [US6] Implementar `src/main/kotlin/br/com/itau/challenge/balance/adapter/output/dynamodb/DynamoDbHealthIndicator.kt` (`org.springframework.boot.health.contributor.HealthIndicator`, `DescribeTable` com cache de 5 s, gauge de dependência).
+- [ ] T143 [US6] `application.yaml`: `management.endpoint.health.probes.enabled: true`, `group.liveness.include: livenessState`, `group.readiness.include: readinessState`, `group.dependencies.include: dynamoDb`, `show-details: never`.
+
+### Commit C30: `feat(observability): logs json estruturados com contexto e sem dados sensiveis`
+
+- [ ] T144 [P] [US6] Teste vermelho `src/test/kotlin/br/com/itau/challenge/balance/observability/LoggingPrivacyTest.kt` (`@SpringBootTest` + `@AutoConfigureMockMvc` + `OutputCaptureExtension`, `logging.structured.format.console=logstash`, writer/reader mockados): processa um evento com valores sentinela (saldo `98765.43`, UUID do titular) pelo `TransactionEventListener` e consulta a API com `X-Correlation-Id: teste-123`; toda linha capturada é JSON; as linhas de ingestão trazem `correlationId`, `accountId` e `transactionId`, as da API trazem `correlationId` e `accountId`; NENHUMA linha contém o saldo sentinela, o titular, o payload nem mensagens de exceção de parser (a rejeição loga só motivo e `topic/partition/offset`).
+- [ ] T145 [P] [US6] Estender `src/test/kotlin/br/com/itau/challenge/ArchitectureTest.kt` com a regra "sem catch silencioso": todo bloco `catch` em `src/main` contém `log.`, `throw` ou registro de métrica, e nenhum é vazio (Constitution VII, FR-035).
+- [ ] T146 [US6] `application.yaml`: `logging.structured.format.console: ${LOGGING_STRUCTURED_FORMAT_CONSOLE:logstash}`; garantir MDC `accountId`/`transactionId`/`correlationId` em listener, filtro e controller.
+- [ ] T147 [US6] Auditar TODAS as chamadas de log de `main` (serviços, listener, advice, writer, reader, `DeadLetterConfig`) contra a regra "sem saldo, titular, payload nem mensagem de parser" e corrigir o que o teste acima ou a revisão apontarem.
+
+### Commit C31: `chore(ops): configura encerramento gracioso e verifica a configuracao`
+
+- [ ] T148 [P] [US6] Teste vermelho `src/test/kotlin/br/com/itau/challenge/balance/config/GracefulShutdownConfigTest.kt` (`@SpringBootTest`): `server.shutdown=graceful`, `spring.lifecycle.timeout-per-shutdown-phase=30s`, `spring.kafka.listener.immediate-stop=true`, `ack-mode=BATCH`, `enable.auto.commit=false` (o que não foi persistido não é confirmado e é reentregue).
+- [ ] T149 [US6] `application.yaml`: `server.shutdown: graceful` e `spring.lifecycle.timeout-per-shutdown-phase: 30s`.
+
+### Commit C32: `test(integracao): observabilidade ponta a ponta com saude sob indisponibilidade e reinicio sem perda`
+
+- [ ] T150 [P] [US6] Teste de integração `src/integrationTest/kotlin/br/com/itau/challenge/balance/adapter/input/kafka/ObservabilityIT.kt` (tópico exclusivo): lote com TODOS os desfechos (processado, obsoleto, duplicado e um `rejected` de cada motivo); após consumir, a soma dos deltas de `balance_events_total` por `outcome`, lida em `/actuator/prometheus` na porta de gerenciamento, é IGUAL ao número de mensagens publicadas (SC-010); `resilience4j_circuitbreaker_state{name="dynamodb-read"}` presente (risco R1 com Micrometer 1.17); buckets de `balance_store_write_duration_seconds` e `http_server_requests_seconds` presentes; razões rejeitadas/obsoletas calculáveis pelas consultas PromQL do contrato (SC-011).
+- [ ] T151 [US6] Estender `src/integrationTest/kotlin/br/com/itau/challenge/balance/adapter/input/kafka/StoreOutageIT.kt` com a saúde: durante a indisponibilidade `/actuator/health/dependencies` 503 (dentro de 5 s + cache), `/actuator/health/readiness` 200, `/actuator/health/liveness` 200, `balance_dependency_up{dependency="dynamodb"}` = 0 e a API 503; após `unpause`, `dependencies` volta a 200.
+- [ ] T152 [P] [US6] Teste de integração `src/integrationTest/kotlin/br/com/itau/challenge/balance/adapter/input/kafka/RestartRedeliveryIT.kt`: sobe o contexto A, publica 500 eventos, encerra A de forma graciosa (`close`) no meio do consumo, sobe o contexto B com o mesmo grupo: no final existem exatamente 500 itens, cada saldo é o do evento correto e reentregas viram `duplicate`/`obsolete` (US3.6, US6.4).
+- [ ] T153 [P] [US6] `docs/adr/0013-observabilidade.md` (`research.md` R-13, R-16): Actuator em porta separada, readiness = só estado do app, dependências em `/actuator/health/dependencies` + gauge sem tirar a instância de rotação (e por quê), Micrometer/Prometheus, desfecho único por mensagem, logs JSON com MDC, tracing OpenTelemetry como evolução.
+- [ ] T154 [US6] Executar `make integration-test` e `./gradlew check`.
+
+**Checkpoint**: US6 completa: o serviço é operável (métricas reconciliáveis, saúde honesta, logs seguros, encerramento sem perda).
+
+---
+
+## Phase 9: Polish & Cross-Cutting (produção, CI e documentação)
+
+**Purpose**: empacotamento, orquestração, CI verde e documentação de avaliação. Não há rótulo de story.
+
+### Commit C33: `feat(docker): imagem de runtime sem root com healthcheck e heap relativa e tags fixas`
+
+- [ ] T155 Verificação vermelha: `docker build --target runtime -t consulta-saldo .` e `docker run --rm --entrypoint id consulta-saldo` (hoje root) e `docker inspect --format '{{json .Config.Healthcheck}}' consulta-saldo` (hoje `null`); guardar os comandos como critério de aceite.
+- [ ] T156 Reescrever `Dockerfile`: tags fixas `eclipse-temurin:21.0.12_8-jdk-noble` (base/builder/test) e `eclipse-temurin:21.0.12_8-jre-noble` (runtime); usuário não-root uid/gid 10001; `ENV JAVA_TOOL_OPTIONS="-XX:MaxRAMPercentage=75 -XX:+ExitOnOutOfMemoryError"`; `EXPOSE 8080 8082`; `HEALTHCHECK` com `curl -fsS http://localhost:8082/actuator/health/liveness`; `ENTRYPOINT ["java", "-jar", "app.jar"]` em exec form (a JVM recebe o SIGTERM e o graceful shutdown funciona); manter os estágios `test` e `builder`.
+- [ ] T157 [P] Ajustar `.dockerignore` para não enviar `specs`, `docs`, `.specify`, `.claude`, `perf` ao contexto de build (o estágio `test` só precisa de `src`, Gradle e wrapper).
+- [ ] T158 Verificar: `curl` existe na imagem `jre-noble`; `docker run --rm consulta-saldo id -u` -> `10001`; `docker inspect` mostra o healthcheck; `java -XX:+PrintFlagsFinal -version` dentro do container mostra `MaxRAMPercentage=75`; `docker compose stop app` conclui em < 40 s com log de encerramento gracioso; `make test` (estágio `test`) verde sem `specs/`.
+- [ ] T159 [P] `docs/adr/0015-empacotamento-e-operacao.md` (`research.md` R-15): Dockerfile não-root, `MaxRAMPercentage`, healthcheck, graceful shutdown, tags fixas (e a rotina de atualização que elas exigem), imagem renomeada para `consulta-saldo`.
+
+### Commit C34: `feat(compose): compose completo do app com porta de gestao e ordem dos seeds`
+
+- [ ] T160 `docker-compose.yml`, serviço `app`: variáveis de `contracts/configuration.md` para o ambiente local (`DYNAMODB_ENDPOINT`, `DYNAMODB_REGION`, `BALANCE_TABLE_NAME`, `KAFKA_BOOTSTRAP_SERVERS`, `BALANCE_EVENTS_TOPIC`, `BALANCE_EVENTS_DLT_TOPIC`, `MANAGEMENT_SERVER_PORT`), portas `8080:8080` e `8082:8082`, `depends_on` de `dynamodb-seed` e `redpanda-seed` com `condition: service_completed_successfully`, `stop_grace_period: 40s` e `healthcheck` de prontidão em `http://localhost:8082/actuator/health/readiness`.
+- [ ] T161 Verificar `make up`: `docker compose ps` com o `app` saudável, `curl -s localhost:8082/actuator/health/liveness|readiness|dependencies` -> `UP`, `rpk topic list` com os dois tópicos (12 e 3 partições) e a tabela com a conta de exemplo (`quickstart.md` seção 2).
+
+### Commit C35: `feat(make): cenarios deterministicos e caos de dynamodb`
+
+- [ ] T162 [P] Criar `infra/redpanda/produce-scenario-events.sh` (executável, recebe `<topico>`): publica o cenário determinístico do `quickstart.md` (mesma conta com desordem, duplicata e empate; ciclo DISABLED; mensagens inválidas e veneno binário), com contas e instantes fixos, e imprime o resultado esperado de cada consulta.
+- [ ] T163 `Makefile`: `kafka-produce-scenario` (`TOPIC` com default `transacoes-financeiras-processadas`), `chaos-dynamodb-pause` e `chaos-dynamodb-unpause` (`docker compose pause|unpause dynamodb`), `IMAGE := consulta-saldo`, largura da coluna do `help` ampliada (`%-12s` trunca os novos nomes) e `.PHONY` de todos os alvos novos.
+- [ ] T164 Verificar: `make kafka-produce-scenario` seguido de `make balance-get ACCOUNT=<conta do cenário>` e de `make chaos-dynamodb-pause` / `make balance-get` (503) / `make chaos-dynamodb-unpause`.
+
+### Commit C36: `ci: renomeia imagem e garante gates verdes no github actions`
+
+- [ ] T165 [P] `.github/workflows/docker.yml`: tag da imagem `consulta-saldo`; `.github/workflows/test.yml`: manter `docker compose up -d dynamodb dynamodb-seed redpanda redpanda-seed` + `docker compose wait`, acrescentar `timeout-minutes` aos jobs e confirmar que o `StoreOutageIT` (`docker compose pause`) funciona no runner (mesmo diretório/projeto compose); `build.yml` e `codeql.yml` inalterados salvo necessidade.
+- [ ] T166 Após o push, confirmar que TODOS os workflows (Build, Test & Coverage com `check` + `integrationTest`, Docker, CodeQL) terminam verdes; corrigir falhas em commits `fix(ci): ...`.
+
+### Commit C37: `docs(readme): reescreve o readme com arquitetura decisoes operacao e limites`
+
+- [ ] T167 Reescrever `README.md` (o conteúdo do starter sobre `hello` deixa de valer; o enunciado do desafio NÃO pode ser reproduzido): visão geral; arquitetura hexagonal com o diagrama de contexto/fluxo; decisões-chave com links para os 15 ADRs em `docs/adr/`; como rodar (`make up`, smoke test com `make balance-get`) e o caminho de avaliação em <= 10 minutos (SC-012); como testar (`./gradlew check`, `make test`, `make integration-test`, chaos); API (endpoint, erros e `type`s); Kafka (tópicos, DLT, motivos, reprocessamento manual); variáveis de ambiente (de `contracts/configuration.md`); observabilidade (métricas, saúde, logs); estrutura de pastas; **o que não foi feito e por quê** (a tabela de `research.md` R-17: ledger, GSI, write sharding/coalescência, reprocessamento automático do DLT, OpenTelemetry, Prometheus/Grafana, IaC, autenticação, Schema Registry, teste de mutação e carga sustentada, multi-região) com o desenho proposto; riscos conhecidos; declaração do uso de IA com link para `docs/metodologia-ia.md`.
+- [ ] T168 [P] Conferir `specs/001-consulta-saldo/contracts/configuration.md` e `observability.md` contra `application.yaml` e o código implementados e, se divergirem, corrigir a documentação e registrar em commit `docs(contracts): sincroniza contratos com a implementacao` (só se houver diferença).
+
+### Commit C38: `docs: metodologia de desenvolvimento com ia para a apresentacao`
+
+- [ ] T169 [P] Criar `docs/metodologia-ia.md` (pt-BR, para a apresentação exigida pelo Itaú): fluxo Spec Kit `constitution -> specify -> clarify -> plan -> tasks -> analyze -> implement` e o que cada etapa produziu em `specs/001-consulta-saldo/` e `.specify/memory/constitution.md`; divisão de papéis (agente orquestrador que revisa e valida; subagentes executores que rodam cada fase; decisões de negócio e de arquitetura tomadas pelo autor humano via `clarify` e nas revisões do plano, com exemplos: DECLINED/DISABLED, tolerância de futuro, readiness sem dependência, `N` + `BigDecimal`); rastreabilidade (artefatos versionados em `specs/`, ADRs, commits pequenos com build verde e em Conventional Commits); guarda-corpos (Constitution, testes-primeiro, gates automáticos) e como a saída da IA é verificada; e o registro de que os commits NÃO têm co-autoria de IA.
+
+---
+
+## Phase 10: Validação final e itens opcionais
+
+**Purpose**: provar ponta a ponta que o entregável atende ao `quickstart.md` e à Constitution; itens opcionais por último. As tarefas de verificação não têm commit próprio: qualquer correção encontrada vira um commit pequeno `fix(...)` ou `docs(...)` fora da contagem das unidades.
+
+- [ ] T170 Executar `./gradlew clean check` e registrar o percentual de cobertura (>= 90%) e o resultado do Konsist; executar `make test` (estágio `test` do Dockerfile) e `make integration-test`.
+- [ ] T171 Provar build verde em CADA commit da feature: `git rebase --exec "./gradlew check --no-daemon" <commit-base>` (ou percorrer os commits em um worktree descartável) e confirmar que nenhum commit deixa `check` vermelho, que não há trailer de co-autoria de IA e que as mensagens seguem o padrão em português sem acentos.
+- [ ] T172 Validar `quickstart.md` seções 1 a 3 (testes sem infraestrutura, stack no ar, smoke test com a conta de exemplo).
+- [ ] T173 Validar `quickstart.md` seção 5 (5.1 desordem + duplicidade, 5.2 empate nas duas ordens, 5.3 DECLINED e precisão, 5.4 ciclo DISABLED) e conferir as métricas `balance_events_total` (soma = mensagens publicadas).
+- [ ] T174 Validar `quickstart.md` seções 6 e 6.1 (9 inválidas no DLT com os motivos esperados, valor original preservado, válidas processadas, conta de 1998 -> 200 sem DLT) e a seção 7 (400/404, `1-1-1-1-1`, eco de `X-Correlation-Id`).
+- [ ] T175 Validar `quickstart.md` seção 8 (`docker compose pause dynamodb`: 503 + `Retry-After` <= 2 s, `dependencies` 503, `readiness` 200, `liveness` 200, lag > 0, DLT inalterado; após `unpause` o saldo `999.00` aparece e o circuit breaker fecha) e seção 9 (reinício gracioso com 2.000 eventos: contagem de itens cresce exatamente 2.000).
+- [ ] T176 Validar `quickstart.md` seção 10 (`make integration-test` verde: ingestão, duplicata/desordem/empate, concorrência, DLT, outage, contrato do writer, métricas do circuit breaker).
+- [ ] T177 Conferir a rastreabilidade final: cada FR/SC da spec tem teste correspondente (`quickstart.md` seção 12), os 15 ADRs existem em `docs/adr/` com contexto, decisão, alternativas e consequências, o README lista o que NÃO foi feito e o enunciado não está versionado; corrigir lacunas em commits `docs(...)`/`fix(...)` pequenos.
+
+### Opcional (OPCIONAL: cortar sem impacto no MVP; só depois de tudo acima)
+
+#### Commit C39: `feat(perf): teste de carga k6 opcional da consulta de saldo`
+
+- [ ] T178 [P] (OPCIONAL) Criar `perf/k6-balance-read.js`: 500 req/s sobre `GET /balances/{accountId}` (conta de exemplo e contas geradas por `make kafka-produce-transactions-events`), com limiares `p(50) < 50ms` e `p(99) < 300ms` (SC-001).
+- [ ] T179 (OPCIONAL) `Makefile`: alvo `load-test` (`grafana/k6:2.3.0` via `docker run`, apontando para `host.docker.internal:8080`); executar e registrar o resultado no README; se não houver tempo, o item permanece documentado como não implementado (`research.md` R-17).
+
+---
+
+## Dependencies & Execution Order
+
+### Ordem das fases e das unidades de commit
+
+| Fase | Unidade | Commit | Tarefas |
+|------|---------|--------|---------|
+| 1 | C01 | `test(config): isola contexto de teste do broker via perfil test` | T001-T003 (3) |
+| 1 | C02 | `refactor: remove exemplo hello e generaliza teste de arquitetura para todos os contextos` | T004-T010 (7) |
+| 1 | C03 | `build: adiciona dependencias de resiliencia e metricas e teste de propriedade` | T011-T013 (3) |
+| 1 | C04 | `feat(infra): cria tabela AccountBalances e topicos de entrada e dlt` | T014-T020 (7) |
+| 2 | C05 | `feat(domain): identificadores canonicos com codigo de moeda e motivos de rejeicao` | T021-T026 (6) |
+| 2 | C06 | `feat(domain): valor monetario exato e instante de evento com limites de plausibilidade` | T027-T030 (4) |
+| 2 | C07 | `feat(domain): evento de transacao com precedencia e snapshot e excecoes de dominio` | T031-T038 (8) |
+| 3 | C08 | `feat(application): consulta de saldo com regra de conta desabilitada` | T039-T042 (4) |
+| 3 | C09 | `feat(dynamodb): mapeamento do item e leitura fortemente consistente do snapshot` | T043-T051 (9) |
+| 3 | C10 | `feat(dynamodb): circuit breaker na leitura com resilience4j programatico` | T052-T056 (5) |
+| 3 | C11 | `feat(web): endpoint de consulta de saldo com problem details e correlation id` | T057-T063 (7) |
+| 3 | C12 | `feat(web): contrato openapi servido e verificado contra as respostas reais` | T064-T066 (3) |
+| 3 | C13 | `feat(consulta): integracao ponta a ponta da consulta com exemplos http e alvo make` | T067-T070 (4) |
+| 4 | C14 | `feat(application): processamento de evento de transacao com snapshot mais recente` | T071-T074 (4) |
+| 4 | C15 | `feat(metrics): contadores de desfecho de processamento` | T075-T076 (2) |
+| 4 | C16 | `feat(dynamodb): escrita condicional atomica do snapshot com clientes de leitura e escrita separados` | T077-T085 (9) |
+| 4 | C17 | `feat(kafka): parser estrito do evento de transacao com catalogo de motivos de rejeicao` | T086-T089 (4) |
+| 4 | C18 | `feat(kafka): consumer com entrega at least once do topico de transacoes` | T090-T095 (6) |
+| 4 | C19 | `test(integracao): ingestao ponta a ponta com redpanda e dynamodb local` | T096-T097 (2) |
+| 5 | C20 | `test(convergencia): propriedade de convergencia sobre o fake com prova de que detecta dependencia de ordem` | T098-T100 (3) |
+| 5 | C21 | `feat(dynamodb): classificacao de duplicado versus obsoleto e anomalia pelo item antigo` | T101-T105 (5) |
+| 5 | C22 | `test(integracao): concorrencia real com convergencia e cenarios de corretude contra infraestrutura real` | T106-T110 (5) |
+| 6 | C23 | `feat(application): tolerancia configuravel de timestamp futuro na ingestao` | T111-T113 (3) |
+| 6 | C24 | `feat(kafka): isolamento de mensagens invalidas no dlt com motivo nos headers` | T114-T121 (8) |
+| 6 | C25 | `test(integracao): dlt por motivo com dlt ausente e falha nao classificada` | T122-T124 (3) |
+| 7 | C26 | `feat(kafka): backpressure com backoff exponencial e pausa para falhas transitorias` | T125-T129 (5) |
+| 7 | C27 | `test(integracao): indisponibilidade do armazenamento com falhas injetadas e docker pause` | T130-T133 (4) |
+| 8 | C28 | `feat(observability): latencias de leitura escrita e ingestao com histograma` | T134-T139 (6) |
+| 8 | C29 | `feat(observability): saude por grupos com dependencias separadas da prontidao` | T140-T143 (4) |
+| 8 | C30 | `feat(observability): logs json estruturados com contexto e sem dados sensiveis` | T144-T147 (4) |
+| 8 | C31 | `chore(ops): configura encerramento gracioso e verifica a configuracao` | T148-T149 (2) |
+| 8 | C32 | `test(integracao): observabilidade ponta a ponta com saude sob indisponibilidade e reinicio sem perda` | T150-T154 (5) |
+| 9 | C33 | `feat(docker): imagem de runtime sem root com healthcheck e heap relativa e tags fixas` | T155-T159 (5) |
+| 9 | C34 | `feat(compose): compose completo do app com porta de gestao e ordem dos seeds` | T160-T161 (2) |
+| 9 | C35 | `feat(make): cenarios deterministicos e caos de dynamodb` | T162-T164 (3) |
+| 9 | C36 | `ci: renomeia imagem e garante gates verdes no github actions` | T165-T166 (2) |
+| 9 | C37 | `docs(readme): reescreve o readme com arquitetura decisoes operacao e limites` | T167-T168 (2) |
+| 9 | C38 | `docs: metodologia de desenvolvimento com ia para a apresentacao` | T169-T169 (1) |
+| 10 | C39 | `feat(perf): teste de carga k6 opcional da consulta de saldo` | T178-T179 (2) |
+
+### Dependências entre fases e stories
+
+- **Phase 1 (Setup)** -> **Phase 2 (Foundational)** -> user stories. A Phase 2 BLOQUEIA todas as stories (o modelo de domínio é compartilhado).
+- **US1** depende só da Phase 2 e do seed da Phase 1 (item de exemplo); é testável sem ingestão.
+- **US2** depende da Phase 2 e reutiliza o mapper, as exceções e o cliente de leitura criados na US1 (`BalanceItemMapper`, `DynamoDbExceptionTranslator`, `DynamoDbClientsConfig`, `BalanceBeansConfig`), por isso vem depois da US1 no mesmo arquivo; o consumer não depende do controller.
+- **US3** depende da US2 (writer, fake, contrato e listener). O refinamento duplicado x obsoleto altera `DynamoDbBalanceSnapshotWriter` criado na US2.
+- **US4** depende da US2 (o parser e o listener). A validação de futuro altera `ProcessTransactionEventService`.
+- **US5** depende da US4 (`DeadLetterConfig` já traz a função de backoff; a US5 a completa) e da US1 (circuit breaker e 503).
+- **US6** depende das US1, US2, US4 e US5 (mede e expõe o que elas criaram); a extensão do `StoreOutageIT` depende do grupo `dependencies` da própria US6.
+- **Phase 9** depende de todas as stories (README e ADRs descrevem o implementado; Dockerfile usa a porta 8082). **Phase 10** depende da Phase 9.
+
+### Dentro de cada unidade
+
+- Testes vermelhos ANTES da implementação; o teste é executado e falha; só então implementar.
+- Modelos/portas antes de serviços; serviços antes de adapters; adapters antes de configuração/composition root; configuração e ADR por último.
+- Arquivos compartilhados (`application.yaml`, `Makefile`, `docker-compose.yml`, `BalanceBeansConfig.kt`, `DeadLetterConfig.kt`, `DynamoDbBalanceSnapshotWriter.kt`, `StoreOutageIT.kt`) são editados em sequência, nunca em paralelo.
+
+### Oportunidades de paralelismo (`[P]`)
+
+- Dentro de uma unidade, os testes de tipos independentes (ex.: `IdentifiersTest`, `CurrencyCodeTest`, `RejectionReasonTest`, `InvalidEventExceptionTest`) podem ser escritos em paralelo, assim como os ADRs e os documentos (arquivos próprios).
+- Depois do checkpoint da Phase 2, **US1** e o esqueleto de **US2** (portas, fake, `MicrometerProcessingMetrics`, parser) podem ser conduzidos por pessoas/agentes diferentes; o que compartilha `application.yaml` ou `BalanceBeansConfig.kt` é serializado.
+- Testes de integração de arquivos distintos (`ConcurrentWritesIT`, `ConvergencePropertyIT`, `ConvergenceIngestionIT`; `DeadLetterIT`, `DeadLetterUnavailableIT`, `UnclassifiedFailureIT`) são independentes entre si, mas todos usam a mesma infraestrutura compose e o teste de caos deve rodar isolado.
+- Phase 9: `Dockerfile`/`.dockerignore`, `produce-scenario-events.sh`, `docker.yml`, README e `docs/metodologia-ia.md` tocam arquivos distintos e podem andar em paralelo (o `Makefile` e o `docker-compose.yml` não).
+
+### Exemplo de paralelismo (Phase 2, unidade de identificadores)
+
+```text
+Em paralelo:
+  IdentifiersTest.kt   CurrencyCodeTest.kt   RejectionReasonTest.kt   InvalidEventExceptionTest.kt
+Depois (sequencial): RejectionReason.kt / InvalidEventException.kt -> CanonicalUuid.kt / AccountId.kt ... / CurrencyCode.kt
+```
+
+---
+
+## Implementation Strategy
+
+### MVP primeiro (US1 + US2 + US3)
+
+1. Phase 1 e Phase 2 (fundação e domínio) — sem elas nada avança.
+2. US1 (consulta) -> validar sozinha com o item de exemplo do seed.
+3. US2 (ingestão) e US3 (convergência) -> **PARAR e VALIDAR o MVP**: publicar -> consultar, com desordem, duplicidade, empate e concorrência real, e `check` + `integrationTest` verdes.
+4. Só então robustez (US4 DLT, US5 backpressure) e operação (US6).
+
+### Entrega incremental por commits
+
+- Cada unidade é um commit que passa `./gradlew check` (JaCoCo >= 90% e Konsist) e, quando há integração, `make integration-test`. Nenhuma unidade deixa o repositório num estado que viole a Constitution (por exemplo, nenhuma permite DLT de mensagem válida por falha transitória).
+- Até a unidade `feat(kafka): isolamento de mensagens invalidas...`, payloads inválidos ainda não são isolados: o MVP deve ser demonstrado só com eventos válidos.
+
+### Plano de 3 dias (prazo curto) e ordem de corte
+
+- **Dia 1**: Phase 1, Phase 2 e US1 (fundação, domínio e consulta).
+- **Dia 2**: US2, US3 (MVP), US4 e US5.
+- **Dia 3**: US6, Phase 9 (produção, CI, ADRs restantes, README, `docs/metodologia-ia.md`) e Phase 10 (validação do `quickstart.md`).
+- **Ordem de corte se faltar tempo** (do primeiro a cortar): k6 (opcional) -> `RestartRedeliveryIT` e o meta-teste do naive (mantendo a propriedade) -> profundidade dos ADRs 0013/0014 (mantendo os 15 arquivos) -> `docs(contracts)`. NÃO cortar: testes-primeiro, gate de 90%, Konsist, os cenários obrigatórios da Constitution VI, ADRs, README com o que não foi feito e `docs/metodologia-ia.md`.
+
+## Notes
+
+- `[P]` = arquivos diferentes e sem dependência de tarefa incompleta.
+- `[USx]` mapeia a tarefa à user story da spec para rastreabilidade.
+- Vermelho antes de verde: execute o teste e confirme a falha antes de implementar; nunca commite vermelho.
+- Commits em português, Conventional Commits, sem acentos, sem trailer de co-autoria de IA.
+- Evitar: tarefas vagas, edição simultânea do mesmo arquivo, dependências entre stories que quebrem a independência, exclusões de cobertura para "fazer passar" o gate.
