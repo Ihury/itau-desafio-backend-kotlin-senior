@@ -1,30 +1,10 @@
 package br.com.itau.challenge.balance.adapter.input.kafka
 
-import br.com.itau.challenge.balance.support.DynamoDbTestSupport
 import br.com.itau.challenge.balance.support.EventPayloads
-import br.com.itau.challenge.balance.support.IntegrationInfra
+import br.com.itau.challenge.balance.support.KafkaIngestionITBase
 import org.awaitility.kotlin.await
 import org.awaitility.kotlin.untilAsserted
-import org.junit.jupiter.api.AfterEach
-import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
-import org.springframework.beans.factory.annotation.Autowired
-import org.springframework.boot.test.context.SpringBootTest
-import org.springframework.boot.test.web.server.LocalServerPort
-import org.springframework.kafka.config.KafkaListenerEndpointRegistry
-import org.springframework.test.context.ActiveProfiles
-import org.springframework.test.context.DynamicPropertyRegistry
-import org.springframework.test.context.DynamicPropertySource
-import software.amazon.awssdk.services.dynamodb.DynamoDbClient
-import software.amazon.awssdk.services.dynamodb.model.DeleteItemRequest
-import tools.jackson.databind.DeserializationFeature
-import tools.jackson.databind.json.JsonMapper
-import java.math.BigDecimal
-import java.net.URI
-import java.net.http.HttpClient
-import java.net.http.HttpRequest
-import java.net.http.HttpResponse
-import java.time.Duration
 import java.util.UUID
 import kotlin.test.assertEquals
 
@@ -33,64 +13,7 @@ import kotlin.test.assertEquals
  * listener real consome, o servico grava e a consulta HTTP real reflete o saldo. Cada teste usa contas aleatorias. O saldo
  * precisa estar consultavel em ate 5 s apos a publicacao em cada caso (SC-002).
  */
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-@ActiveProfiles("test")
-class TransactionEventIngestionIT {
-    companion object {
-        @JvmStatic
-        @DynamicPropertySource
-        fun properties(registry: DynamicPropertyRegistry) = IntegrationInfra.registerProperties(registry)
-
-        private val SLO = Duration.ofSeconds(5)
-    }
-
-    @LocalServerPort
-    private var port: Int = 0
-
-    @Autowired
-    private lateinit var registry: KafkaListenerEndpointRegistry
-
-    private val http = HttpClient.newHttpClient()
-    private val json = JsonMapper.builder().enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS).build()
-    private lateinit var raw: DynamoDbClient
-    private val created = mutableListOf<String>()
-
-    @BeforeEach
-    fun setUp() {
-        raw = DynamoDbTestSupport.rawClient()
-        IntegrationInfra.awaitAssignment(registry)
-    }
-
-    @AfterEach
-    fun tearDown() {
-        created.forEach { raw.deleteItem(DeleteItemRequest.builder().tableName(DynamoDbTestSupport.tableName).key(DynamoDbTestSupport.key(it)).build()) }
-        raw.close()
-    }
-
-    private fun newAccount(): String = DynamoDbTestSupport.randomAccountId().also { created += it }
-
-    private fun get(accountId: String): HttpResponse<String> =
-        http.send(HttpRequest.newBuilder(URI.create("http://localhost:$port/balances/$accountId")).GET().build(), HttpResponse.BodyHandlers.ofString())
-
-    private fun publish(payload: String) = IntegrationInfra.publish(payload)
-
-    /** Espera, em ate 5 s apos a publicacao, a consulta responder 200 com [amount] e [owner]. */
-    private fun awaitBalance(
-        accountId: String,
-        amount: String,
-        owner: String = EventPayloads.DEFAULT_OWNER,
-        updatedAt: String? = null,
-    ) {
-        await.atMost(SLO).untilAsserted {
-            val response = get(accountId)
-            assertEquals(200, response.statusCode(), "status da consulta de $accountId")
-            val body = json.readTree(response.body())
-            assertEquals(0, BigDecimal(amount).compareTo(body["balance"]["amount"].decimalValue()), "saldo esperado $amount, veio ${body["balance"]["amount"]}")
-            assertEquals(owner, body["owner"].asString())
-            updatedAt?.let { assertEquals(it, body["updated_at"].asString()) }
-        }
-    }
-
+class TransactionEventIngestionIT : KafkaIngestionITBase() {
     @Test
     fun `a new account is created by the first event and reflected by the query`() {
         val account = newAccount()

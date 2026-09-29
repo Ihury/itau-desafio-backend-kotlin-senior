@@ -97,6 +97,18 @@ object IntegrationInfra {
     fun publish(payload: String) = publish(payload.toByteArray(Charsets.UTF_8))
 
     /**
+     * Publica com [key]: registros com a mesma chave caem na MESMA particao e sao consumidos em ordem de publicacao. Serve so
+     * aos testes que precisam de uma ordem de chegada deterministica (contagem exata de desfechos); o autorizador real
+     * publica sem chave e o servico converge em qualquer ordem.
+     */
+    fun publishKeyed(
+        key: String,
+        payload: String,
+    ) {
+        producer.send(ProducerRecord<ByteArray, ByteArray>(topic, key.toByteArray(Charsets.UTF_8), payload.toByteArray(Charsets.UTF_8))).get(15, TimeUnit.SECONDS)
+    }
+
+    /**
      * Espera todas as particoes do topico estarem atribuidas aos containers do listener. Sem isso o primeiro teste mediria o
      * tempo de entrada no grupo (rebalance inicial), e nao a latencia de processamento.
      */

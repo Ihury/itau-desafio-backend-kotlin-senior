@@ -68,8 +68,13 @@ object ConvergenceModel {
         val tsOffset: Int,
         val txIndex: Int,
         val upperCaseTx: Boolean,
+        val accountOverride: String? = null,
     ) {
-        val accountId: String get() = ACCOUNTS[account]
+        /** Conta do evento: a de [ACCOUNTS] ou, nos testes de integracao (tabela compartilhada), uma conta aleatoria. */
+        val accountId: String get() = accountOverride ?: ACCOUNTS[account]
+
+        /** Mesmo evento numa outra conta (o conteudo e rederivado da nova chave). */
+        fun withAccount(id: String): EventSpec = copy(accountOverride = id)
         val timestampMicros: Long get() = BASE_TIMESTAMP_MICROS + tsOffset
         val transactionId: String get() = TRANSACTION_IDS[txIndex]
 

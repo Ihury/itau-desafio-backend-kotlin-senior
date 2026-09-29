@@ -1,0 +1,94 @@
+package br.com.itau.challenge.balance.support
+
+import io.micrometer.core.instrument.MeterRegistry
+import org.awaitility.kotlin.await
+import org.awaitility.kotlin.untilAsserted
+import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.BeforeEach
+import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.boot.test.context.SpringBootTest
+import org.springframework.boot.test.web.server.LocalServerPort
+import org.springframework.kafka.config.KafkaListenerEndpointRegistry
+import org.springframework.test.context.ActiveProfiles
+import org.springframework.test.context.DynamicPropertyRegistry
+import org.springframework.test.context.DynamicPropertySource
+import software.amazon.awssdk.services.dynamodb.DynamoDbClient
+import software.amazon.awssdk.services.dynamodb.model.DeleteItemRequest
+import tools.jackson.databind.DeserializationFeature
+import tools.jackson.databind.json.JsonMapper
+import java.math.BigDecimal
+import java.net.URI
+import java.net.http.HttpClient
+import java.net.http.HttpRequest
+import java.net.http.HttpResponse
+import java.time.Duration
+import kotlin.test.assertEquals
+
+/**
+ * Base dos ITs de ingestao ponta a ponta (Redpanda e DynamoDB Local reais). A `@DynamicPropertySource` vive AQUI, de modo que
+ * todas as subclasses compartilham o MESMO contexto Spring em cache: um unico listener no grupo de consumo exclusivo da
+ * execucao (dois contextos no mesmo grupo dividiriam as particoes e um deles processaria as mensagens do outro).
+ */
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@ActiveProfiles("test")
+abstract class KafkaIngestionITBase {
+    companion object {
+        @JvmStatic
+        @DynamicPropertySource
+        fun properties(registry: DynamicPropertyRegistry) = IntegrationInfra.registerProperties(registry)
+
+        /** SLO de consulta apos a publicacao (SC-002). */
+        val SLO: Duration = Duration.ofSeconds(5)
+    }
+
+    @LocalServerPort
+    protected var port: Int = 0
+
+    @Autowired
+    protected lateinit var registry: KafkaListenerEndpointRegistry
+
+    @Autowired
+    protected lateinit var meterRegistry: MeterRegistry
+
+    private val http = HttpClient.newHttpClient()
+    protected val json: JsonMapper = JsonMapper.builder().enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS).build()
+    protected lateinit var raw: DynamoDbClient
+    private val created = mutableListOf<String>()
+
+    @BeforeEach
+    fun setUp() {
+        raw = DynamoDbTestSupport.rawClient()
+        IntegrationInfra.awaitAssignment(registry)
+    }
+
+    @AfterEach
+    fun tearDown() {
+        created.forEach { raw.deleteItem(DeleteItemRequest.builder().tableName(DynamoDbTestSupport.tableName).key(DynamoDbTestSupport.key(it)).build()) }
+        created.clear()
+        raw.close()
+    }
+
+    protected fun newAccount(): String = DynamoDbTestSupport.randomAccountId().also { created += it }
+
+    protected fun get(accountId: String): HttpResponse<String> =
+        http.send(HttpRequest.newBuilder(URI.create("http://localhost:$port/balances/$accountId")).GET().build(), HttpResponse.BodyHandlers.ofString())
+
+    protected fun publish(payload: String) = IntegrationInfra.publish(payload)
+
+    /** Espera, em ate [SLO] apos a publicacao, a consulta responder 200 com [amount] e [owner]. */
+    protected fun awaitBalance(
+        accountId: String,
+        amount: String,
+        owner: String = EventPayloads.DEFAULT_OWNER,
+        updatedAt: String? = null,
+    ) {
+        await.atMost(SLO).untilAsserted {
+            val response = get(accountId)
+            assertEquals(200, response.statusCode(), "status da consulta de $accountId")
+            val body = json.readTree(response.body())
+            assertEquals(0, BigDecimal(amount).compareTo(body["balance"]["amount"].decimalValue()), "saldo esperado $amount, veio ${body["balance"]["amount"]}")
+            assertEquals(owner, body["owner"].asString())
+            updatedAt?.let { assertEquals(it, body["updated_at"].asString()) }
+        }
+    }
+}
