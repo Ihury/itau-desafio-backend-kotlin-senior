@@ -5,6 +5,7 @@ import br.com.itau.challenge.balance.adapter.output.dynamodb.CircuitBreakingBala
 import br.com.itau.challenge.balance.adapter.output.dynamodb.DynamoDbBalanceSnapshotReader
 import br.com.itau.challenge.balance.adapter.output.dynamodb.DynamoDbBalanceSnapshotWriter
 import br.com.itau.challenge.balance.adapter.output.dynamodb.DynamoDbClientProperties
+import br.com.itau.challenge.balance.application.FutureTolerance
 import br.com.itau.challenge.balance.port.output.BalanceSnapshotReader
 import br.com.itau.challenge.balance.port.output.BalanceSnapshotWriter
 import io.github.resilience4j.circuitbreaker.CircuitBreaker
@@ -15,6 +16,7 @@ import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient
 import java.time.Clock
+import java.time.Duration
 import java.time.Instant
 import java.time.ZoneId
 
@@ -60,6 +62,12 @@ class BalanceBeansConfig {
         @Value($$"${balance.min-event-timestamp}") minEventTimestamp: String,
         @Value($$"${balance.min-account-created-at}") minAccountCreatedAt: String,
     ): TransactionEventParser = TransactionEventParser(Instant.parse(minEventTimestamp), Instant.parse(minAccountCreatedAt))
+
+    /** Tolerancia de timestamp futuro (`balance.future-tolerance`, ISO-8601, padrao `PT5M`; FR-012). */
+    @Bean
+    fun futureTolerance(
+        @Value($$"${balance.future-tolerance}") tolerance: String,
+    ): FutureTolerance = FutureTolerance(Duration.parse(tolerance))
 
     /** Relogio do processamento (usado so para a tolerancia de timestamp futuro; nunca decide precedencia). */
     @Bean

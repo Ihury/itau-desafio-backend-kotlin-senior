@@ -19,6 +19,10 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.slf4j.LoggerFactory
 import java.math.BigDecimal
+import java.time.Clock
+import java.time.Duration
+import java.time.Instant
+import java.time.ZoneOffset
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
@@ -29,7 +33,7 @@ import kotlin.test.assertTrue
 class ProcessTransactionEventServiceTest {
     private val store = InMemoryBalanceStore()
     private val metrics = RecordingProcessingMetrics()
-    private val service = ProcessTransactionEventService(store, metrics)
+    private val service = ProcessTransactionEventService(store, metrics, Clock.fixed(Instant.parse("2026-01-01T00:00:00Z"), ZoneOffset.UTC), FutureTolerance(Duration.ofMinutes(5)))
 
     private val accountA = "5b19c8b6-0cc4-4c72-a989-0c2ee15fa975"
     private val accountB = "0a7e3e1c-2a55-4b58-a8f4-4c1b6a1f3d10"

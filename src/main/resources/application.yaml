@@ -59,6 +59,8 @@ balance:
   # Limites inferiores de plausibilidade dos timestamps do evento (contracts/kafka-events.md secao 3, passo 3).
   min-event-timestamp: ${BALANCE_MIN_EVENT_TIMESTAMP:2000-01-01T00:00:00Z}
   min-account-created-at: ${BALANCE_MIN_ACCOUNT_CREATED_AT:1900-01-01T00:00:00Z}
+  # Instante do evento alem de `agora + tolerancia` e `invalid_timestamp` (FR-012); o relogio so valida, nunca decide precedencia.
+  future-tolerance: ${BALANCE_FUTURE_TOLERANCE:PT5M}
   display-zone: ${BALANCE_DISPLAY_ZONE:America/Sao_Paulo}
   circuit-breaker:
     window: ${BALANCE_CB_WINDOW:PT10S}

@@ -1,5 +1,6 @@
 package br.com.itau.challenge.balance.testing
 
+import br.com.itau.challenge.balance.application.FutureTolerance
 import br.com.itau.challenge.balance.application.ProcessTransactionEventService
 import br.com.itau.challenge.balance.domain.model.AccountId
 import br.com.itau.challenge.balance.domain.model.ApplyResult
@@ -10,6 +11,10 @@ import io.kotest.property.PropertyContext
 import io.kotest.property.arbitrary.list
 import io.kotest.property.checkAll
 import kotlinx.coroutines.runBlocking
+import java.time.Clock
+import java.time.Duration
+import java.time.Instant
+import java.time.ZoneOffset
 import java.util.Random
 import java.util.UUID
 import kotlin.test.assertEquals
@@ -23,6 +28,9 @@ import kotlin.test.assertTrue
  * final de cada conta e o do evento de maior `(timestamp, transactionId)` e cada evento produz o desfecho previsto.
  */
 object ConvergenceProperty {
+    /** Relogio fixo depois de todos os eventos gerados (base em 2025): a tolerancia de futuro nunca interfere na propriedade. */
+    private val CLOCK: Clock = Clock.fixed(Instant.parse("2026-01-01T00:00:00Z"), ZoneOffset.UTC)
+
     /** Um armazenamento pronto para uma entrega e a remap das contas do modelo (identidade, ou contas aleatorias em tabela compartilhada). */
     class Scenario(
         val store: StoreUnderTest,
@@ -51,7 +59,7 @@ object ConvergenceProperty {
         val mappedAll = all.map(scenario.remap)
         val mappedOrder = order.map(scenario.remap)
         val metrics = RecordingProcessingMetrics()
-        val service = ProcessTransactionEventService(scenario.store.writer, metrics)
+        val service = ProcessTransactionEventService(scenario.store.writer, metrics, CLOCK, FutureTolerance(Duration.ofMinutes(5)))
         val results = mappedOrder.map { spec -> spec to service.process(spec.toEvent()) }
 
         mappedAll.map { it.accountId }.toSet().forEach { account ->
