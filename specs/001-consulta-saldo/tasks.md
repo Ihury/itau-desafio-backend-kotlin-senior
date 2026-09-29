@@ -234,8 +234,8 @@ Os atalhos abaixo são expandidos nos caminhos deste arquivo; todos os caminhos 
 
 ### Commit C15: `feat(metrics): contadores de desfecho de processamento`
 
-- [ ] T075 [P] [US2] Teste vermelho `src/test/kotlin/br/com/itau/challenge/balance/adapter/output/metrics/MicrometerProcessingMetricsTest.kt` (`SimpleMeterRegistry`): `balance.events{outcome=processed,reason=none}`, `obsolete` e `duplicate` incrementam um contador cada; `duplicate(conflicting=true)` incrementa também `balance.events.anomalies{type=conflicting_duplicate}` e o desfecho continua contado uma única vez como `duplicate`.
-- [ ] T076 [US2] Implementar `src/main/kotlin/br/com/itau/challenge/balance/adapter/output/metrics/MicrometerProcessingMetrics.kt` (`@Component`, contadores de `contracts/observability.md`).
+- [X] T075 [P] [US2] Teste vermelho `src/test/kotlin/br/com/itau/challenge/balance/adapter/output/metrics/MicrometerProcessingMetricsTest.kt` (`SimpleMeterRegistry`): `balance.events{outcome=processed,reason=none}`, `obsolete` e `duplicate` incrementam um contador cada; `duplicate(conflicting=true)` incrementa também `balance.events.anomalies{type=conflicting_duplicate}` e o desfecho continua contado uma única vez como `duplicate`.
+- [X] T076 [US2] Implementar `src/main/kotlin/br/com/itau/challenge/balance/adapter/output/metrics/MicrometerProcessingMetrics.kt` (`@Component`, contadores de `contracts/observability.md`).
 
 ### Commit C16: `feat(dynamodb): escrita condicional atomica do snapshot com clientes de leitura e escrita separados`
 
