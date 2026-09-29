@@ -138,6 +138,25 @@ class ArchitectureTest {
         assertNoViolations("contextos so podem ter as camadas $KNOWN_LAYERS", violations)
     }
 
+    @Test
+    fun `at least one business context exists and balance has a domain of its own`() {
+        assertTrue(contexts.isNotEmpty(), "nenhum contexto de negocio encontrado: as regras acima seriam vacuosas")
+        assertTrue("balance" in contexts, "contexto 'balance' ausente; encontrados: $contexts")
+        assertTrue(filesOf("balance", "domain").isNotEmpty(), "balance nao possui domain")
+    }
+
+    @Test
+    fun `balance domain imports nothing beyond kotlin, java and itself`() {
+        val forbidden = listOf("org.springframework", "software.amazon", "org.apache.kafka", "tools.jackson", "com.fasterxml", "io.micrometer", "io.github.resilience4j", "org.slf4j")
+        val violations =
+            filesOf("balance", "domain").flatMap { file ->
+                importsOf(file)
+                    .filter { import -> forbidden.any { import.startsWith(it) } || !(import.startsWith("kotlin.") || import.startsWith("java.") || import.startsWith("$ROOT.balance.domain.")) }
+                    .map { "${file.path}: $it" }
+            }
+        assertNoViolations("balance.domain so pode importar kotlin.*, java.* e o proprio dominio", violations)
+    }
+
     private companion object {
         const val ROOT = "br.com.itau.challenge"
         val LAYERS_WITH_DIRECTION = listOf("domain", "port", "application", "adapter")
