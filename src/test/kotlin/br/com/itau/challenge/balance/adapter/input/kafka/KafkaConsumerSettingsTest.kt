@@ -3,17 +3,21 @@ package br.com.itau.challenge.balance.adapter.input.kafka
 import br.com.itau.challenge.balance.adapter.output.dynamodb.DynamoDbClientProperties
 import org.apache.kafka.clients.consumer.CooperativeStickyAssignor
 import org.apache.kafka.common.serialization.ByteArrayDeserializer
+import org.apache.kafka.common.serialization.ByteArraySerializer
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.ApplicationContext
 import org.springframework.kafka.config.KafkaListenerEndpointRegistry
 import org.springframework.kafka.core.ConsumerFactory
+import org.springframework.kafka.core.KafkaTemplate
 import org.springframework.kafka.listener.CommonErrorHandler
 import org.springframework.kafka.listener.ConcurrentMessageListenerContainer
 import org.springframework.kafka.listener.ContainerProperties
 import org.springframework.kafka.listener.DefaultErrorHandler
+import org.springframework.kafka.support.KafkaUtils
 import org.springframework.test.context.ActiveProfiles
+import java.time.Duration
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertSame
@@ -34,6 +38,12 @@ class KafkaConsumerSettingsTest {
 
     @Autowired
     private lateinit var applicationContext: ApplicationContext
+
+    @Autowired
+    private lateinit var deadLetterTemplate: KafkaTemplate<ByteArray, ByteArray>
+
+    @Autowired
+    private lateinit var deadLetterProperties: DeadLetterProperties
 
     @Autowired
     private lateinit var dynamoDbProperties: DynamoDbClientProperties
@@ -91,12 +101,36 @@ class KafkaConsumerSettingsTest {
     }
 
     @Test
-    fun `the container runs the fail safe error handler and never the spring default`() {
+    fun `the container runs the dead letter error handler and never the spring default`() {
         val handler = container().commonErrorHandler
 
         assertSame(errorHandler, handler, "o container deve usar o CommonErrorHandler do contexto")
         assertTrue(handler is DefaultErrorHandler)
         assertTrue(handler.javaClass == DefaultErrorHandler::class.java)
+    }
+
+    @Test
+    fun `the dlt producer sends verbatim bytes, waits for every replica, is idempotent and never blocks for long`() {
+        val producerProperties = deadLetterTemplate.producerFactory.configurationProperties
+
+        assertEquals(ByteArraySerializer::class.java.name, serializerName(producerProperties["key.serializer"]))
+        assertEquals(ByteArraySerializer::class.java.name, serializerName(producerProperties["value.serializer"]))
+        assertEquals("all", producerProperties["acks"].toString())
+        assertEquals("true", producerProperties["enable.idempotence"].toString())
+        assertEquals(3000, producerProperties["max.block.ms"].toString().toInt())
+    }
+
+    private fun serializerName(value: Any?): String = if (value is Class<*>) value.name else value.toString()
+
+    @Test
+    fun `the synchronous dlt publication waits five seconds at most and the producer configuration is valid`() {
+        val producerProperties = deadLetterTemplate.producerFactory.configurationProperties
+
+        assertEquals(Duration.ofSeconds(5), deadLetterProperties.waitForSendResultTimeout)
+        // o Spring espera max(delivery.timeout.ms + buffer, waitForSendResultTimeout); o buffer e zerado no recoverer
+        assertEquals(5000L, KafkaUtils.determineSendTimeout(producerProperties, 0, deadLetterProperties.waitForSendResultTimeout.toMillis()).toMillis())
+        // delivery.timeout.ms >= linger.ms + request.timeout.ms: o Kafka valida na criacao do produtor (nao conecta ao broker)
+        deadLetterTemplate.producerFactory.createProducer().close()
     }
 
     @Test

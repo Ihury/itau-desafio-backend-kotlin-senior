@@ -1,9 +1,6 @@
 package br.com.itau.challenge.balance.adapter.input.kafka
 
-import br.com.itau.challenge.balance.domain.exception.BalanceStoreRejectedException
 import br.com.itau.challenge.balance.domain.exception.BalanceStoreUnavailableException
-import br.com.itau.challenge.balance.domain.exception.InvalidEventException
-import br.com.itau.challenge.balance.domain.model.RejectionReason
 import br.com.itau.challenge.balance.domain.model.StoreFailureCause
 import org.apache.kafka.clients.consumer.Consumer
 import org.apache.kafka.clients.consumer.ConsumerRecord
@@ -14,22 +11,28 @@ import org.mockito.Mockito.mock
 import org.mockito.Mockito.never
 import org.mockito.Mockito.times
 import org.mockito.Mockito.verify
+import org.mockito.Mockito.mockingDetails
+import br.com.itau.challenge.balance.testing.RecordingProcessingMetrics
+import org.springframework.kafka.core.KafkaOperations
 import org.springframework.kafka.listener.BackOffHandler
 import org.springframework.kafka.listener.DefaultErrorHandler
 import org.springframework.kafka.listener.ListenerExecutionFailedException
 import org.springframework.kafka.listener.MessageListenerContainer
 import org.springframework.core.NestedRuntimeException
-import org.springframework.messaging.converter.MessageConversionException
 import org.springframework.util.backoff.BackOffExecution
+import java.time.Clock
+import java.time.Duration
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * Prova que NENHUMA unidade permite descarte de mensagem (Constitution III): o error handler nunca confirma o offset de um
- * registro que falhou, seja qual for a excecao, e a espera entre reentregas cresce ate um teto e nunca se esgota.
- * O handler e chamado diretamente, sem broker.
+ * Prova que a falha TRANSITORIA nunca descarta mensagem (Constitution III, FR-017): com o armazenamento indisponivel o error
+ * handler nunca confirma o offset nem aciona o recoverer do DLT (a mensagem valida fica no broker), e a espera entre
+ * reentregas cresce ate um teto e nunca se esgota. A partir da US4 as falhas permanentes e nao classificadas vao ao DLT
+ * (`DeadLetterConfigTest`); aqui o `KafkaOperations` do DLT e um mock que NAO PODE ser usado. O handler e chamado
+ * diretamente, sem broker.
  */
 class FailSafeErrorHandlerTest {
     /** `BackOffHandler` que so registra o intervalo pedido, para nao dormir de verdade em mil iteracoes. */
@@ -53,7 +56,13 @@ class FailSafeErrorHandlerTest {
         }
     }
 
-    private val config = FailSafeErrorHandlerConfig()
+    @Suppress("UNCHECKED_CAST")
+    private val dlt = mock(KafkaOperations::class.java) as KafkaOperations<ByteArray, ByteArray>
+    private val metrics = RecordingProcessingMetrics()
+    private val config = DeadLetterConfig()
+
+    private fun failSafeErrorHandler(backOffHandler: BackOffHandler) =
+        config.deadLetterErrorHandler(dlt, "transacoes-financeiras-processadas.DLT", Duration.ofSeconds(5), Clock.systemUTC(), metrics, backOffHandler)
     private val record = ConsumerRecord<Any, Any>("transacoes-financeiras-processadas", 2, 41L, null, ByteArray(0))
     private val partition = TopicPartition(record.topic(), record.partition())
 
@@ -65,23 +74,18 @@ class FailSafeErrorHandlerTest {
 
     private fun listenerFailure(cause: Exception) = ListenerExecutionFailedException("Listener failed", cause)
 
-    /** Excecoes do listener: dominio, infraestrutura, defeito nosso e as que o Spring Kafka classifica como fatais por padrao. */
+    /** Falhas transitorias do armazenamento, com cada causa, embrulhadas como o container as entrega e sem embrulho. */
     private val failures: Map<String, () -> Exception> =
-        mapOf(
-            "invalid event" to { listenerFailure(InvalidEventException(RejectionReason.INVALID_CURRENCY, "transaction.currency")) },
-            "malformed payload" to { listenerFailure(InvalidEventException(RejectionReason.MALFORMED_PAYLOAD)) },
-            "store unavailable" to { listenerFailure(BalanceStoreUnavailableException(StoreFailureCause.UNAVAILABLE)) },
-            "store rejected" to { listenerFailure(BalanceStoreRejectedException()) },
-            "unexpected runtime" to { listenerFailure(IllegalStateException("defeito")) },
-            "fatal by default: class cast" to { listenerFailure(ClassCastException("x")) },
-            "fatal by default: conversion" to { listenerFailure(MessageConversionException("x")) },
-            "fatal by default: no such method" to { listenerFailure(NoSuchMethodException("x")) },
-            "bare exception, not wrapped" to { IllegalArgumentException("x") },
-        )
+        StoreFailureCause.entries.flatMap { cause ->
+            listOf(
+                "store unavailable ($cause)" to { listenerFailure(BalanceStoreUnavailableException(cause)) },
+                "store unavailable ($cause), not wrapped" to { BalanceStoreUnavailableException(cause) as Exception },
+            )
+        }.toMap()
 
     @Test
     fun `the back off never runs out, grows to the ceiling and never waits past the poll interval`() {
-        val execution = config.failSafeBackOff().start()
+        val execution = config.transientBackOff().start()
         val waits = (1..1000).map { execution.nextBackOff() }
 
         assertTrue(waits.none { it == BackOffExecution.STOP }, "o backoff nao pode esgotar")
@@ -95,7 +99,7 @@ class FailSafeErrorHandlerTest {
 
     @Test
     fun `the back off has no attempt or elapsed time limit`() {
-        val backOff = config.failSafeBackOff()
+        val backOff = config.transientBackOff()
 
         assertEquals(500L, backOff.initialInterval)
         assertEquals(2.0, backOff.multiplier)
@@ -108,7 +112,7 @@ class FailSafeErrorHandlerTest {
     fun `no failure is ever recovered, however many times the same record fails`() {
         failures.forEach { (label, failure) ->
             val backOffHandler = RecordingBackOffHandler()
-            val handler = config.failSafeErrorHandler(backOffHandler)
+            val handler = failSafeErrorHandler(backOffHandler)
             val consumer = mock(Consumer::class.java)
             val container = mock(MessageListenerContainer::class.java)
 
@@ -125,7 +129,7 @@ class FailSafeErrorHandlerTest {
     @Test
     fun `the record stays unconfirmed and is redelivered after every failure`() {
         failures.forEach { (label, failure) ->
-            val handler = config.failSafeErrorHandler(RecordingBackOffHandler())
+            val handler = failSafeErrorHandler(RecordingBackOffHandler())
             val consumer = mock(Consumer::class.java)
             val container = mock(MessageListenerContainer::class.java)
             val attempts = 50
@@ -146,7 +150,7 @@ class FailSafeErrorHandlerTest {
     fun `the wait grows across redeliveries of the same record up to the ceiling for every kind of failure`() {
         failures.forEach { (label, failure) ->
             val backOffHandler = RecordingBackOffHandler()
-            val handler = config.failSafeErrorHandler(backOffHandler)
+            val handler = failSafeErrorHandler(backOffHandler)
             val consumer = mock(Consumer::class.java)
             val container = mock(MessageListenerContainer::class.java)
 
@@ -159,10 +163,18 @@ class FailSafeErrorHandlerTest {
     }
 
     @Test
-    fun `the recoverer, if it were ever called, refuses to confirm the offset`() {
-        val failure = assertFailsWith<IllegalStateException> { config.neverRecovers.accept(record, IllegalStateException("x")) }
+    fun `the dlt is never touched and nothing is counted, however long the store stays down`() {
+        failures.forEach { (label, failure) ->
+            val handler = failSafeErrorHandler(RecordingBackOffHandler())
+            val consumer = mock(Consumer::class.java)
+            val container = mock(MessageListenerContainer::class.java)
 
-        assertTrue(failure.message!!.contains("descart"), "mensagem explica que descartar e proibido")
+            repeat(200) { assertFalse(handler.handleOne(failure(), record, consumer, container), label) }
+        }
+
+        assertTrue(mockingDetails(dlt).invocations.none { it.method.name == "send" }, "nada pode ser publicado no DLT")
+        assertEquals(emptyList(), metrics.outcomes)
+        assertEquals(0, metrics.dltPublishFailures)
     }
 
     @Test

@@ -19,6 +19,18 @@ spring:
         # Invariante verificada por teste: max.poll.records x DYNAMODB_WRITE_CALL_TIMEOUT < max.poll.interval.ms.
         max.poll.interval.ms: ${KAFKA_MAX_POLL_INTERVAL_MS:300000}
         partition.assignment.strategy: org.apache.kafka.clients.consumer.CooperativeStickyAssignor
+    # Produtor do DLT (contracts/kafka-events.md secao 5): bytes verbatim, `acks=all`, idempotencia e `max.block.ms` finito.
+    # `delivery.timeout.ms`/`request.timeout.ms` curtos fazem a espera de `balance.dlt.wait-for-send-result-timeout` valer de fato
+    # (o Spring usaria `delivery.timeout.ms` de 120 s + 5 s); com o DLT ausente a publicacao falha em `max.block.ms`.
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.ByteArraySerializer
+      value-serializer: org.apache.kafka.common.serialization.ByteArraySerializer
+      acks: all
+      properties:
+        enable.idempotence: true
+        max.block.ms: ${KAFKA_DLT_MAX_BLOCK_MS:3000}
+        request.timeout.ms: 3000
+        delivery.timeout.ms: 4000
     listener:
       ack-mode: batch
       concurrency: ${KAFKA_LISTENER_CONCURRENCY:4}
@@ -56,6 +68,8 @@ balance:
   events:
     topic: ${BALANCE_EVENTS_TOPIC:transacoes-financeiras-processadas}
     dlt-topic: ${BALANCE_EVENTS_DLT_TOPIC:${BALANCE_EVENTS_TOPIC:transacoes-financeiras-processadas}.DLT}
+  dlt:
+    wait-for-send-result-timeout: ${BALANCE_DLT_SEND_TIMEOUT:PT5S}
   # Limites inferiores de plausibilidade dos timestamps do evento (contracts/kafka-events.md secao 3, passo 3).
   min-event-timestamp: ${BALANCE_MIN_EVENT_TIMESTAMP:2000-01-01T00:00:00Z}
   min-account-created-at: ${BALANCE_MIN_ACCOUNT_CREATED_AT:1900-01-01T00:00:00Z}

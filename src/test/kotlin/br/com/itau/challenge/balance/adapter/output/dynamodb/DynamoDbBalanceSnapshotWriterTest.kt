@@ -242,11 +242,24 @@ class DynamoDbBalanceSnapshotWriterTest {
     }
 
     @Test
-    fun `a fallback item with a lower precedence than the event is inconsistent and transitory`() {
+    fun `a current item with a lower precedence than the event contradicts the failed condition and is not transitory`() {
         failConditionWithoutItem()
-        stubGetItem(itemOf(transactionEvent(timestampMicros = snapshot.precedence.timestamp.micros - 1)))
+        stubGetItem(itemOf(transactionEvent(timestampMicros = snapshot.precedence.timestamp.micros - 1, balanceAmount = "5555.55")))
 
-        assertFailsWith<BalanceStoreUnavailableException> { writer.applyIfNewer(snapshot) }
+        val thrown = assertFailsWith<IllegalStateException> { writer.applyIfNewer(snapshot) }
+
+        assertTrue(thrown !is BalanceStoreUnavailableException, "retentar para sempre bloquearia a particao")
+        assertTrue("5555.55" !in thrown.message.orEmpty() && "183.12" !in thrown.message.orEmpty(), "sem valores na mensagem")
+    }
+
+    @Test
+    fun `the same contradiction carried by the old item of the failed condition is also an internal failure`() {
+        failConditionWith(itemOf(transactionEvent(timestampMicros = snapshot.precedence.timestamp.micros - 1, balanceAmount = "5555.55")))
+
+        val thrown = assertFailsWith<IllegalStateException> { writer.applyIfNewer(snapshot) }
+
+        assertTrue("5555.55" !in thrown.message.orEmpty(), "sem valores na mensagem")
+        verify(client, never()).getItem(any(GetItemRequest::class.java))
     }
 
     @Test

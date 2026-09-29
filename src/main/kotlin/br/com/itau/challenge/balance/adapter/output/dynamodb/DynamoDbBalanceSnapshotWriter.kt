@@ -23,7 +23,10 @@ import java.math.BigDecimal
  *   excecao (`ALL_OLD`, sem leitura extra) e classifica o desfecho: mesma `(lastTxTsMicros, lastTxId)` -> [ApplyResult.Duplicate]
  *   (`conflicting` se dono, situacao, moeda ou saldo divergem; saldo por `compareTo`, pois o DynamoDB pode normalizar
  *   `183.10` -> `183.1`); demais casos -> [ApplyResult.Obsolete]. Se a excecao nao trouxer o item (comportamento inesperado
- *   do endpoint), uma unica `GetItem` fortemente consistente o obtem (caminho raro).
+ *   do endpoint), uma unica `GetItem` fortemente consistente o obtem (caminho raro). Item vigente INFERIOR ao evento com a
+ *   condicao falsa e uma contradicao (`IllegalStateException`, sem valores): nao e indisponibilidade, entao nao e retentada
+ *   sem fim; o consumer a trata como nao classificada (3 entregas e DLT). Ja o item ausente no fallback e transitorio (a
+ *   proxima tentativa cria a conta).
  * - Demais falhas do SDK sao traduzidas por [DynamoDbExceptionTranslator.forWrite] e nunca engolidas; excecoes que nao
  *   sao do SDK propagam como estao.
  *
@@ -78,8 +81,10 @@ class DynamoDbBalanceSnapshotWriter(
         return when {
             comparison == 0 -> ApplyResult.Duplicate(conflicting = diverges(candidate, current))
             comparison > 0 -> ApplyResult.Obsolete
-            // A condicao falhou mas o vigente e inferior: leitura inconsistente do endpoint. Reentrega, nunca descarte.
-            else -> throw BalanceStoreUnavailableException(StoreFailureCause.UNAVAILABLE)
+            // A condicao falhou mas o vigente e inferior ao evento: contradicao, nao indisponibilidade. Reentregar para sempre
+            // (transitoria) bloquearia a particao se a causa fosse permanente (p.ex. item gravado fora do padrao); por isso e
+            // falha interna, "nao classificada" no consumer: 3 entregas e DLT `unprocessable_event`, com log e metrica.
+            else -> throw IllegalStateException("current balance item contradicts the failed condition")
         }
     }
 

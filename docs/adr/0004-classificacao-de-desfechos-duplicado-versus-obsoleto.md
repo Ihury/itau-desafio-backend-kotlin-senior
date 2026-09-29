@@ -19,8 +19,12 @@ já foi aplicado (duplicado), o vigente é mais novo (obsoleto) ou a origem reen
     `balanceAmount` divergirem, `Duplicate(conflicting = true)`; o saldo é comparado **numericamente** (`compareTo`), porque o
     DynamoDB pode normalizar a escala (`183.10` vira `183.1`) e `100.00` e `100` são o mesmo valor;
   - precedência do vigente maior: **`Obsolete`**;
-  - o vigente inferior ao evento com condição falsa seria uma leitura inconsistente do endpoint: falha transitória
-    (`BalanceStoreUnavailableException`), o evento é reentregue e nunca descartado.
+  - o vigente inferior ao evento com condição falsa é uma **contradição** (leitura inconsistente do endpoint ou item
+    gravado fora do padrão), não indisponibilidade: `IllegalStateException` sem valores, tratada pelo consumer como
+    falha não classificada (3 entregas e DLT `unprocessable_event`, com log e métrica). Decisão revisada na US4: a versão
+    inicial lançava `BalanceStoreUnavailableException`, o que retentaria para sempre (backoff ilimitado) e bloquearia a
+    partição se a causa fosse permanente. Continua transitório apenas o `GetItem` de fallback sem item (a próxima
+    tentativa cria a conta).
 - **Duplicado** é o evento cuja chave é **igual** à do vigente. **Obsoleto** é qualquer evento de precedência inferior,
   **inclusive a reentrega de uma transação que já foi superada**: sem ledger, ela é indistinguível de qualquer evento antigo, e
   ambos são "sem efeito e contabilizados", que é o que FR-005 e FR-006 exigem.

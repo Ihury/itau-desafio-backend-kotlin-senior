@@ -29,10 +29,11 @@ instâncias consomem (a arbitragem é do banco, ADR-0003). O offset só pode ava
   max.poll.interval.ms` (100 x 2 s = 200 s < 300 s), para o pior caso de um poll não provocar rebalance.
 - **Parada**: `immediate-stop=true` com encerramento gracioso; o container para após o registro atual e o restante do poll é
   reentregue (é idempotente).
-- **Error handler sem descarte desde o primeiro commit com consumer**: `FailSafeErrorHandlerConfig` (backoff exponencial de
-  500 ms a 30 s, sem limite de tentativas, recoverer que nunca confirma o offset, todas as exceções retentáveis). Enquanto não há
-  DLT, mensagem inválida ou falha transitória fica retida e é reentregue; a classificação, o DLT e a pausa do container entram na
-  US4/US5 (ADR-0008).
+- **Error handler sem descarte desde o primeiro commit com consumer**: na US2, `FailSafeErrorHandlerConfig` (backoff exponencial
+  de 500 ms a 30 s, sem limite de tentativas, recoverer que nunca confirma o offset, todas as exceções retentáveis): mensagem
+  inválida ou falha transitória ficava retida e reentregue. Na US4 ele foi substituído (mesmo bean `kafkaErrorHandler`, um único
+  `CommonErrorHandler`) pelo `DeadLetterConfig`, que classifica por exceção: inválida -> DLT imediato; transitória -> o mesmo
+  backoff ilimitado e NUNCA DLT; não classificada -> 3 entregas e DLT. A pausa do container entra na US5; ver ADR-0008.
 
 ## Alternativas consideradas
 
