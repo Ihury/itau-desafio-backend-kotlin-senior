@@ -139,6 +139,15 @@ class ArchitectureTest {
     }
 
     @Test
+    fun `every context has the four hexagonal layers`() {
+        val missing =
+            contexts.flatMap { context ->
+                REQUIRED_LAYERS.filter { filesOf(context, it).isEmpty() }.map { "contexto '$context' sem a camada '$it'" }
+            }
+        assertNoViolations("todo contexto de negocio precisa de $REQUIRED_LAYERS (config e o composition root, opcional)", missing)
+    }
+
+    @Test
     fun `at least one business context exists and balance has a domain of its own`() {
         assertTrue(contexts.isNotEmpty(), "nenhum contexto de negocio encontrado: as regras acima seriam vacuosas")
         assertTrue("balance" in contexts, "contexto 'balance' ausente; encontrados: $contexts")
@@ -160,6 +169,7 @@ class ArchitectureTest {
     private companion object {
         const val ROOT = "br.com.itau.challenge"
         val LAYERS_WITH_DIRECTION = listOf("domain", "port", "application", "adapter")
+        val REQUIRED_LAYERS = listOf("domain", "port", "application", "adapter")
         val KNOWN_LAYERS = setOf("domain", "port", "application", "adapter", "config")
         val ADAPTER_TECHNOLOGIES = listOf("input.web", "input.kafka", "output.dynamodb", "output.metrics")
     }

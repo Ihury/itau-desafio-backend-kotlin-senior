@@ -9,6 +9,8 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.kafka.config.KafkaListenerEndpointRegistry
 import org.springframework.test.context.ActiveProfiles
+import java.time.Clock
+import java.time.ZoneId
 import kotlin.test.assertTrue
 
 @SpringBootTest
@@ -27,8 +29,20 @@ class ApplicationTests {
 	@Autowired
 	private lateinit var dynamoDbProperties: DynamoDbClientProperties
 
+	@Autowired
+	private lateinit var displayZone: ZoneId
+
+	@Autowired
+	private lateinit var clock: Clock
+
 	@Test
 	fun contextLoads() {
+	}
+
+	@Test
+	fun `display zone and clock come from the composition root`() {
+		assertTrue(displayZone == ZoneId.of("America/Sao_Paulo"))
+		assertTrue(clock.zone == java.time.ZoneOffset.UTC)
 	}
 
 	@Test

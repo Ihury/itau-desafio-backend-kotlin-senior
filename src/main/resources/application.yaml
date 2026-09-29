@@ -1,8 +1,19 @@
+server:
+  port: ${SERVER_PORT:8080}
+
 spring:
   application:
     name: consulta-saldo
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:19092}
+  # Erros do framework (404 de rota, 405...) tambem em Problem Details (RFC 9457).
+  mvc:
+    problemdetails:
+      enabled: true
+  # BigDecimal sempre como decimal simples, nunca em notacao cientifica (`1E+3`, `1E-7`).
+  jackson:
+    write:
+      write-bigdecimal-as-plain: true
 
 # Cliente DynamoDB (contracts/configuration.md). `endpoint` em branco = producao (endpoint AWS e cadeia padrao de credenciais).
 dynamodb:
@@ -20,6 +31,7 @@ dynamodb:
 
 # Circuit breaker da leitura (contracts/configuration.md). `open-wait` tambem e o valor de `Retry-After` do 503.
 balance:
+  display-zone: ${BALANCE_DISPLAY_ZONE:America/Sao_Paulo}
   circuit-breaker:
     window: ${BALANCE_CB_WINDOW:PT10S}
     min-calls: ${BALANCE_CB_MIN_CALLS:20}
