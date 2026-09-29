@@ -17,3 +17,14 @@ dynamodb:
     call-timeout: ${DYNAMODB_READ_CALL_TIMEOUT:PT1.5S}
     max-attempts: ${DYNAMODB_READ_MAX_ATTEMPTS:2}
     max-connections: ${DYNAMODB_READ_MAX_CONNECTIONS:100}
+
+# Circuit breaker da leitura (contracts/configuration.md). `open-wait` tambem e o valor de `Retry-After` do 503.
+balance:
+  circuit-breaker:
+    window: ${BALANCE_CB_WINDOW:PT10S}
+    min-calls: ${BALANCE_CB_MIN_CALLS:20}
+    failure-rate: ${BALANCE_CB_FAILURE_RATE:50}
+    slow-call: ${BALANCE_CB_SLOW_CALL:PT0.5S}
+    slow-rate: ${BALANCE_CB_SLOW_RATE:80}
+    open-wait: ${BALANCE_CB_OPEN_WAIT:PT10S}
+    half-open-calls: ${BALANCE_CB_HALF_OPEN_CALLS:5}

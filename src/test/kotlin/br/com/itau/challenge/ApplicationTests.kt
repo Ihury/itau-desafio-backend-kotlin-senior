@@ -1,5 +1,6 @@
 package br.com.itau.challenge
 
+import br.com.itau.challenge.balance.adapter.output.dynamodb.CircuitBreakingBalanceSnapshotReader
 import br.com.itau.challenge.balance.adapter.output.dynamodb.DynamoDbClientProperties
 import br.com.itau.challenge.balance.port.input.GetBalanceUseCase
 import br.com.itau.challenge.balance.port.output.BalanceSnapshotReader
@@ -31,9 +32,9 @@ class ApplicationTests {
 	}
 
 	@Test
-	fun `balance query is wired to the dynamodb reader with the documented defaults`() {
+	fun `balance query is wired to the circuit breaking dynamodb reader with the documented defaults`() {
 		assertTrue(getBalance.javaClass.simpleName.startsWith("GetBalanceService"))
-		assertTrue(reader.javaClass.simpleName.contains("DynamoDb"), "leitor inesperado: ${reader.javaClass}")
+		assertTrue(reader is CircuitBreakingBalanceSnapshotReader, "leitor inesperado: ${reader.javaClass}")
 		assertTrue(dynamoDbProperties.read.consistent)
 		assertTrue(dynamoDbProperties.tableName == "AccountBalances")
 		assertTrue(dynamoDbProperties.read.maxAttempts == 2)
