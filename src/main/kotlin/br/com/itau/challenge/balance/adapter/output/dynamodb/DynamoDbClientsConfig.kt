@@ -12,6 +12,7 @@ import software.amazon.awssdk.awscore.retry.AwsRetryStrategy
 import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration
 import software.amazon.awssdk.http.apache5.Apache5HttpClient
 import software.amazon.awssdk.regions.Region
+import software.amazon.awssdk.retries.api.RetryStrategy
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient
 import java.net.URI
 import java.time.Duration
@@ -28,6 +29,7 @@ class DynamoDbClientProperties(
     val connectTimeout: Duration,
     val acquireTimeout: Duration,
     val read: Read,
+    val write: Write,
 ) {
     /** Cliente de leitura (API): unica camada de retry e o SDK; timeouts curtos para falhar rapido (SC-008). */
     class Read(
@@ -35,6 +37,16 @@ class DynamoDbClientProperties(
         val attemptTimeout: Duration,
         val callTimeout: Duration,
         val maxAttempts: Int,
+        val maxConnections: Int,
+    )
+
+    /**
+     * Cliente de escrita (consumer): sem retry no SDK (uma tentativa); a unica camada de retry e o error handler do
+     * consumer (Constitution V, ADR-0009). Pool proprio, isolado do da leitura.
+     */
+    class Write(
+        val attemptTimeout: Duration,
+        val callTimeout: Duration,
         val maxConnections: Int,
     )
 }
@@ -56,8 +68,55 @@ class DynamoDbClientsConfig {
      * credenciais estaticas locais; sem endpoint, a `DefaultCredentialsProvider` e o endpoint da regiao.
      */
     @Bean
-    fun dynamoDbReadClient(properties: DynamoDbClientProperties): DynamoDbClient {
-        val http = readHttpSettings(properties)
+    fun dynamoDbReadClient(properties: DynamoDbClientProperties): DynamoDbClient =
+        buildClient(
+            properties = properties,
+            http = readHttpSettings(properties),
+            retryStrategy = AwsRetryStrategy.standardRetryStrategy().toBuilder().maxAttempts(properties.read.maxAttempts).build(),
+            attemptTimeout = properties.read.attemptTimeout,
+            callTimeout = properties.read.callTimeout,
+        )
+
+    /**
+     * Cliente de escrita: `AwsRetryStrategy.doNotRetry()` (uma tentativa), `apiCallAttemptTimeout` e `apiCallTimeout`
+     * explicitos e pool proprio. Um cliente separado porque a estrategia de retry e por cliente (o override por requisicao
+     * so cobre timeouts) e porque uma rajada de ingestao nao pode esgotar as conexoes da API.
+     */
+    @Bean
+    fun dynamoDbWriteClient(properties: DynamoDbClientProperties): DynamoDbClient =
+        buildClient(
+            properties = properties,
+            http = writeHttpSettings(properties),
+            retryStrategy = AwsRetryStrategy.doNotRetry(),
+            attemptTimeout = properties.write.attemptTimeout,
+            callTimeout = properties.write.callTimeout,
+        )
+
+    internal fun readHttpSettings(properties: DynamoDbClientProperties): HttpSettings =
+        HttpSettings(
+            connectTimeout = properties.connectTimeout,
+            acquireTimeout = properties.acquireTimeout,
+            socketTimeout = properties.read.attemptTimeout,
+            maxConnections = properties.read.maxConnections,
+        )
+
+    internal fun writeHttpSettings(properties: DynamoDbClientProperties): HttpSettings =
+        HttpSettings(
+            connectTimeout = properties.connectTimeout,
+            acquireTimeout = properties.acquireTimeout,
+            socketTimeout = properties.write.attemptTimeout,
+            maxConnections = properties.write.maxConnections,
+        )
+
+    internal fun endpointOf(properties: DynamoDbClientProperties): URI? = properties.endpoint?.takeIf { it.isNotBlank() }?.let(URI::create)
+
+    private fun buildClient(
+        properties: DynamoDbClientProperties,
+        http: HttpSettings,
+        retryStrategy: RetryStrategy,
+        attemptTimeout: Duration,
+        callTimeout: Duration,
+    ): DynamoDbClient {
         val builder =
             DynamoDbClient
                 .builder()
@@ -73,24 +132,14 @@ class DynamoDbClientsConfig {
                 ).overrideConfiguration(
                     ClientOverrideConfiguration
                         .builder()
-                        .retryStrategy(AwsRetryStrategy.standardRetryStrategy().toBuilder().maxAttempts(properties.read.maxAttempts).build())
-                        .apiCallAttemptTimeout(properties.read.attemptTimeout)
-                        .apiCallTimeout(properties.read.callTimeout)
+                        .retryStrategy(retryStrategy)
+                        .apiCallAttemptTimeout(attemptTimeout)
+                        .apiCallTimeout(callTimeout)
                         .build(),
                 )
         endpointOf(properties)?.let { builder.endpointOverride(it) }
         return builder.build()
     }
-
-    internal fun readHttpSettings(properties: DynamoDbClientProperties): HttpSettings =
-        HttpSettings(
-            connectTimeout = properties.connectTimeout,
-            acquireTimeout = properties.acquireTimeout,
-            socketTimeout = properties.read.attemptTimeout,
-            maxConnections = properties.read.maxConnections,
-        )
-
-    internal fun endpointOf(properties: DynamoDbClientProperties): URI? = properties.endpoint?.takeIf { it.isNotBlank() }?.let(URI::create)
 
     private fun credentialsOf(properties: DynamoDbClientProperties): AwsCredentialsProvider =
         if (endpointOf(properties) != null) {

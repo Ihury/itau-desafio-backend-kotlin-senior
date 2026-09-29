@@ -28,6 +28,11 @@ dynamodb:
     call-timeout: ${DYNAMODB_READ_CALL_TIMEOUT:PT1.5S}
     max-attempts: ${DYNAMODB_READ_MAX_ATTEMPTS:2}
     max-connections: ${DYNAMODB_READ_MAX_CONNECTIONS:100}
+  # Cliente de escrita (consumer): sem retry no SDK; a unica camada de retry e o error handler do consumer.
+  write:
+    attempt-timeout: ${DYNAMODB_WRITE_ATTEMPT_TIMEOUT:PT2S}
+    call-timeout: ${DYNAMODB_WRITE_CALL_TIMEOUT:PT2S}
+    max-connections: ${DYNAMODB_WRITE_MAX_CONNECTIONS:50}
 
 # Circuit breaker da leitura (contracts/configuration.md). `open-wait` tambem e o valor de `Retry-After` do 503.
 balance:

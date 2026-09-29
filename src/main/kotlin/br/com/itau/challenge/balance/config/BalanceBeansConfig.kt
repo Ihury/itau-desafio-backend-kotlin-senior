@@ -2,8 +2,10 @@ package br.com.itau.challenge.balance.config
 
 import br.com.itau.challenge.balance.adapter.output.dynamodb.CircuitBreakingBalanceSnapshotReader
 import br.com.itau.challenge.balance.adapter.output.dynamodb.DynamoDbBalanceSnapshotReader
+import br.com.itau.challenge.balance.adapter.output.dynamodb.DynamoDbBalanceSnapshotWriter
 import br.com.itau.challenge.balance.adapter.output.dynamodb.DynamoDbClientProperties
 import br.com.itau.challenge.balance.port.output.BalanceSnapshotReader
+import br.com.itau.challenge.balance.port.output.BalanceSnapshotWriter
 import io.github.resilience4j.circuitbreaker.CircuitBreaker
 import io.micrometer.core.instrument.MeterRegistry
 import org.springframework.beans.factory.annotation.Qualifier
@@ -35,6 +37,17 @@ class BalanceBeansConfig {
             DynamoDbBalanceSnapshotReader(client, properties.tableName, properties.read.consistent, meterRegistry),
             circuitBreaker,
         )
+
+    /**
+     * Escrita condicional atomica do snapshot, sobre o cliente de ESCRITA (uma tentativa; o retry e do consumer). Nao ha
+     * circuit breaker na escrita: o backpressure do consumer cumpre esse papel. As metricas de desfecho
+     * (`MicrometerProcessingMetrics`) entram como `@Component` do adapter.
+     */
+    @Bean
+    fun balanceSnapshotWriter(
+        @Qualifier("dynamoDbWriteClient") client: DynamoDbClient,
+        properties: DynamoDbClientProperties,
+    ): BalanceSnapshotWriter = DynamoDbBalanceSnapshotWriter(client, properties.tableName)
 
     /** Relogio do processamento (usado so para a tolerancia de timestamp futuro; nunca decide precedencia). */
     @Bean

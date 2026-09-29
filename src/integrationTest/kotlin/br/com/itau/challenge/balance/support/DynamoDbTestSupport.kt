@@ -42,11 +42,21 @@ object DynamoDbTestSupport {
                 maxAttempts = 2,
                 maxConnections = 100,
             ),
+        write =
+            DynamoDbClientProperties.Write(
+                attemptTimeout = Duration.ofSeconds(2),
+                callTimeout = Duration.ofSeconds(2),
+                maxConnections = 50,
+            ),
     )
 
     /** Cliente de leitura da aplicacao, configurado como em producao (retry standard, timeouts explicitos). */
     fun readClient(properties: DynamoDbClientProperties = properties()): DynamoDbClient =
         DynamoDbClientsConfig().dynamoDbReadClient(properties)
+
+    /** Cliente de escrita da aplicacao, configurado como em producao (uma tentativa, timeouts explicitos). */
+    fun writeClient(properties: DynamoDbClientProperties = properties()): DynamoDbClient =
+        DynamoDbClientsConfig().dynamoDbWriteClient(properties)
 
     fun randomAccountId(): String = UUID.randomUUID().toString()
 
