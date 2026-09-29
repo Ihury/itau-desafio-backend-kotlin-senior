@@ -13,7 +13,7 @@
 
 ## Requirement Completeness
 
-- [ ] No [NEEDS CLARIFICATION] markers remain
+- [x] No [NEEDS CLARIFICATION] markers remain
 - [x] Requirements are testable and unambiguous
 - [x] Success criteria are measurable
 - [x] Success criteria are technology-agnostic (no implementation details)
@@ -31,10 +31,9 @@
 
 ## Notes
 
-- **Pendente (1 item)**: restam 3 marcadores [NEEDS CLARIFICATION] intencionais (FR-010 transações DECLINED, FR-011 contas DISABLED, FR-012 timestamp no futuro). Requerem decisão do usuário antes de `/speckit-plan` (ou `/speckit-clarify`).
+- **Resolvido em `/speckit-clarify` (2026-09-29)**: os 3 marcadores [NEEDS CLARIFICATION] (FR-010 DECLINED, FR-011 DISABLED, FR-012 timestamp no futuro) foram resolvidos e integrados à spec (seção Clarifications). Rodada 2: resposta de conta desabilitada definida (409, `conta-desabilitada`) e status de conta desconhecido tratado como inválido; total de 5 perguntas atendidas. Restam 0 marcadores; 16/16 itens passando.
 - **Ressalvas nos itens marcados**:
   - "No implementation details": a seção *External Interfaces* cita o nome do tópico, o caminho `GET /balances/{accountId}` e os campos do payload, além de Kotlin/Kafka/DynamoDB como *restrições impostas pelo cliente*. São contratos de integração e restrições do desafio, não escolhas de solução; os requisitos e critérios de sucesso em si permanecem agnósticos de tecnologia.
   - "Written for non-technical stakeholders": as histórias e critérios de sucesso são acessíveis; a seção de contratos externos é inevitavelmente técnica.
   - Cargas de referência (SC-001/SC-002) são premissas a confirmar com o cliente (ver Assumptions).
 - **Revisão 2**: taxonomia de desfechos unificada (processado | obsoleto | duplicado | rejeitado, mutuamente exclusivos); FR-035 reescrito com MUST NOT; premissa duplicado/obsoleto neutra quanto a histórico de transações. Validação re-executada: mesmo resultado (15/16; só falha o item dos marcadores intencionais).
-- Itens incompletos exigem atualização da spec antes de `/speckit-clarify` ou `/speckit-plan`.
