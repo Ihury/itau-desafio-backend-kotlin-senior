@@ -1,0 +1,6 @@
+# Perfil de teste: o contexto completo sobe sem broker. Os listeners Kafka nao iniciam sozinhos;
+# os testes de integracao que precisam do Redpanda iniciam o container explicitamente.
+spring:
+  kafka:
+    listener:
+      auto-startup: false

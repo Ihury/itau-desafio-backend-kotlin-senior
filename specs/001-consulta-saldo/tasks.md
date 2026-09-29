@@ -88,9 +88,9 @@ Os atalhos abaixo são expandidos nos caminhos deste arquivo; todos os caminhos 
 
 ### Commit C01: `test(config): isola contexto de teste do broker via perfil test`
 
-- [ ] T001 Registrar o baseline: executar `./gradlew clean check` no starter e anotar o resumo de cobertura impresso pelo `jacocoTestReport`; executar `docker compose config -q` para validar o compose. Nenhuma alteração de arquivo.
-- [ ] T002 Teste vermelho em `src/test/kotlin/br/com/itau/challenge/ApplicationTests.kt`: anotar com `@ActiveProfiles("test")`, injetar `KafkaListenerEndpointRegistry` e afirmar que nenhum `listenerContainers` está `isRunning`. Prova que o contexto completo sobe sem broker; falha hoje porque o `@KafkaListener` do exemplo (`greeting-templates`) inicia sozinho.
-- [ ] T003 Criar `src/test/resources/application-test.yaml` com `spring.kafka.listener.auto-startup: false` (o teste anterior passa a verde). Executar `./gradlew check` com o Redpanda parado.
+- [X] T001 Registrar o baseline: executar `./gradlew clean check` no starter e anotar o resumo de cobertura impresso pelo `jacocoTestReport`; executar `docker compose config -q` para validar o compose. Nenhuma alteração de arquivo.
+- [X] T002 Teste vermelho em `src/test/kotlin/br/com/itau/challenge/ApplicationTests.kt`: anotar com `@ActiveProfiles("test")`, injetar `KafkaListenerEndpointRegistry` e afirmar que nenhum `listenerContainers` está `isRunning`. Prova que o contexto completo sobe sem broker; falha hoje porque o `@KafkaListener` do exemplo (`greeting-templates`) inicia sozinho.
+- [X] T003 Criar `src/test/resources/application-test.yaml` com `spring.kafka.listener.auto-startup: false` (o teste anterior passa a verde). Executar `./gradlew check` com o Redpanda parado.
 
 ### Commit C02: `refactor: remove exemplo hello e generaliza teste de arquitetura para todos os contextos`
 
