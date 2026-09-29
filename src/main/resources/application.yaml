@@ -6,6 +6,23 @@ spring:
     name: consulta-saldo
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:19092}
+    # Consumer at-least-once (contracts/kafka-events.md secao 2): bytes verbatim, commit so pelo container apos o listener
+    # retornar para todos os registros do poll, sem auto-commit.
+    consumer:
+      group-id: ${KAFKA_CONSUMER_GROUP_ID:consulta-saldo}
+      enable-auto-commit: false
+      auto-offset-reset: earliest
+      max-poll-records: ${KAFKA_MAX_POLL_RECORDS:100}
+      key-deserializer: org.apache.kafka.common.serialization.ByteArrayDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.ByteArrayDeserializer
+      properties:
+        # Invariante verificada por teste: max.poll.records x DYNAMODB_WRITE_CALL_TIMEOUT < max.poll.interval.ms.
+        max.poll.interval.ms: ${KAFKA_MAX_POLL_INTERVAL_MS:300000}
+        partition.assignment.strategy: org.apache.kafka.clients.consumer.CooperativeStickyAssignor
+    listener:
+      ack-mode: batch
+      concurrency: ${KAFKA_LISTENER_CONCURRENCY:4}
+      immediate-stop: true
   # Erros do framework (404 de rota, 405...) tambem em Problem Details (RFC 9457).
   mvc:
     problemdetails:
@@ -36,6 +53,9 @@ dynamodb:
 
 # Circuit breaker da leitura (contracts/configuration.md). `open-wait` tambem e o valor de `Retry-After` do 503.
 balance:
+  events:
+    topic: ${BALANCE_EVENTS_TOPIC:transacoes-financeiras-processadas}
+    dlt-topic: ${BALANCE_EVENTS_DLT_TOPIC:${BALANCE_EVENTS_TOPIC:transacoes-financeiras-processadas}.DLT}
   # Limites inferiores de plausibilidade dos timestamps do evento (contracts/kafka-events.md secao 3, passo 3).
   min-event-timestamp: ${BALANCE_MIN_EVENT_TIMESTAMP:2000-01-01T00:00:00Z}
   min-account-created-at: ${BALANCE_MIN_ACCOUNT_CREATED_AT:1900-01-01T00:00:00Z}
