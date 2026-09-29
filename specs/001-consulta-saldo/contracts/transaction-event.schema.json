@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:consulta-saldo:contracts:transaction-event",
+  "title": "Evento de transação financeira processada",
+  "description": "Contrato IMPOSTO pelo cliente para mensagens do tópico `transacoes-financeiras-processadas`. Este schema documenta o formato aceito; a validação real (com motivos enumerados, tolerância de timestamp futuro e limites de precisão) é feita pelo parser estrito do adapter Kafka — ver contracts/kafka-events.md. Campos adicionais são ignorados (compatibilidade futura).",
+  "type": "object",
+  "required": ["transaction", "account"],
+  "properties": {
+    "transaction": {
+      "type": "object",
+      "required": ["id", "type", "amount", "currency", "status", "timestamp"],
+      "properties": {
+        "id": { "$ref": "#/$defs/uuid" },
+        "type": { "enum": ["CREDIT", "DEBIT"] },
+        "amount": { "$ref": "#/$defs/decimal", "minimum": 0 },
+        "currency": { "$ref": "#/$defs/currency" },
+        "status": { "enum": ["APPROVED", "DECLINED"] },
+        "timestamp": { "$ref": "#/$defs/epochMicros" }
+      }
+    },
+    "account": {
+      "type": "object",
+      "required": ["id", "owner", "created_at", "status", "balance"],
+      "properties": {
+        "id": { "$ref": "#/$defs/uuid" },
+        "owner": { "$ref": "#/$defs/uuid" },
+        "created_at": { "$ref": "#/$defs/accountCreatedMicros" },
+        "status": { "enum": ["ENABLED", "DISABLED"] },
+        "balance": {
+          "type": "object",
+          "required": ["amount", "currency"],
+          "properties": {
+            "amount": { "$ref": "#/$defs/decimal" },
+            "currency": { "$ref": "#/$defs/currency" }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    },
+    "decimal": {
+      "type": "number",
+      "description": "Número JSON decimal (nunca string). Precisão <= 38 dígitos significativos e escala positiva <= 38; escala negativa (expoente positivo, ex. 1E+3) é expandida somente se precisão - escala <= 38."
+    },
+    "currency": {
+      "type": "string",
+      "pattern": "^[A-Z]{3}$",
+      "description": "Código ISO 4217 conhecido (java.util.Currency)."
+    },
+    "epochMicros": {
+      "type": "integer",
+      "minimum": 946684800000000,
+      "description": "transaction.timestamp: microssegundos desde a época Unix. Limite inferior 2000-01-01T00:00:00Z (detecta valores em s/ms; participa da precedência) e limite superior = relógio do serviço + tolerância configurável (padrão 5 min), verificado em runtime."
+    },
+    "accountCreatedMicros": {
+      "type": "integer",
+      "minimum": -2208988800000000,
+      "description": "account.created_at: microssegundos desde a época Unix. Contas anteriores a 2000 são legítimas: limite inferior 1900-01-01T00:00:00Z (o campo não participa da precedência) e limite superior = relógio do serviço + tolerância configurável, verificado em runtime."
+    }
+  },
+  "examples": [
+    {
+      "transaction": {
+        "id": "8e8ae808-b154-48b5-9f3e-553935cc4543",
+        "type": "CREDIT",
+        "amount": 97.07,
+        "currency": "BRL",
+        "status": "APPROVED",
+        "timestamp": 1751641364589998
+      },
+      "account": {
+        "id": "5b19c8b6-0cc4-4c72-a989-0c2ee15fa975",
+        "owner": "315e3cfe-f4af-4cd2-b298-a449e614349a",
+        "created_at": 1634874339000000,
+        "status": "ENABLED",
+        "balance": { "amount": 183.12, "currency": "BRL" }
+      }
+    }
+  ]
+}

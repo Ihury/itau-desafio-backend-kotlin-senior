@@ -18,6 +18,12 @@
 - Q: Qual resposta a consulta deve dar para uma conta DISABLED? → A: 409 Conflict com Problem Details (RFC 9457) de tipo próprio e estável (`conta-desabilitada`), sem saldo nem titular no corpo.
 - Q: Como tratar um status de conta desconhecido (nem ENABLED nem DISABLED)? → A: Rejeitar como inválido com o motivo "valor de domínio desconhecido" e isolar preservando o conteúdo.
 
+### Session 2026-09-29 (revisão do plano)
+
+- Q: A prontidão (readiness) deve refletir a saúde do armazenamento (DynamoDB)? → A: Não. Prontidão reflete apenas a capacidade do próprio processo de atender; a saúde das dependências críticas é exposta em verificação separada e em métrica para alerta, sem retirar a instância de rotação. Motivo: com a prontidão ligada a uma dependência compartilhada, todas as instâncias saem do balanceador ao mesmo tempo e o cliente perde a resposta rápida de indisponibilidade com indicação de nova tentativa (FR-025, SC-008), anulando o circuit breaker.
+- Q: O limite inferior de plausibilidade de timestamps vale igual para `transaction.timestamp` e `account.created_at`? → A: Não. `transaction.timestamp` exige mínimo 2000-01-01 (detecta unidade errada e participa da precedência); `account.created_at` aceita qualquer instante positivo a partir de 1900-01-01, pois contas anteriores a 2000 são legítimas e o campo não participa da precedência. Ambos respeitam o limite superior de tolerância de futuro (FR-012).
+- Q: Como o saldo deve ser representado no armazenamento e na resposta, dado que o armazenamento numérico normaliza zeros à direita (`183.10` → `183.1`)? → A: Valor decimal exato ponta a ponta (nunca ponto flutuante); o armazenamento numérico pode normalizar zeros à direita, o que não é perda, pois JSON Number não carrega escala (RFC 8259) e a origem também envia número JSON. A resposta apresenta o valor numericamente idêntico ao informado, com no mínimo as casas decimais da moeda (ex.: BRL `183.1` → `183.10`; `10.123` permanece `10.123`), sem nunca arredondar; precisão acima de 38 dígitos significativos é inválida (valor inválido).
+
 ## User Scenarios & Testing *(mandatory)*
 
 <!--
@@ -125,12 +131,12 @@ A equipe de operação consegue saber, a qualquer momento, se o serviço está v
 
 **Why this priority**: sem observabilidade o serviço não é operável em missão crítica, mas isso agrega valor sobre o fluxo funcional já existente.
 
-**Independent Test**: processar um lote com todos os tipos de desfecho e verificar que as métricas somam ao total consumido, que os logs identificam conta e transação sem expor dados pessoais nem saldos, e que os health checks refletem a indisponibilidade simulada do armazenamento.
+**Independent Test**: processar um lote com todos os tipos de desfecho e verificar que as métricas somam ao total consumido, que os logs identificam conta e transação sem expor dados pessoais nem saldos, e que, com o armazenamento simulado como indisponível, a saúde das dependências reporta a falha enquanto vivacidade e prontidão do processo permanecem saudáveis.
 
 **Acceptance Scenarios**:
 
 1. **Given** um lote de mensagens com desfechos variados, **When** processado, **Then** existem contadores distintos para os desfechos mutuamente exclusivos processado (saldo atualizado), obsoleto, duplicado e rejeitado (inválido e isolado, com contagem por motivo), e a soma desses desfechos é igual ao total consumido.
-2. **Given** o serviço em execução, **When** o armazenamento fica indisponível, **Then** a verificação de prontidão sinaliza "não pronto" enquanto a verificação de vivacidade permanece saudável.
+2. **Given** o serviço em execução, **When** o armazenamento fica indisponível, **Then** a verificação de saúde das dependências críticas sinaliza a falha (e há métrica para alerta), enquanto as verificações de vivacidade e de prontidão do processo permanecem saudáveis e a instância continua em rotação, respondendo indisponibilidade de forma explícita às consultas.
 3. **Given** qualquer processamento ou consulta, **When** registrados em log, **Then** os logs são estruturados, trazem identificadores de conta, transação e correlação, e não contêm dados pessoais nem valores de saldo.
 4. **Given** a execução em contêiner, **When** o serviço recebe pedido de encerramento, **Then** conclui o trabalho em andamento sem perder eventos e sem confirmar consumo de mensagens não persistidas.
 
@@ -208,7 +214,7 @@ A equipe de operação consegue saber, a qualquer momento, se o serviço está v
 
 - **FR-031**: O sistema MUST gerar métricas para todo desfecho de processamento — processado (saldo atualizado), obsoleto, duplicado e rejeitado (inválido e isolado, com contagem por motivo), desfechos mutuamente exclusivos — e para a latência de consulta e de ingestão; toda mensagem consumida MUST ter exatamente um desfecho contabilizado (a soma dos desfechos reconcilia com o total consumido).
 - **FR-032**: O sistema MUST registrar logs estruturados que identifiquem conta, transação e correlação da requisição/mensagem, e MUST NOT registrar dados pessoais nem valores de saldo.
-- **FR-033**: O sistema MUST expor verificações de saúde distintas de vivacidade (o processo está funcional) e prontidão (as dependências críticas estão utilizáveis).
+- **FR-033**: O sistema MUST expor verificações de saúde distintas de vivacidade (o processo está funcional) e prontidão (o próprio processo está apto a atender; NÃO depende de dependências externas compartilhadas). A saúde das dependências críticas MUST ser exposta separadamente (verificação própria e métrica para alerta) e MUST NOT retirar a instância de rotação, pois a API já responde indisponibilidade de forma explícita (FR-025) e a ingestão aplica backpressure (FR-028).
 - **FR-034**: O sistema MUST executar de forma conteinerizada, com configuração externa ao código e encerramento gracioso que não perca eventos em processamento.
 - **FR-035**: O sistema MUST NOT suprimir nenhuma falha sem registro em log e em métrica correspondentes.
 

@@ -1,0 +1,258 @@
+openapi: 3.1.0
+info:
+  title: Consulta de Saldo
+  version: 1.0.0
+  summary: Consulta do saldo mais atual de uma conta (core banking).
+  description: |
+    Serviço que mantém, por conta, o snapshot de saldo da transação de maior precedência
+    (timestamp da transação em microssegundos + `transaction.id` como desempate) recebido do tópico Kafka
+    `transacoes-financeiras-processadas`, e o expõe por `GET /balances/{accountId}`.
+
+    Regras de contrato:
+    - Valores monetários são números JSON decimais **exatos**, sem notação científica e **nunca arredondados**.
+      A escala é completada até as casas decimais da moeda ISO 4217 (ex.: BRL `183.1` -> `183.10`; JPY `500` -> `500`),
+      e valores com mais casas são devolvidos como estão (`10.123` -> `10.123`). Clientes DEVEM desserializá-los como
+      decimal arbitrário (nunca `double`); JSON Number não carrega escala (RFC 8259).
+    - `updated_at` é o instante do evento que originou o snapshot (não o horário de processamento), em
+      ISO 8601 com offset do fuso de exibição configurado (padrão `America/Sao_Paulo`), preservando
+      microssegundos quando existirem.
+    - Todos os erros seguem o RFC 9457 (`application/problem+json`) e são distinguíveis pelo código HTTP e
+      pelo campo `type` (estável).
+    - Este arquivo é a fonte de verdade do contrato (contract-first); na implementação é servido em
+      `/openapi.yaml` e verificado por teste contra as respostas reais.
+servers:
+  - url: http://localhost:8080
+    description: Ambiente local (docker compose)
+tags:
+  - name: balances
+    description: Consulta de saldo
+paths:
+  /balances/{accountId}:
+    get:
+      tags: [balances]
+      operationId: getBalance
+      summary: Retorna o saldo mais atual da conta
+      description: |
+        Leitura fortemente consistente do snapshot vigente da conta.
+        - Conta sem nenhum evento processado: 404 (nunca saldo zerado).
+        - Snapshot vigente com status DISABLED: 409 `conta-desabilitada` (sem saldo/titular no corpo).
+        - Armazenamento indisponível/lento ou circuit breaker aberto: 503 com `Retry-After`.
+      parameters:
+        - name: accountId
+          in: path
+          required: true
+          description: Identificador da conta (UUID canônico 8-4-4-4-12; hexadecimal case-insensitive).
+          schema:
+            type: string
+            pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+            examples: ['5b19c8b6-0cc4-4c72-a989-0c2ee15fa975']
+        - name: X-Correlation-Id
+          in: header
+          required: false
+          description: |
+            Identificador de correlação opcional (até 64 caracteres `[A-Za-z0-9._-]`). Se ausente ou inválido,
+            o serviço gera um. É devolvido no mesmo cabeçalho da resposta e presente nos logs.
+          schema:
+            type: string
+            maxLength: 64
+            pattern: '^[A-Za-z0-9._-]{1,64}$'
+      responses:
+        '200':
+          description: Saldo atual da conta (snapshot vigente com status ENABLED).
+          headers:
+            Cache-Control:
+              description: Sempre `no-store` (dado financeiro).
+              schema: { type: string, const: no-store }
+            X-Correlation-Id:
+              $ref: '#/components/headers/XCorrelationId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BalanceResponse'
+              examples:
+                saldo-com-milissegundos:
+                  summary: Exemplo do enunciado (instante em milissegundos)
+                  value:
+                    id: 5b19c8b6-0cc4-4c72-a989-0c2ee15fa975
+                    owner: 315e3cfe-f4af-4cd2-b298-a449e614349a
+                    balance: { amount: 183.12, currency: BRL }
+                    updated_at: '2025-07-05T18:04:13.433-03:00'
+                saldo-com-microssegundos:
+                  summary: Instante com precisão de microssegundos preservada
+                  value:
+                    id: 5b19c8b6-0cc4-4c72-a989-0c2ee15fa975
+                    owner: 315e3cfe-f4af-4cd2-b298-a449e614349a
+                    balance: { amount: 183.10, currency: BRL }
+                    updated_at: '2025-07-05T18:04:13.433123-03:00'
+        '400':
+          $ref: '#/components/responses/RequisicaoInvalida'
+        '404':
+          $ref: '#/components/responses/ContaNaoEncontrada'
+        '409':
+          $ref: '#/components/responses/ContaDesabilitada'
+        '500':
+          $ref: '#/components/responses/ErroInterno'
+        '503':
+          $ref: '#/components/responses/ServicoIndisponivel'
+components:
+  headers:
+    XCorrelationId:
+      description: Identificador de correlação da requisição.
+      schema:
+        type: string
+        maxLength: 64
+  schemas:
+    BalanceResponse:
+      type: object
+      required: [id, owner, balance, updated_at]
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Identificador da conta (UUID em minúsculas).
+        owner:
+          type: string
+          format: uuid
+          description: Identificador do titular (UUID em minúsculas), conforme o snapshot vigente.
+        balance:
+          $ref: '#/components/schemas/Money'
+        updated_at:
+          type: string
+          format: date-time
+          description: |
+            Instante do evento (timestamp da transação) que originou o snapshot vigente, ISO 8601 com offset.
+            Frações de segundo aparecem somente quando não nulas (ex.: `.433`, `.433123`).
+    Money:
+      type: object
+      required: [amount, currency]
+      additionalProperties: false
+      properties:
+        amount:
+          type: number
+          description: |
+            Saldo atual. Decimal exato: até 38 dígitos significativos e até 38 casas decimais, sem notação científica,
+            apresentado com no mínimo as casas decimais da moeda (sem arredondar). Pode ser zero ou negativo.
+          examples: [183.12]
+        currency:
+          type: string
+          pattern: '^[A-Z]{3}$'
+          description: Código ISO 4217 da moeda do saldo informado pela origem (sem conversão cambial).
+          examples: [BRL]
+    Problem:
+      type: object
+      description: Problem Details (RFC 9457).
+      required: [type, title, status]
+      properties:
+        type:
+          type: string
+          format: uri-reference
+          description: Identificador estável do tipo de problema.
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+          description: Mensagem legível; nunca contém pilha de erro, nomes de infraestrutura, saldo ou titular.
+        instance:
+          type: string
+          description: Caminho da requisição.
+  responses:
+    RequisicaoInvalida:
+      description: '`accountId` não é um UUID válido. O armazenamento não é consultado.'
+      headers:
+        X-Correlation-Id: { $ref: '#/components/headers/XCorrelationId' }
+      content:
+        application/problem+json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Problem'
+              - properties:
+                  type: { const: 'urn:problem-type:consulta-saldo:requisicao-invalida' }
+                  status: { const: 400 }
+          example:
+            type: urn:problem-type:consulta-saldo:requisicao-invalida
+            title: Requisição inválida
+            status: 400
+            detail: O identificador da conta deve ser um UUID válido.
+            instance: /balances/abc
+    ContaNaoEncontrada:
+      description: Nenhum evento foi processado para a conta.
+      headers:
+        X-Correlation-Id: { $ref: '#/components/headers/XCorrelationId' }
+      content:
+        application/problem+json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Problem'
+              - properties:
+                  type: { const: 'urn:problem-type:consulta-saldo:conta-nao-encontrada' }
+                  status: { const: 404 }
+          example:
+            type: urn:problem-type:consulta-saldo:conta-nao-encontrada
+            title: Conta não encontrada
+            status: 404
+            detail: Não há saldo registrado para a conta informada.
+            instance: /balances/5b19c8b6-0cc4-4c72-a989-0c2ee15fa975
+    ContaDesabilitada:
+      description: |
+        O snapshot vigente (evento de maior precedência) da conta tem status DISABLED.
+        O corpo NÃO traz saldo, titular nem instante de atualização.
+      headers:
+        X-Correlation-Id: { $ref: '#/components/headers/XCorrelationId' }
+      content:
+        application/problem+json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Problem'
+              - properties:
+                  type: { const: 'urn:problem-type:consulta-saldo:conta-desabilitada' }
+                  status: { const: 409 }
+          example:
+            type: urn:problem-type:consulta-saldo:conta-desabilitada
+            title: Conta desabilitada
+            status: 409
+            detail: A conta está desabilitada e seu saldo não pode ser consultado.
+            instance: /balances/5b19c8b6-0cc4-4c72-a989-0c2ee15fa975
+    ErroInterno:
+      description: Falha inesperada do serviço (sem detalhes internos).
+      headers:
+        X-Correlation-Id: { $ref: '#/components/headers/XCorrelationId' }
+      content:
+        application/problem+json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Problem'
+              - properties:
+                  type: { const: 'urn:problem-type:consulta-saldo:erro-interno' }
+                  status: { const: 500 }
+          example:
+            type: urn:problem-type:consulta-saldo:erro-interno
+            title: Erro interno
+            status: 500
+            detail: Ocorreu um erro inesperado. Informe o identificador de correlação ao suporte.
+            instance: /balances/5b19c8b6-0cc4-4c72-a989-0c2ee15fa975
+    ServicoIndisponivel:
+      description: |
+        Armazenamento de saldos indisponível, lento além do limite ou circuit breaker aberto.
+        Nunca é devolvido saldo presumido, desatualizado ou um falso 404.
+      headers:
+        Retry-After:
+          description: Segundos até a próxima tentativa sugerida (igual à espera do circuit breaker aberto).
+          schema: { type: integer, minimum: 1 }
+        X-Correlation-Id: { $ref: '#/components/headers/XCorrelationId' }
+      content:
+        application/problem+json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Problem'
+              - properties:
+                  type: { const: 'urn:problem-type:consulta-saldo:servico-indisponivel' }
+                  status: { const: 503 }
+          example:
+            type: urn:problem-type:consulta-saldo:servico-indisponivel
+            title: Serviço indisponível
+            status: 503
+            detail: Não foi possível consultar o saldo agora. Tente novamente em instantes.
+            instance: /balances/5b19c8b6-0cc4-4c72-a989-0c2ee15fa975
