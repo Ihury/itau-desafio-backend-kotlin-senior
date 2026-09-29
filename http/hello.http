@@ -1,0 +1,11 @@
+### Get a random greeting for a requester
+GET {{host}}/hello?name=John
+Accept: application/json
+
+### Missing name should respond with a JSON 400 error
+GET {{host}}/hello
+Accept: application/json
+
+### Blank name should respond with a JSON 400 error
+GET {{host}}/hello?name=%20%20
+Accept: application/json

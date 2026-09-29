@@ -1,0 +1,101 @@
+services:
+  app:
+    build:
+      context: .
+      target: runtime
+    ports:
+      - "8080:8080"
+    environment:
+      DYNAMODB_ENDPOINT: http://dynamodb:8000
+      DYNAMODB_REGION: us-east-1
+      GREETING_TABLE_NAME: GreetingMessages
+      KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+      GREETING_TEMPLATES_TOPIC: greeting-templates
+    depends_on:
+      - dynamodb
+      - dynamodb-seed
+      - redpanda
+      - redpanda-seed
+
+  dynamodb:
+    image: amazon/dynamodb-local:3.3.0
+    command: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-inMemory"]
+    working_dir: /home/dynamodblocal
+    ports:
+      - "8000:8000"
+
+  dynamodb-seed:
+    image: amazon/aws-cli:2.36.8
+    depends_on:
+      - dynamodb
+    environment:
+      AWS_ACCESS_KEY_ID: local
+      AWS_SECRET_ACCESS_KEY: local
+      AWS_DEFAULT_REGION: us-east-1
+      DYNAMODB_ENDPOINT_URL: http://dynamodb:8000
+      GREETING_TABLE_NAME: GreetingMessages
+    volumes:
+      - ./infra/dynamodb:/dynamodb-seed:ro
+    entrypoint: ["/bin/bash", "/dynamodb-seed/seed.sh"]
+
+  dynamodb-admin:
+    image: aaronshaf/dynamodb-admin:5.3.4
+    depends_on:
+      - dynamodb
+    environment:
+      DYNAMO_ENDPOINT: http://dynamodb:8000
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: local
+      AWS_SECRET_ACCESS_KEY: local
+      HOST: 0.0.0.0
+      PORT: 8001
+    ports:
+      - "8001:8001"
+
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v26.1.14
+    hostname: redpanda
+    command:
+      - redpanda
+      - start
+      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr internal://redpanda:9092,external://localhost:19092
+      - --rpc-addr redpanda:33145
+      - --advertise-rpc-addr redpanda:33145
+      - --mode dev-container
+      - --smp 1
+      - --default-log-level=info
+    ports:
+      - "19092:19092"
+
+  redpanda-seed:
+    image: docker.redpanda.com/redpandadata/redpanda:v26.1.14
+    depends_on:
+      - redpanda
+    environment:
+      REDPANDA_BROKERS: redpanda:9092
+      GREETING_TEMPLATES_TOPIC: greeting-templates
+    volumes:
+      - ./infra/redpanda:/redpanda-seed:ro
+    entrypoint: ["/bin/bash", "-c", "/redpanda-seed/config.sh && /redpanda-seed/seed.sh"]
+
+  redpanda-console:
+    image: docker.redpanda.com/redpandadata/console:v3.9.0
+    depends_on:
+      - redpanda
+    entrypoint: /bin/sh
+    command: -c 'echo "$$CONSOLE_CONFIG_FILE" > /tmp/config.yml; /app/console'
+    environment:
+      CONFIG_FILEPATH: /tmp/config.yml
+      CONSOLE_CONFIG_FILE: |
+        kafka:
+          brokers: ["redpanda:9092"]
+        schemaRegistry:
+          enabled: true
+          urls: ["http://redpanda:8081"]
+        redpanda:
+          adminApi:
+            enabled: true
+            urls: ["http://redpanda:9644"]
+    ports:
+      - "8081:8080"

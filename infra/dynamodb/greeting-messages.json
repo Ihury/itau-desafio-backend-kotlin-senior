@@ -1,0 +1,9 @@
+{
+  "GreetingMessages": [
+    {"PutRequest": {"Item": {"id": {"S": "1"}, "template": {"S": "Hello, %s!"}}}},
+    {"PutRequest": {"Item": {"id": {"S": "2"}, "template": {"S": "Hi there, %s!"}}}},
+    {"PutRequest": {"Item": {"id": {"S": "3"}, "template": {"S": "Greetings, %s!"}}}},
+    {"PutRequest": {"Item": {"id": {"S": "4"}, "template": {"S": "Welcome, %s!"}}}},
+    {"PutRequest": {"Item": {"id": {"S": "5"}, "template": {"S": "Hey %s, great to see you!"}}}}
+  ]
+}

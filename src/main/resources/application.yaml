@@ -1,0 +1,18 @@
+spring:
+  application:
+    name: itau-code-challange-starter-kit
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:19092}
+    consumer:
+      group-id: ${KAFKA_CONSUMER_GROUP_ID:hello-greeting-template-consumer}
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+
+dynamodb:
+  endpoint: ${DYNAMODB_ENDPOINT:http://localhost:8000}
+  region: ${DYNAMODB_REGION:us-east-1}
+  table-name: ${GREETING_TABLE_NAME:GreetingMessages}
+
+greeting-templates:
+  topic-name: ${GREETING_TEMPLATES_TOPIC:greeting-templates}
