@@ -2,7 +2,7 @@
 
 **Branch**: `001-consulta-saldo` | **Date**: 2026-09-29 | **Spec**: [spec.md](./spec.md)
 
-**Input**: Feature specification from `/specs/001-consulta-saldo/spec.md` (inclui `## Clarifications` da sessão 2026-09-29)
+**Input**: Feature specification from `/specs/001-consulta-saldo/spec.md` (inclui `## Clarifications`: sessão 2026-09-29 e revisão do plano)
 
 **Note**: This template is filled in by the `/speckit-plan` command; its definition describes the execution workflow.
 
@@ -59,7 +59,7 @@ Todas as incógnitas do template foram resolvidas em `research.md`; **nenhum `NE
 
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
-Avaliação pré-pesquisa (Phase 0) contra `.specify/memory/constitution.md` v1.0.0:
+Avaliação pré-pesquisa (Phase 0) contra `.specify/memory/constitution.md` v1.0.1:
 
 | Princípio / regra | Gate | Status pré |
 |-------------------|------|------------|
@@ -90,6 +90,8 @@ Reavaliado após `data-model.md`, `contracts/*` e `quickstart.md`:
 | VI | Plano de testes em 8 camadas (R-14); propriedade com seed fixa; contrato fake x DynamoDB Local; chaos por `docker compose pause`; cenários obrigatórios mapeados em `quickstart.md` | PASS |
 | VII | `contracts/observability.md` (métricas, health, logs); rejeição contada apenas após DLT confirmar; `balance.events{outcome,reason}` reconcilia com o consumido | PASS |
 | VIII | Ledger/GSI/coalescência/OTel/springdoc recusados com motivação (R-03, R-09, R-12, R-16, R-17); 15 ADRs planejados | PASS |
+
+Re-checado contra a constitution v1.0.1 e a revisão do plano (readiness independente do DynamoDB; `N` + `BigDecimal`; mínimos de timestamp por papel): sem violações.
 
 **Resultado pós-design: aprovado, sem violações.** As escolhas que divergem da diretriz do arquiteto ou aumentam a complexidade estão em Complexity Tracking.
 
@@ -122,13 +124,14 @@ src/main/kotlin/br/com/itau/challenge/
     ├── domain/
     │   ├── model/                                   # AccountId, TransactionId, OwnerId, CurrencyCode, Money, EventInstant,
     │   │                                            # AccountStatus, TransactionType, TransactionStatus, Transaction, AccountState,
-    │   │                                            # TransactionEvent, Precedence, BalanceSnapshot, ApplyResult, RejectionReason
-    │   └── exception/                               # InvalidEventException(reason), AccountNotFoundException, AccountDisabledException,
-    │                                                # BalanceStoreUnavailableException (transitória), BalanceStoreRejectedException
+    │   │                                            # TransactionEvent, Precedence, BalanceSnapshot, ApplyResult, RejectionReason,
+    │   │                                            # StoreFailureCause, CanonicalUuid (interno)
+    │   └── exception/                               # InvalidEventException(reason, detail?), AccountNotFoundException, AccountDisabledException,
+    │                                                # BalanceStoreUnavailableException(failureCause: StoreFailureCause, cause: Throwable?) (transitória; failureCause alimenta a tag cause de balance.consumer.backpressure), BalanceStoreRejectedException
     ├── port/
     │   ├── input/                                   # ProcessTransactionEventUseCase, GetBalanceUseCase
     │   └── output/                                  # BalanceSnapshotWriter, BalanceSnapshotReader, ProcessingMetrics
-    ├── application/                                 # ProcessTransactionEventService (tolerância de futuro com Clock), GetBalanceService
+    ├── application/                                 # ProcessTransactionEventService (tolerância de futuro com Clock e FutureTolerance), GetBalanceService
     ├── adapter/
     │   ├── input/
     │   │   ├── web/                                 # BalanceController, dto/BalanceResponse, ProblemDetailsAdvice, CorrelationIdFilter
@@ -139,8 +142,9 @@ src/main/kotlin/br/com/itau/challenge/
     │       │                                        # DynamoDbBalanceSnapshotReader, BalanceItemMapper, CircuitBreakingBalanceSnapshotReader,
     │       │                                        # DynamoDbHealthIndicator
     │       └── metrics/                             # MicrometerProcessingMetrics
-    └── config/                                      # composition root: @ConfigurationProperties, Clock, ObjectMapper do parser,
-                                                     # circuit breaker registry, beans de serviço (nada depende deste pacote)
+    └── config/                                      # composition root: @ConfigurationProperties, Clock, FutureTolerance, ZoneId de exibição,
+                                                     # circuit breaker registry, beans de serviço (BalanceBeansConfig; nada depende deste pacote).
+                                                     # O JsonMapper do parser é privado ao adapter input/kafka, não é bean
 src/main/resources/
 ├── application.yaml                                 # propriedades por env (contracts/configuration.md)
 └── static/openapi.yaml                              # cópia servida do contrato (contracts/openapi.yaml)
@@ -160,6 +164,7 @@ infra/redpanda/{config.sh, seed.sh, produce-transactions-events.sh (inalterado),
 docker-compose.yml, Makefile, Dockerfile, .github/workflows/*   # ajustes descritos em R-15; CI segue verde
 http/balances.http                                   # substitui http/hello.http
 docs/adr/0001..0015-*.md                             # ADRs (lista abaixo)
+docs/metodologia-ia.md                               # fluxo Spec Kit e uso de IA (apresentação)
 perf/k6-balance-read.js                              # opcional (R-14)
 ```
 
@@ -172,7 +177,7 @@ do exemplo `hello` do starter. Adapters isolados por tecnologia (`input/web`, `i
 
 > **Fill ONLY if Constitution Check has violations that must be justified**
 
-O Constitution Check **não tem violações**. Registram-se, por transparência, as escolhas que aumentam a complexidade ou divergem da diretriz do arquiteto:
+O Constitution Check **não tem violações**; a interpretação do Princípio I para `@Service`/`org.slf4j` na camada `application` está registrada abaixo e no ADR-0001. Registram-se, por transparência, as escolhas que aumentam a complexidade ou divergem da diretriz do arquiteto:
 
 | Violation | Why Needed | Simpler Alternative Rejected Because |
 |-----------|------------|-------------------------------------|
@@ -180,14 +185,14 @@ O Constitution Check **não tem violações**. Registram-se, por transparência,
 | Dois `DynamoDbClient` (leitura e escrita) | Estratégia de retry é por cliente (o override por requisição só cobre timeouts); leitura precisa falhar em <= 2 s, escrita faz backpressure; pools isolados | Um cliente único forçaria retry duplicado ou compartilhamento de pool entre ingestão e API |
 | Sem `ErrorHandlingDeserializer` (diretriz sugeria) | `ByteArrayDeserializer` nunca lança e preserva os bytes originais no DLT; o parser próprio produz os 7 motivos | Delegar ao `ErrorHandlingDeserializer(JsonDeserializer)` perderia motivos finos e bytes originais |
 | Pacote `config` fora das quatro camadas | Composition root (propriedades, `Clock`, registry do CB, beans) | Espalhar `@Bean` pelas camadas acoplaria `application` ao Spring além do `@Service` do starter |
-| `@Service` na camada `application` | Convenção do starter-kit; limitada por regra Konsist ao stereotype | `application` 100% sem Spring divergiria do starter sem ganho verificável |
+| `@Service` e `org.slf4j` na camada `application` | Convenção do starter-kit. Princípio I lido como direção de dependência entre camadas (`application` só depende de `domain` e `port`); os únicos imports externos permitidos são `org.springframework.stereotype.Service` e `org.slf4j`, verificados por whitelist Konsist (regra b). Exceção controlada, decisão do orquestrador; registrada no ADR-0001 e sem emenda na constitution | `application` 100% sem Spring divergiria do starter sem ganho verificável |
 | Remoção do exemplo `hello` (*decisão proposta — requer validação*) | Ruído e risco (listener de outro tópico, tabela sem uso) num serviço de core banking; Konsist precisa cobrir todos os contextos | Manter `hello` exige proteger um contexto irrelevante e confunde o avaliador |
 
 ## ADRs planejados (`docs/adr/`, escritos na implementação)
 
 Título e decisão em uma linha (contexto/alternativas/trade-offs completos em `research.md`):
 
-1. **0001 Arquitetura hexagonal por bounded context** — contexto `balance`, `hello` removido, Konsist cobre todos os contextos e imports proibidos.
+1. **0001 Arquitetura hexagonal por bounded context** — contexto `balance`, `hello` removido, Konsist cobre todos os contextos e imports proibidos; `@Service` e `org.slf4j` em `application` como exceção controlada por whitelist Konsist (interpretação do Princípio I).
 2. **0002 Modelagem DynamoDB** — `AccountBalances`, `pk=ACCOUNT#id`/`sk=BALANCE`, on-demand, sem GSI nem ledger na v1.
 3. **0003 Precedência e escrita condicional atômica** — `(timestamp µs, txId)` via `UpdateItem`+`ConditionExpression`; sem RMW nem locks locais.
 4. **0004 Duplicado x obsoleto** — `ALL_OLD`; duplicado = igual ao snapshot vigente; anomalia quando o conteúdo diverge.

@@ -6,9 +6,9 @@ Os nomes abaixo são os nomes Micrometer; no Prometheus, pontos viram `_` e cont
 
 | Métrica | Tipo | Tags | Semântica |
 |---------|------|------|-----------|
-| `balance.events` | counter | `outcome` = `processed`\|`obsolete`\|`duplicate`\|`rejected`; `reason` = `none` ou código de `kafka-events.md` (só em `rejected`) | **Exatamente um** desfecho por mensagem consumida (FR-031/SC-010). `rejected` é contado quando o DLT confirma a publicação (`RetryListener.recovered`), nunca em tentativas |
+| `balance.events` | counter | `outcome` = `processed`\|`obsolete`\|`duplicate`\|`rejected`; `reason` = `none` ou código de `kafka-events.md` (só em `rejected`) | **Exatamente um** desfecho por mensagem consumida (FR-031/SC-010). `rejected` é contado quando o DLT confirma a publicação (`RetryListener.recovered`), nunca em tentativas. Alertar em `reason=unprocessable_event` (defeito interno: mensagem válida isolada) |
 | `balance.events.anomalies` | counter | `type` = `conflicting_duplicate` | Mesmo `transaction.id` e mesmo timestamp com conteúdo divergente (defeito da origem); detectado comparando o item retornado por `ALL_OLD`. Desfecho continua `duplicate` |
-| `balance.ingest.duration` | timer (histograma, SLO 5 ms..2,5 s) | `outcome` | Parse + validação + escrita, por mensagem |
+| `balance.ingest.duration` | timer (histograma, SLO 5 ms..2,5 s) | `outcome` = `processed`\|`obsolete`\|`duplicate`\|`rejected`\|`error` | Parse + validação + escrita, por mensagem |
 | `balance.store.write.duration` | timer (histograma) | `result` = `applied`\|`condition_failed`\|`error` | Latência da `UpdateItem` condicional |
 | `balance.store.read.duration` | timer (histograma) | `result` = `found`\|`not_found`\|`error` | Latência do `GetItem` |
 | `balance.consumer.backpressure` | counter | `cause` = `throttled`\|`unavailable`\|`timeout` | Pausas do container por falha transitória (medidor de indisponibilidade da ingestão) |
@@ -36,7 +36,8 @@ histogram_quantile(0.99, sum by (le) (rate(balance_store_write_duration_seconds_
 | `/actuator/health/liveness` | `livenessState` apenas | Permanece `UP` com o DynamoDB fora (FR-033) |
 | `/actuator/health/readiness` | `readinessState` **apenas** (capacidade do próprio processo de atender) | Permanece `UP` com o DynamoDB fora: a instância **não sai de rotação**, e a API responde 503 + `Retry-After` de forma explícita (circuit breaker, SC-008). Sem dependência compartilhada na readiness |
 | `/actuator/health/dependencies` | `DynamoDbHealthIndicator`: probe `DescribeTable` da tabela, cache de 5 s, timeout curto; `show-details=never` | `DOWN` (503) quando o DynamoDB falha; **não** pertence a `liveness`/`readiness`; observável por operação/alerta (FR-033) |
-| `/actuator/prometheus`, `/actuator/info` | métricas / build info | Somente na porta de gerenciamento (não publicada na porta da API) |
+| `/actuator/health` (raiz) | agrega o grupo `dependencies` | **Não usar** em balanceador/orquestrador: fica 503 com o DynamoDB fora; usar `liveness`/`readiness` |
+| `/actuator/prometheus`, `/actuator/info` | métricas / build info | Somente na porta de gerenciamento (`MANAGEMENT_SERVER_PORT`, 8082), nunca na porta da API (8080). No compose local a 8082 é publicada no host (`8082:8082`); em produção não deve ser roteada pelo balanceador público |
 
 ## Logs (JSON nativo do Spring Boot: `logging.structured.format.console=logstash`)
 

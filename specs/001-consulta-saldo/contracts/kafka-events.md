@@ -14,7 +14,7 @@ Interface de mensageria da feature `001-consulta-saldo`. O formato do evento de 
 - Auto-criação de tópicos está **desligada** no Redpanda do starter-kit: o seed (`infra/redpanda/seed.sh`)
   cria ambos de forma idempotente, com as partições acima.
 - O DLT tem menos partições que o tópico principal: o recoverer publica com **partição não definida** (`-1`),
-  deixando o particionador escolher (validado no spike; o default `mesma partição` falharia com 4 -> 3 partições).
+  deixando o particionador escolher (validado no spike; o default `mesma partição` falharia com 12 -> 3 partições).
 - Aumentar partições do tópico principal é seguro: a corretude não depende de ordenação/chave (Constitution II).
 
 ## 2. Consumo
@@ -52,7 +52,7 @@ Campos adicionais desconhecidos são **ignorados**.
 | `malformed_payload` | formato inválido | Passo 1 |
 | `missing_field` | campo obrigatório ausente | Passo 2 |
 | `invalid_identifier` | identificador inválido | `transaction.id`/`account.id`/`account.owner` que não sejam string UUID canônica 8-4-4-4-12 (hex, aceita maiúsculas; normaliza para minúsculas). Parse **estrito** por regex: `UUID.fromString("1-1-1-1-1")` do JDK aceitaria formatos não canônicos. |
-| `invalid_value` | valor inválido | `amount` (transação ou saldo) que não seja número JSON (string, booleano, objeto), `transaction.amount` negativo, precisão > 38 dígitos significativos (limite do `N` do DynamoDB) ou escala positiva > 38; escala negativa (`1E+3`) só é expandida se `precisão - escala <= 38` (`1E999999999` é rejeitado sem expandir). Zero e saldo negativo são válidos. |
+| `invalid_value` | valor inválido | `amount` (transação ou saldo) que não seja número JSON (string, booleano, objeto), `transaction.amount` negativo, precisão (`BigDecimal.precision()`, zeros à direita contam) > 38 (limite do `N` do DynamoDB) ou escala positiva > 38; escala negativa (`1E+3`) só é expandida se `precisão - escala <= 38` (`1E999999999` é rejeitado sem expandir). Zero e saldo negativo são válidos. |
 | `invalid_currency` | moeda inválida | Não é string de 3 letras maiúsculas conhecida por `java.util.Currency` |
 | `invalid_timestamp` | timestamp inválido | Não é inteiro JSON (`1751641364589998.0` e `1.75E15` são rejeitados), fora de `long`, `transaction.timestamp` `< 2000-01-01T00:00:00Z` (µs) ou `account.created_at` `< 1900-01-01T00:00:00Z` (conta de 1998 é **válida**), ou (runtime) `> agora + tolerância` |
 | `unknown_domain_value` | valor de domínio desconhecido | `transaction.type` ∉ {`CREDIT`,`DEBIT`}; `transaction.status` ∉ {`APPROVED`,`DECLINED`}; `account.status` ∉ {`ENABLED`,`DISABLED`} (comparação exata, case-sensitive) |
@@ -66,7 +66,7 @@ Campos adicionais desconhecidos são **ignorados**.
 | Header | Conteúdo |
 |--------|----------|
 | `x-rejection-reason` | Código da seção 4 |
-| `x-rejection-detail` | Caminho do campo ou texto estático curto (ex.: `transaction.currency`); **nunca** valores do payload |
+| `x-rejection-detail` | Caminho do campo (ex.: `transaction.currency`) quando o motivo é atribuível a um campo; **ausente** para `malformed_payload` e `unprocessable_event`; **nunca** valores do payload |
 | `x-rejected-at` | Instante (ISO 8601 UTC) em que foi isolada |
 | `kafka_dlt-original-topic`, `-partition`, `-offset`, `-timestamp`, `-timestamp-type`, `-consumer-group` | Padrão do Spring Kafka (`DeadLetterPublishingRecoverer`) |
 

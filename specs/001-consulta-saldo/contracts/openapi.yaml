@@ -131,8 +131,8 @@ components:
         amount:
           type: number
           description: |
-            Saldo atual. Decimal exato: até 38 dígitos significativos e até 38 casas decimais, sem notação científica,
-            apresentado com no mínimo as casas decimais da moeda (sem arredondar). Pode ser zero ou negativo.
+            Saldo atual. Decimal exato recebido da origem (até 38 dígitos significativos e 38 casas decimais), acrescido de
+            zeros à direita até as casas decimais da moeda; sem notação científica, nunca arredondado. Pode ser zero ou negativo.
           examples: [183.12]
         currency:
           type: string

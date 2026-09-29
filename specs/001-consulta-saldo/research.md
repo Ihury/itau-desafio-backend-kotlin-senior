@@ -130,13 +130,13 @@ Sem alteração de versões existentes: AWS SDK BOM 2.46.7 (última: 2.55.7; sem
     (moedas com `-1`, ex. XAU, não são ajustadas). Ex.: BRL `183.1` -> `183.10`; `100` -> `100.00`; `10.123` -> `10.123`; JPY `500` -> `500`.
     Serializado com `WRITE_BIGDECIMAL_AS_PLAIN`. A regra vive em `Money` (domínio, só `java.util.Currency`); o DTO apenas a usa.
   - **Limites de domínio (só o necessário)**: precisão <= **38** dígitos significativos (limite do `N`; acima -> `invalid_value`); escala
-    negativa (`1E+3`) é expandida a escala 0 somente se `precisão - escala <= 38` (nunca materializa `1E999999999`); escala positiva <= **38**
-    (antes 18, valor arbitrário). Justificativa do 38: mantém o valor dentro da faixa do `N` (expoente até 1E-130) e limita o tamanho da
+    negativa (`1E+3`) é expandida a escala 0 somente se `precisão - escala <= 38` (nunca materializa `1E999999999`); escala positiva <= **38**.
+    Justificativa do 38: mantém o valor dentro da faixa do `N` (expoente até 1E-130) e limita o tamanho da
     string plana; mais de 38 casas decimais não é valor monetário. Nenhum outro teto (ex.: por moeda) é imposto.
   - Timestamps em µs como `Long`/`N`; `Instant` ao expor. `updated_at` = `ISO_OFFSET_DATE_TIME` no fuso `America/Sao_Paulo`
     (`BALANCE_DISPLAY_ZONE`); frações só quando não nulas (`.433`, `.433123`).
   - Intervalo plausível, **duas regras distintas** (revisão do plano): `transaction.timestamp` >= `2000-01-01T00:00:00Z` (µs; detecta
-    unidade s/ms e participa da precedência); `account.created_at` = inteiro positivo em µs >= `1900-01-01T00:00:00Z`
+    unidade s/ms e participa da precedência); `account.created_at` = inteiro em µs (negativo para instantes anteriores a 1970) >= `1900-01-01T00:00:00Z`
     (`BALANCE_MIN_ACCOUNT_CREATED_AT`; contas abertas antes de 2000 são legítimas e **não** podem ir ao DLT; o campo não participa da
     precedência). Limite superior de ambos = relógio do serviço + **tolerância de futuro `PT5M`** (`BALANCE_FUTURE_TOLERANCE`), só para
     validação (FR-012).
@@ -157,7 +157,7 @@ Sem alteração de versões existentes: AWS SDK BOM 2.46.7 (última: 2.55.7; sem
   - **`N` em centavos/unidade mínima** (recusado): é o padrão quando se é dono do contrato; aqui o contrato é decimal + ISO 4217, o que
     exigiria conversão nos dois sentidos, tabela de casas decimais por moeda (0/2/3/-1) e rejeitar ou arredondar frações de centavo
     (arredondar é proibido; rejeitar descartaria eventos válidos da origem).
-  offset fixo `-03:00` (correto hoje, errado para instantes históricos com horário de verão; `ZoneId` é exato);
+  - **Fuso/formato de `updated_at` (alternativas recusadas)**: offset fixo `-03:00` (correto hoje, errado para instantes históricos com horário de verão; `ZoneId` é exato);
   sempre 6 dígitos de fração (não reproduz o exemplo do cliente); DTO Jackson tipado com `BigDecimal` (coerção silenciosa e
   erros sem categoria).
 
@@ -189,8 +189,8 @@ Sem alteração de versões existentes: AWS SDK BOM 2.46.7 (última: 2.55.7; sem
 
 | Classe | Exceção | Tratamento |
 |--------|---------|-----------|
-| **Permanente** | `InvalidEventException(reason)` (formato, campo, id, valor, moeda, timestamp, domínio, inclusive futuro) | *não-retentável* -> DLT imediato com `x-rejection-reason`/`-detail`/`-at`; desfecho `rejected{reason}` |
-| **Transitória** | `BalanceStoreUnavailableException` (throttling, 5xx, timeout, conexão, DynamoDB fora) | `ExponentialBackOff(500 ms, x2, máx 30 s, jitter 250 ms, tentativas ilimitadas)` + `ContainerPausingBackOffHandler` (pausa o container, mantém o poll, mensagem fica no broker); **nunca** DLT; `balance.consumer.backpressure` |
+| **Permanente** | `InvalidEventException(reason, detail?)` (formato, campo, id, valor, moeda, timestamp, domínio, inclusive futuro) | *não-retentável* -> DLT imediato com `x-rejection-reason`/`-detail`/`-at`; desfecho `rejected{reason}` |
+| **Transitória** | `BalanceStoreUnavailableException(failureCause = THROTTLED\|UNAVAILABLE\|TIMEOUT)` (throttling, 5xx, timeout, conexão, DynamoDB fora) | `ExponentialBackOff(500 ms, x2, máx 30 s, jitter 250 ms, tentativas ilimitadas)` + `ContainerPausingBackOffHandler` (pausa o container, mantém o poll, mensagem fica no broker); **nunca** DLT; `balance.consumer.backpressure` |
 | **Não classificada** | qualquer outra exceção (inclui `BalanceStoreRejectedException`) | `FixedBackOff(100 ms, 2)` (3 entregas) e DLT `unprocessable_event` — evita que um defeito determinístico bloqueie a partição para sempre (Constitution III) |
 
   DLT indisponível => a publicação falha, o registro **não é confirmado** e é reentregue (`waitForSendResultTimeout=5 s`,

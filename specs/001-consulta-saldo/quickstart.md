@@ -64,6 +64,7 @@ tx() { printf '00000000-0000-4000-8000-%012d' $1; }     # tx 1 .. tx N
 dlt_total() { docker compose run --rm -T --entrypoint rpk redpanda-seed topic describe $TOPIC.DLT -p --brokers redpanda:9092 | awk 'NR>1{s+=$NF} END{print s+0}'; }
 A=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1; B=bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1; C=cccccccc-cccc-4ccc-8ccc-ccccccccccc1
 D=dddddddd-dddd-4ddd-8ddd-ddddddddddd1
+C2=cccccccc-cccc-4ccc-8ccc-ccccccccccc2; E=eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee2
 ```
 
 ## 5. Cenários de corretude (US2, US3) — Constitution II/III
@@ -119,6 +120,15 @@ ev $(tx 32) $(t 3) $B ENABLED 70.00  | produce; sleep 2; curl -s localhost:8080/
 ```
 
 Esperado: 200 -> **409** com `application/problem+json` e `type` `urn:problem-type:consulta-saldo:conta-desabilitada` **sem saldo nem titular** -> 409 (evento antigo não muda) -> 200 com 70.00.
+
+### 5.5 Moeda do saldo diferente da moeda da transação (FR-020) — conta `E`
+
+```bash
+ev $(tx 70) $(t 1) $E ENABLED 25.00 | sed 's/"balance":{"amount":25.00,"currency":"BRL"}/"balance":{"amount":25.00,"currency":"USD"}/' | produce
+sleep 2; curl -s localhost:8080/balances/$E
+```
+
+Esperado: `200` com `"balance":{"amount":25.00,"currency":"USD"}` (a transação é BRL; a moeda exposta é sempre a do saldo, sem conversão nem rejeição) e nenhuma mensagem nova no DLT.
 
 ## 6. Mensagens inválidas e isolamento (US4, SC-006)
 
@@ -238,3 +248,10 @@ Esperado (referência, a confirmar com o cliente): 500 req/s com p99 <= 300 ms e
 | 9 | FR-009/034, US6.4, US3.6 |
 | 10 | Constitution VI (concorrência real, propriedade, integração) |
 | 11 | SC-001/002 |
+| 5.1 e 9 | FR-001, FR-002, FR-003 |
+| 5.5 | FR-020 |
+| 5.1 e 6 | FR-031 (métricas por desfecho) |
+| Testes de privacidade de log (tasks T144/T147) | FR-032 |
+| Regra Konsist de catch (tasks T145) | FR-035 |
+| 5.4 e 8 | FR-027 (leitura sempre íntegra) |
+| 2 | SC-011 (saúde e métricas em < 1 min), SC-012 (subir e consultar em <= 10 min) |

@@ -67,8 +67,8 @@ classDiagram
 |------|---------------|-------------|-------------|
 | `AccountId`, `TransactionId`, `OwnerId` | `value class` sobre `String` **canônica em minúsculas** | Regex estrita `8-4-4-4-12` hex (case-insensitive na entrada; normaliza para minúsculas). Não usar `UUID.fromString` (aceita `1-1-1-1-1`) | `invalid_identifier` / API 400 |
 | `CurrencyCode` | `String` de 3 letras maiúsculas | Existe em `java.util.Currency.getAvailableCurrencies()` | `invalid_currency` |
-| `Money` | `BigDecimal` + `CurrencyCode` | Precisão <= 38 dígitos significativos (limite do `N`); escala positiva <= 38; escala negativa (`1E+3`) é expandida a escala 0 **só se** `precisão - escala <= 38` (sem materializar expoentes gigantes). Pode ser zero/negativo. **Nunca** `Double`/`Float`. Método de apresentação `withCurrencyFractionDigits()`: `setScale(max(scale, defaultFractionDigits))` se `defaultFractionDigits >= 0` (senão inalterado); **nunca arredonda** | `invalid_value` |
-| `EventInstant` | `Long` em microssegundos | Inteiro positivo; converte para `Instant` sem perda (`Instant.ofEpochSecond(µs/1e6, (µs%1e6)*1000)`). O **mínimo depende do papel**, passado na criação: `transaction.timestamp` >= `2000-01-01T00:00:00Z` (detecta s/ms; entra na precedência); `account.created_at` >= `1900-01-01T00:00:00Z` (contas anteriores a 2000 são legítimas; não entra na precedência). Máximo: `agora + tolerância` (application) | `invalid_timestamp` |
+| `Money` | `BigDecimal` + `CurrencyCode` | Precisão <= 38 dígitos significativos (limite do `N`); escala positiva <= 38; escala negativa (`1E+3`) é expandida a escala 0 **só se** `precisão - escala <= 38` (sem materializar expoentes gigantes). A precisão é medida por `BigDecimal.precision()` do valor recebido (zeros à direita contam; conservador). Igualdade e `hashCode` por valor numérico (`compareTo == 0`, `stripTrailingZeros()`): `183.10 == 183.1`. Pode ser zero/negativo. **Nunca** `Double`/`Float`. Método de apresentação `withCurrencyFractionDigits()`: `setScale(max(scale, defaultFractionDigits))` se `defaultFractionDigits >= 0` (senão inalterado); **nunca arredonda** | `invalid_value` |
+| `EventInstant` | `Long` em microssegundos | Inteiro (`Long`); negativo só para `account.created_at` anterior a 1970 (mínimo 1900-01-01); converte para `Instant` sem perda (`Math.floorDiv/floorMod`, obrigatório com negativos; equivalente a `Instant.ofEpochSecond(µs/1e6, (µs%1e6)*1000)`). O **mínimo depende do papel**, passado na criação: `transaction.timestamp` >= `2000-01-01T00:00:00Z` (detecta s/ms; entra na precedência); `account.created_at` >= `1900-01-01T00:00:00Z` (contas anteriores a 2000 são legítimas; não entra na precedência). Máximo: `agora + tolerância` (application) | `invalid_timestamp` |
 | `TransactionType` | `CREDIT`, `DEBIT` | valor exato | `unknown_domain_value` |
 | `TransactionStatus` | `APPROVED`, `DECLINED` | valor exato | `unknown_domain_value` |
 | `AccountStatus` | `ENABLED`, `DISABLED` | valor exato | `unknown_domain_value` |
@@ -147,7 +147,7 @@ não têm padrão de acesso (YAGNI, Constitution VIII).
 | `lastTxId` | S | **Chave de precedência, parte 2** (UUID canônico minúsculo) | `transaction.id` |
 
 Os nomes evitam termos que colidem com palavras reservadas do DynamoDB (ex.: `owner`, `status`), e as expressões ainda assim usam nomes diretos apenas para atributos seguros.
-Item de exemplo (~300 bytes -> 1 WCU/RCU):
+Item de exemplo (~300 bytes -> 1 WCU/RCU); mesmos valores do seed `infra/dynamodb/account-balances.json` e do smoke test do quickstart seção 3 (`183.10` seria armazenado como `183.1`, ver 4.2):
 
 ```json
 {
@@ -156,10 +156,10 @@ Item de exemplo (~300 bytes -> 1 WCU/RCU):
   "schemaVersion": {"N": "1"},
   "ownerId": {"S": "315e3cfe-f4af-4cd2-b298-a449e614349a"},
   "accountStatus": {"S": "ENABLED"},
-  "balanceAmount": {"N": "183.1"},
+  "balanceAmount": {"N": "183.12"},
   "balanceCurrency": {"S": "BRL"},
   "accountCreatedAtMicros": {"N": "1634874339000000"},
-  "lastTxTsMicros": {"N": "1751641364589998"},
+  "lastTxTsMicros": {"N": "1751749453433000"},
   "lastTxId": {"S": "8e8ae808-b154-48b5-9f3e-553935cc4543"}
 }
 ```
@@ -217,10 +217,11 @@ ReturnValuesOnConditionCheckFailure: ALL_OLD
   validado no DynamoDB Local 3.3.0 e no SDK 2.46.7):
   - `lastTxTsMicros == :ts && lastTxId == :tx` -> `duplicate`; se `ownerId`, `accountStatus`, `balanceCurrency` ou
     `balanceAmount` (`compareTo`) divergirem do evento -> anomalia `conflicting_duplicate` (métrica + log), desfecho continua `duplicate`;
+  - (nesse caso de conteúdo divergente prevalece o primeiro evento aplicado: não convergente por definição, defeito da origem; ver spec Edge Cases);
   - caso contrário -> `obsolete`;
   - se `hasItem()` for falso (comportamento inesperado do endpoint) -> `GetItem` consistente para classificar (caminho raro, coberto por teste).
-- Falhas restantes: throttling/5xx/timeout/conexão -> `BalanceStoreUnavailableException` (transitória); `ValidationException`
-  -> `BalanceStoreRejectedException` (permanente -> `unprocessable_event`).
+- Falhas restantes: throttling/5xx/timeout/conexão -> `BalanceStoreUnavailableException(THROTTLED|UNAVAILABLE|TIMEOUT)` (transitória); `ValidationException`
+  -> `BalanceStoreRejectedException` (tratada como não classificada pelo consumer: 3 entregas e DLT `unprocessable_event`).
 - Convergência provada: em 400 escritas concorrentes (32 threads, duplicatas e desordem, mesma conta) o vencedor foi
   exatamente `max(timestamp, txId)` (spike); será o teste de integração da seção 7.
 - Custo: escrita com condição falsa **ainda consome 1 WCU**; eventos obsoletos custam capacidade. Mitigação (evolução): coalescência por conta no lote (R-09).
@@ -258,7 +259,7 @@ Fuso de exibição: `America/Sao_Paulo` (config `BALANCE_DISPLAY_ZONE`); o insta
 | `Obsolete` | `obsolete` | DEBUG |
 | `Duplicate(conflicting=false)` | `duplicate` | DEBUG |
 | `Duplicate(conflicting=true)` | `duplicate` + `balance.events.anomalies` | WARN |
-| `InvalidEventException(reason)` (qualquer camada) | `rejected{reason}` (contado quando o DLT confirma) | WARN |
+| `InvalidEventException(reason, detail?)` (qualquer camada) | `rejected{reason}` (contado quando o DLT confirma) | WARN |
 
 ## 7. Contrato de teste do armazenamento (fake x real)
 
