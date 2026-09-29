@@ -16,10 +16,21 @@ data class Transaction(
     val timestamp: EventInstant,
 ) {
     init {
-        validatedAmount(amount)
-        if (amount.signum() < 0) throw InvalidEventException(RejectionReason.INVALID_VALUE)
+        validTransactionAmount(amount)
     }
 
     /** Nunca expoe o valor: valores monetarios nao podem vazar em logs. */
     override fun toString(): String = "Transaction(id=$id, type=$type, status=$status)"
+
+    companion object {
+        /**
+         * Valida o valor de uma transacao (precisao/escala de [validatedAmount] e `>= 0`) e devolve o valor normalizado ou
+         * lanca `invalid_value`. Exposta para que a borda valide na ordem documentada dos campos.
+         */
+        fun validTransactionAmount(amount: BigDecimal): BigDecimal {
+            val normalized = validatedAmount(amount)
+            if (normalized.signum() < 0) throw InvalidEventException(RejectionReason.INVALID_VALUE)
+            return normalized
+        }
+    }
 }

@@ -12,7 +12,7 @@ private const val MAX_DIGITS = 38
  * expandida para escala zero somente se `precisao - escala <= 38`, sem materializar expoentes gigantes.
  * Devolve o valor normalizado ou lanca `invalid_value`.
  */
-internal fun validatedAmount(amount: BigDecimal): BigDecimal {
+fun validatedAmount(amount: BigDecimal): BigDecimal {
     val scale = amount.scale().toLong()
     val precision = amount.precision().toLong()
     if (scale < 0) {

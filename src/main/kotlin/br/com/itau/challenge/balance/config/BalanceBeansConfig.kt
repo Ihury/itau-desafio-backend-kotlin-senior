@@ -1,5 +1,6 @@
 package br.com.itau.challenge.balance.config
 
+import br.com.itau.challenge.balance.adapter.input.kafka.TransactionEventParser
 import br.com.itau.challenge.balance.adapter.output.dynamodb.CircuitBreakingBalanceSnapshotReader
 import br.com.itau.challenge.balance.adapter.output.dynamodb.DynamoDbBalanceSnapshotReader
 import br.com.itau.challenge.balance.adapter.output.dynamodb.DynamoDbBalanceSnapshotWriter
@@ -14,6 +15,7 @@ import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient
 import java.time.Clock
+import java.time.Instant
 import java.time.ZoneId
 
 /**
@@ -48,6 +50,16 @@ class BalanceBeansConfig {
         @Qualifier("dynamoDbWriteClient") client: DynamoDbClient,
         properties: DynamoDbClientProperties,
     ): BalanceSnapshotWriter = DynamoDbBalanceSnapshotWriter(client, properties.tableName)
+
+    /**
+     * Parser estrito do evento, com os limites inferiores de timestamp da configuracao (`balance.min-event-timestamp` e
+     * `balance.min-account-created-at`).
+     */
+    @Bean
+    fun transactionEventParser(
+        @Value($$"${balance.min-event-timestamp}") minEventTimestamp: String,
+        @Value($$"${balance.min-account-created-at}") minAccountCreatedAt: String,
+    ): TransactionEventParser = TransactionEventParser(Instant.parse(minEventTimestamp), Instant.parse(minAccountCreatedAt))
 
     /** Relogio do processamento (usado so para a tolerancia de timestamp futuro; nunca decide precedencia). */
     @Bean

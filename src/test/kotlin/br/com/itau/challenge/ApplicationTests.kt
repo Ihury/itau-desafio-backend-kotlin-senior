@@ -1,6 +1,7 @@
 package br.com.itau.challenge
 
 import br.com.itau.challenge.balance.adapter.output.dynamodb.CircuitBreakingBalanceSnapshotReader
+import br.com.itau.challenge.balance.adapter.input.kafka.TransactionEventParser
 import br.com.itau.challenge.balance.adapter.output.dynamodb.DynamoDbBalanceSnapshotWriter
 import br.com.itau.challenge.balance.adapter.output.dynamodb.DynamoDbClientProperties
 import br.com.itau.challenge.balance.adapter.output.metrics.MicrometerProcessingMetrics
@@ -60,6 +61,9 @@ class ApplicationTests {
 	@Qualifier("dynamoDbWriteClient")
 	private lateinit var writeClient: DynamoDbClient
 
+	@Autowired
+	private lateinit var parser: TransactionEventParser
+
 	@Test
 	fun contextLoads() {
 	}
@@ -102,5 +106,21 @@ class ApplicationTests {
 		assertTrue(write.apiCallAttemptTimeout().orElseThrow() == Duration.ofSeconds(2))
 		assertTrue(write.apiCallTimeout().orElseThrow() == Duration.ofSeconds(2))
 		assertTrue(dynamoDbProperties.write.maxConnections == 50)
+	}
+
+	@Test
+	fun `the event parser uses the documented minimum timestamps`() {
+		fun payload(transactionTimestamp: String, accountCreatedAt: String) =
+			"""{"transaction":{"id":"8e8ae808-b154-48b5-9f3e-553935cc4543","type":"CREDIT","amount":1,"currency":"BRL",""" +
+				""""status":"APPROVED","timestamp":$transactionTimestamp},"account":{"id":"5b19c8b6-0cc4-4c72-a989-0c2ee15fa975",""" +
+				""""owner":"315e3cfe-f4af-4cd2-b298-a449e614349a","created_at":$accountCreatedAt,"status":"ENABLED",""" +
+				""""balance":{"amount":1,"currency":"BRL"}}}"""
+
+		// 2000-01-01 e 1900-01-01 sao aceitos; um microssegundo antes de cada minimo e rejeitado
+		parser.parse(payload("946684800000000", "-2208988800000000").toByteArray())
+		listOf(payload("946684799999999", "0"), payload("946684800000000", "-2208988800000001")).forEach { bad ->
+			val failure = runCatching { parser.parse(bad.toByteArray()) }.exceptionOrNull()
+			assertTrue(failure is br.com.itau.challenge.balance.domain.exception.InvalidEventException, "minimo nao aplicado: $bad")
+		}
 	}
 }
