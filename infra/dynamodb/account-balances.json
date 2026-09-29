@@ -1,0 +1,12 @@
+{
+  "pk": {"S": "ACCOUNT#5b19c8b6-0cc4-4c72-a989-0c2ee15fa975"},
+  "sk": {"S": "BALANCE"},
+  "schemaVersion": {"N": "1"},
+  "ownerId": {"S": "315e3cfe-f4af-4cd2-b298-a449e614349a"},
+  "accountStatus": {"S": "ENABLED"},
+  "balanceAmount": {"N": "183.12"},
+  "balanceCurrency": {"S": "BRL"},
+  "accountCreatedAtMicros": {"N": "1634874339000000"},
+  "lastTxTsMicros": {"N": "1751749453433000"},
+  "lastTxId": {"S": "8e8ae808-b154-48b5-9f3e-553935cc4543"}
+}

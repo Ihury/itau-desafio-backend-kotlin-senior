@@ -8,9 +8,10 @@ services:
     environment:
       DYNAMODB_ENDPOINT: http://dynamodb:8000
       DYNAMODB_REGION: us-east-1
-      GREETING_TABLE_NAME: GreetingMessages
+      BALANCE_TABLE_NAME: AccountBalances
       KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
-      GREETING_TEMPLATES_TOPIC: greeting-templates
+      BALANCE_EVENTS_TOPIC: transacoes-financeiras-processadas
+      BALANCE_EVENTS_DLT_TOPIC: transacoes-financeiras-processadas.DLT
     depends_on:
       - dynamodb
       - dynamodb-seed
@@ -33,7 +34,7 @@ services:
       AWS_SECRET_ACCESS_KEY: local
       AWS_DEFAULT_REGION: us-east-1
       DYNAMODB_ENDPOINT_URL: http://dynamodb:8000
-      GREETING_TABLE_NAME: GreetingMessages
+      BALANCE_TABLE_NAME: AccountBalances
     volumes:
       - ./infra/dynamodb:/dynamodb-seed:ro
     entrypoint: ["/bin/bash", "/dynamodb-seed/seed.sh"]
@@ -74,7 +75,8 @@ services:
       - redpanda
     environment:
       REDPANDA_BROKERS: redpanda:9092
-      GREETING_TEMPLATES_TOPIC: greeting-templates
+      BALANCE_EVENTS_TOPIC: transacoes-financeiras-processadas
+      BALANCE_EVENTS_DLT_TOPIC: transacoes-financeiras-processadas.DLT
     volumes:
       - ./infra/redpanda:/redpanda-seed:ro
     entrypoint: ["/bin/bash", "-c", "/redpanda-seed/config.sh && /redpanda-seed/seed.sh"]

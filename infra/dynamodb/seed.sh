@@ -2,9 +2,9 @@
 set -euo pipefail
 
 ENDPOINT_URL="${DYNAMODB_ENDPOINT_URL:-http://dynamodb:8000}"
-TABLE_NAME="${GREETING_TABLE_NAME:-GreetingMessages}"
+TABLE_NAME="${BALANCE_TABLE_NAME:-AccountBalances}"
 REGION="${AWS_DEFAULT_REGION:-us-east-1}"
-SEED_FILE="/dynamodb-seed/greeting-messages.json"
+SEED_FILE="/dynamodb-seed/account-balances.json"
 
 echo "Waiting for DynamoDB Local at ${ENDPOINT_URL}..."
 until aws dynamodb list-tables --endpoint-url "${ENDPOINT_URL}" --region "${REGION}" >/dev/null 2>&1; do
@@ -19,8 +19,8 @@ else
   echo "Creating table '${TABLE_NAME}'..."
   aws dynamodb create-table \
     --table-name "${TABLE_NAME}" \
-    --attribute-definitions AttributeName=id,AttributeType=S \
-    --key-schema AttributeName=id,KeyType=HASH \
+    --attribute-definitions AttributeName=pk,AttributeType=S AttributeName=sk,AttributeType=S \
+    --key-schema AttributeName=pk,KeyType=HASH AttributeName=sk,KeyType=RANGE \
     --billing-mode PAY_PER_REQUEST \
     --endpoint-url "${ENDPOINT_URL}" \
     --region "${REGION}" >/dev/null
@@ -31,9 +31,12 @@ else
   echo "Table '${TABLE_NAME}' created."
 fi
 
-echo "Seeding greeting messages from ${SEED_FILE}..."
-aws dynamodb batch-write-item \
-  --request-items "file://${SEED_FILE}" \
+# PutItem (e nao BatchWriteItem): aceita ConditionExpression e sobrescreve o item de exemplo de forma
+# deterministica a cada execucao, o que torna o seed idempotente.
+echo "Seeding the sample account balance from ${SEED_FILE}..."
+aws dynamodb put-item \
+  --table-name "${TABLE_NAME}" \
+  --item "file://${SEED_FILE}" \
   --endpoint-url "${ENDPOINT_URL}" \
   --region "${REGION}" >/dev/null
 
