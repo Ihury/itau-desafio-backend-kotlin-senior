@@ -42,6 +42,18 @@ http: ## Call all .http files against the running app (no local deps, runs via D
 		-v "$(CURDIR)/$(HTTP_DIR)":/http -w /http \
 		node:20-alpine sh -c "npx --yes httpyac send *.http --all -e docker"
 
+.PHONY: balance-get
+balance-get: ## Query the balance of an account (usage: make balance-get ACCOUNT=<uuid>)
+	@if [ -z "$(ACCOUNT)" ]; then \
+		echo "ACCOUNT is required, e.g. make balance-get ACCOUNT=5b19c8b6-0cc4-4c72-a989-0c2ee15fa975"; \
+		exit 1; \
+	fi
+	@if ! echo "$(ACCOUNT)" | grep -Eq '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$$'; then \
+		echo "ACCOUNT must be a UUID in the 8-4-4-4-12 format, got: $(ACCOUNT)"; \
+		exit 1; \
+	fi
+	curl -si http://localhost:8080/balances/$(ACCOUNT)
+
 .PHONY: db-up
 db-up: ## Start DynamoDB Local + web console and (re)seed the AccountBalances table
 	$(COMPOSE) up dynamodb dynamodb-seed dynamodb-admin -d

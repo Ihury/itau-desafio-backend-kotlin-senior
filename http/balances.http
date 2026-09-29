@@ -1,0 +1,36 @@
+### Saldo da conta de exemplo do seed (200)
+GET {{host}}/balances/5b19c8b6-0cc4-4c72-a989-0c2ee15fa975
+Accept: application/json
+
+?? status == 200
+
+### Conta sem nenhum evento processado (404, nunca saldo zerado)
+GET {{host}}/balances/00000000-0000-4000-8000-000000000404
+Accept: application/json
+
+?? status == 404
+
+### Identificador que nao e UUID (400, o armazenamento nao e consultado)
+GET {{host}}/balances/abc
+Accept: application/json
+
+?? status == 400
+
+### UUID em formato nao canonico que o JDK aceitaria (400)
+GET {{host}}/balances/1-1-1-1-1
+Accept: application/json
+
+?? status == 400
+
+### Correlacao: o X-Correlation-Id valido e devolvido no mesmo cabecalho (200)
+GET {{host}}/balances/5b19c8b6-0cc4-4c72-a989-0c2ee15fa975
+Accept: application/json
+X-Correlation-Id: exemplo-correlacao-123
+
+?? status == 200
+?? header x-correlation-id == exemplo-correlacao-123
+
+### Contrato OpenAPI servido pelo proprio servico
+GET {{host}}/openapi.yaml
+
+?? status == 200
