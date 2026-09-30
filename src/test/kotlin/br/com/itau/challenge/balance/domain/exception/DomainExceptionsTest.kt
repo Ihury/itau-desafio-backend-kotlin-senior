@@ -55,7 +55,7 @@ class DomainExceptionsTest {
     @Test
     fun `BalanceStoreRejectedException is not the transient exception`() {
         val original = IllegalArgumentException("validation")
-        val error = BalanceStoreRejectedException(original)
+        val error: Throwable = BalanceStoreRejectedException(original)
 
         assertSame(original, error.cause)
         assertFalse(error is BalanceStoreUnavailableException)

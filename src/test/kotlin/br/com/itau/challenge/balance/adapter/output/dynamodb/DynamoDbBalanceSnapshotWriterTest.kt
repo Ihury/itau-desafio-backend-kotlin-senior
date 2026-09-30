@@ -248,7 +248,7 @@ class DynamoDbBalanceSnapshotWriterTest {
         failConditionWithoutItem()
         stubGetItem(itemOf(transactionEvent(timestampMicros = snapshot.precedence.timestamp.micros - 1, balanceAmount = "5555.55")))
 
-        val thrown = assertFailsWith<IllegalStateException> { writer.applyIfNewer(snapshot) }
+        val thrown: Throwable = assertFailsWith<IllegalStateException> { writer.applyIfNewer(snapshot) }
 
         assertTrue(thrown !is BalanceStoreUnavailableException, "retentar para sempre bloquearia a particao")
         assertTrue("5555.55" !in thrown.message.orEmpty() && "183.12" !in thrown.message.orEmpty(), "sem valores na mensagem")

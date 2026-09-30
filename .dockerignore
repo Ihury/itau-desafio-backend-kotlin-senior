@@ -6,3 +6,10 @@ http
 *.iml
 .git
 HELP.md
+specs
+docs
+.specify
+.claude
+.github
+infra
+perf
