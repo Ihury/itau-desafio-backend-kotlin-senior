@@ -331,9 +331,12 @@ class DeadLetterIT : KafkaITBase() {
     }
 
     companion object {
-        private const val VALID_PER_ROUND = 200
-        private const val WARM_UP = 100
-        private const val REPETITIONS = 3
+        // Com 200 amostras por rodada o p99 e praticamente a segunda maior latencia e oscila alguns buckets (1,04x cada) por ruido
+        // de GC e de agendamento: a validacao de T176 mostrou 2 falhas em 7 execucoes com 200 x 3. Com 1000 x 5 o p99 estabiliza e o
+        // limite de 1,10x segue o mesmo (sem afrouxar o criterio, so reduzindo o ruido da medicao).
+        private const val VALID_PER_ROUND = 1000
+        private const val WARM_UP = 300
+        private const val REPETITIONS = 5
         private const val MAX_DEGRADATION = 1.10
 
         private val topicSet = TopicSet("it-dlt")
