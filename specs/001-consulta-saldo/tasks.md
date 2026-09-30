@@ -503,7 +503,7 @@ Os atalhos abaixo são expandidos nos caminhos deste arquivo; todos os caminhos 
 
 ### Commit C45: `build: evita reexecutar testes unitarios nas tasks de integracao`
 
-- [ ] T189 `build.gradle.kts`: aplicar `finalizedBy(jacocoTestReport)` só à task `test` (o gate `check` com `jacocoTestCoverageVerification` continua igual); confirmar com `./gradlew integrationTest --dry-run` que `:test` não aparece e com `./gradlew check --dry-run` que continua
+- [X] T189 `build.gradle.kts`: aplicar `finalizedBy(jacocoTestReport)` só à task `test` (o gate `check` com `jacocoTestCoverageVerification` continua igual); confirmar com `./gradlew integrationTest --dry-run` que `:test` não aparece e com `./gradlew check --dry-run` que continua
 
 ### Commit C46: `fix(web): reduz ruido de log com o circuit breaker aberto`
 

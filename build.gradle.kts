@@ -121,7 +121,6 @@ jacoco {
 
 tasks.withType<Test> {
 	useJUnitPlatform()
-	finalizedBy(tasks.jacocoTestReport)
 
 	testLogging {
 		events("passed", "skipped", "failed")
@@ -181,6 +180,9 @@ val coverageMinimum = 0.90
 // assercoes "nenhum listener em execucao" nos testes que rodam sem broker. Nos ITs o comportamento padrao continua valendo.
 tasks.test {
 	systemProperty("spring.test.context.cache.pause", "never")
+	// O relatorio JaCoCo (e o gate de cobertura) e so dos testes unitarios: aplicado a TODA task de teste, `integrationTest` e
+	// `perfTest` arrastariam `:test` (o relatorio depende dele) e o job de integracao do CI reexecutaria os unitarios.
+	finalizedBy(tasks.jacocoTestReport)
 }
 
 tasks.jacocoTestReport {
