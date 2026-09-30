@@ -45,7 +45,7 @@ class DeadLetterProperties(
  *   `x-rejection-*` (nenhum header de excecao do Spring, que poderia trazer trechos do payload).
  * - **Transitoria** ([BalanceStoreUnavailableException]): `ExponentialBackOff` (500 ms x2, teto de 30 s, jitter de 250 ms; parametros
  *   em [BackOffProperties]) SEM limite de tentativas nem de tempo e com o container PAUSADO durante a espera
- *   ([BackpressureConfig]); o recoverer NUNCA e acionado, a mensagem valida fica no broker e jamais chega ao DLT (FR-017), e cada
+ *   ([BackpressureConfig]; a pausa e do container pai: vale para todas as threads de consumo da instancia); o recoverer NUNCA e acionado, a mensagem valida fica no broker e jamais chega ao DLT (FR-017), e cada
  *   entrega que falha conta `balance.consumer.backpressure{cause}`.
  * - **Nao classificada** (qualquer outra): 3 entregas (`FixedBackOff(100 ms, 2)`) e DLT `unprocessable_event`, para que um
  *   defeito deterministico nao bloqueie a particao para sempre (Constitution III).
@@ -78,8 +78,9 @@ class DeadLetterConfig {
         deadLetterErrorHandler(deadLetterKafkaTemplate, dltTopic, properties.waitForSendResultTimeout, clock, metrics, backOff, containerPausingBackOffHandler)
 
     /**
-     * [backOffHandler] decide o que fazer durante a espera: em producao e o `ContainerPausingBackOffHandler` (pausa o container
-     * e mantem o poll vivo); os testes informam um que so registra o intervalo, para nao esperar de verdade.
+     * [backOffHandler] decide o que fazer durante a espera: em producao e o `ContainerPausingBackOffHandler` (pausa o container PAI,
+     * isto e, TODAS as threads de consumo da instancia, e mantem o poll vivo); os testes informam um que so registra o intervalo,
+     * para nao esperar de verdade.
      */
     internal fun deadLetterErrorHandler(
         template: KafkaOperations<ByteArray, ByteArray>,

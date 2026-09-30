@@ -40,9 +40,13 @@ class BackpressureConfig {
             setRemoveOnCancelPolicy(true)
         }
 
-    /** Pausa o container (o filho que falhou, um por thread de consumo) durante o backoff e o retoma ao fim dele. */
+    /**
+     * Pausa o container durante o backoff e o retoma ao fim dele. O `ContainerPausingBackOffHandler` recebe o container PAI
+     * (`thisOrParentContainer` do Spring Kafka 4.1, verificado no bytecode): a pausa vale para TODAS as threads de consumo da
+     * instancia, nao so para a que falhou. E o desejado: o armazenamento e compartilhado, entao todas as threads ficariam falhando.
+     */
     @Bean
     fun containerPausingBackOffHandler(kafkaBackOffScheduler: TaskScheduler): BackOffHandler =
-        // Sem registro: so se pausa o proprio container recebido do error handler (a pausa por id exigiria o registro).
+        // Sem registro: so se pausa o container recebido do error handler (o pai; a pausa por id exigiria o registro).
         ContainerPausingBackOffHandler(ListenerContainerPauseService(null, kafkaBackOffScheduler))
 }
