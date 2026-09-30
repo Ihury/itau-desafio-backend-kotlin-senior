@@ -45,7 +45,7 @@ object ComposeControl {
         run("unpause", service)
     }
 
-    /** Estado `paused` do servico (para provar que ficou ativo ao fim do teste). */
+    /** Detecta `pause` esquecido por uma execucao anterior. */
     fun isPaused(service: String): Boolean {
         val outcome = run("ps", "--status", "paused", "--services")
         return outcome.output.lines().any { it.trim() == service }

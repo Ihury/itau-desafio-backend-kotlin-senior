@@ -82,7 +82,7 @@ class CircuitBreakingBalanceSnapshotReaderTest {
     }
 
     @Test
-    fun `a real failure of the store keeps its own stack trace and is not a circuit rejection`() {
+    fun `a real store failure is not reported as a circuit rejection`() {
         val reader = CircuitBreakingBalanceSnapshotReader(FakeReader { throw unavailable() }, breaker())
 
         val failure = assertFailsWith<BalanceStoreUnavailableException> { reader.find(accountId) }

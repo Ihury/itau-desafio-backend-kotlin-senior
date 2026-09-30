@@ -8,7 +8,7 @@ import br.com.itau.challenge.balance.port.output.BalanceSnapshotWriter
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Fake em memoria do armazenamento de snapshots (dublê de teste, sem infraestrutura), com a mesma semantica do
+ * Fake em memoria do armazenamento de snapshots (duble de teste, sem infraestrutura), com a mesma semantica do
  * DynamoDB: a arbitragem de precedencia e atomica por conta (`ConcurrentHashMap.compute`) e usa
  * [BalanceSnapshot.supersedes]. Leitura: [BalanceSnapshotReader]; escrita: [BalanceSnapshotWriter].
  */

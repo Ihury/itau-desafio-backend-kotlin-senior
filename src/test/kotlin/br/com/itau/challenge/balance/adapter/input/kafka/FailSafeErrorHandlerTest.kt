@@ -131,7 +131,7 @@ class FailSafeErrorHandlerTest {
 
     @Test
     fun `the record stays unconfirmed and is redelivered after every failure`() {
-        failures.forEach { (label, failure) ->
+        failures.forEach { (_, failure) ->
             val handler = failSafeErrorHandler(RecordingBackOffHandler())
             val consumer = mock(Consumer::class.java)
             val container = mock(MessageListenerContainer::class.java)
@@ -145,7 +145,6 @@ class FailSafeErrorHandlerTest {
             verify(consumer, never()).commitSync()
             verify(consumer, never()).commitSync(anyMap())
             verify(consumer, never()).commitAsync()
-            assertTrue(label.isNotEmpty())
         }
     }
 

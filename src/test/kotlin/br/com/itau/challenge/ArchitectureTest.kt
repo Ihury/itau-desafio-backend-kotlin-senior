@@ -9,11 +9,9 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * Verificacao da arquitetura hexagonal para TODOS os contextos de negocio (Constitution I).
- *
- * Os contextos sao descobertos como subpacotes diretos de `br.com.itau.challenge`; um contexto novo
- * entra na verificacao automaticamente. Camadas ainda vazias sao toleradas (nenhuma regra e vacuosa
- * por acidente: o teste de existencia de contexto entra junto com o primeiro codigo de negocio).
+ * Arquitetura hexagonal de TODOS os contextos de negocio, descobertos como subpacotes diretos de
+ * `br.com.itau.challenge`: um contexto novo entra na verificacao automaticamente. Camadas ainda vazias sao
+ * toleradas; os testes de existencia de contexto evitam que as regras passem vacuosamente.
  */
 class ArchitectureTest {
 
@@ -171,7 +169,7 @@ class ArchitectureTest {
     fun `no catch block in production swallows an exception without a log, a metric or a rethrow`() {
         val neverReturns = production.files.flatMap { NOTHING_FUNCTION.findAll(stripComments(it.text)).map { match -> match.groupValues[1] } }.toSet()
         val violations = production.files.flatMap { file -> silentCatches(file.text, neverReturns).map { "${file.path}: $it" } }
-        assertNoViolations("todo catch em main precisa de log, metrica ou throw e nao pode ser vazio (Constitution VII, FR-035)", violations)
+        assertNoViolations("todo catch em main precisa de log, metrica ou throw e nao pode ser vazio", violations)
     }
 
     @Test

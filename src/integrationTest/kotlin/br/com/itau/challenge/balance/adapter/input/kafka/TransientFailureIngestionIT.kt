@@ -105,7 +105,7 @@ class TransientFailureIngestionIT : KafkaITBase() {
 
     private fun details(code: String) = AwsErrorDetails.builder().errorCode(code).errorMessage(code).serviceName("DynamoDB").build()
 
-    /** As quatro classes de falha transitoria do SDK, na ordem: throttling, conexao, timeout da chamada e 503. */
+    /** As 5 falhas injetadas, em ordem: throttling, conexao, timeout da chamada, 503 e throttling. */
     private fun sdkFailures(): List<RuntimeException> =
         listOf(
             ProvisionedThroughputExceededException

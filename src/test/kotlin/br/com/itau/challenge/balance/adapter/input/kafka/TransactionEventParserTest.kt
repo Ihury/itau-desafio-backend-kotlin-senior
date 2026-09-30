@@ -125,7 +125,7 @@ class TransactionEventParserTest {
     }
 
     @Test
-    fun `a negative exponent is expanded to scale zero`() {
+    fun `a positive exponent is expanded to scale zero`() {
         val event = parse(json(mapOf("account.balance.amount" to "1E+3", "transaction.amount" to "2E+2")))
 
         assertEquals(BigDecimal("1000"), event.account.balance.amount)

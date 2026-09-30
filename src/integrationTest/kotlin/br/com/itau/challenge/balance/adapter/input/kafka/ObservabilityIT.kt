@@ -99,7 +99,7 @@ class ObservabilityIT : KafkaITBase() {
             hazardous(balanceSentinel).replace(""""owner":"$ownerSentinel",""", ""), // missing_field
             EventPayloads.transaction(newAccount(), transactionId = "1-1-1-1-1", balanceAmount = balanceSentinel, ownerId = ownerSentinel), // invalid_identifier
             EventPayloads.transaction(newAccount(), balanceAmount = "\"$balanceSentinel\"", ownerId = ownerSentinel), // invalid_value (texto)
-            EventPayloads.transaction(newAccount(), balanceCurrency = "brl", balanceAmount = balanceSentinel, ownerId = ownerSentinel), // invalid_currency
+            EventPayloads.transaction(newAccount(), currency = "brl", balanceAmount = balanceSentinel, ownerId = ownerSentinel), // invalid_currency
             EventPayloads.transaction(newAccount(), timestampMicros = 1751749453433L, balanceAmount = balanceSentinel, ownerId = ownerSentinel), // invalid_timestamp
             EventPayloads.transaction(newAccount(), transactionType = "TRANSFER", balanceAmount = balanceSentinel, ownerId = ownerSentinel), // unknown_domain_value
             EventPayloads.transaction(poisoned, balanceAmount = balanceSentinel, ownerId = ownerSentinel), // unprocessable_event (defeito interno)

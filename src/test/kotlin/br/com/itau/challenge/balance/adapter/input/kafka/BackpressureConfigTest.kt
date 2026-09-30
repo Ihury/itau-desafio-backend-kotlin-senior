@@ -104,7 +104,7 @@ class BackpressureConfigTest {
     }
 
     @Test
-    fun `the parameters come from the settings and the wait never reaches the poll interval`() {
+    fun `the back off parameters come from the settings and every wait stays inside them`() {
         val custom = BackOffProperties(initialMs = 100, maxMs = 1_000, jitterMs = 50)
         val backOff = config.transientBackOff(custom)
 
@@ -116,7 +116,7 @@ class BackpressureConfigTest {
     }
 
     @Test
-    fun `the back off function still gives each class its own policy, so the default back off must be the transient one`() {
+    fun `each failure class has its own back off, transient waits with jitter, unclassified retries fast and invalid events never retry`() {
         assertTrue(config.backOffFor(BalanceStoreUnavailableException(StoreFailureCause.TIMEOUT), settings).start().nextBackOff() in 500..750)
         assertEquals(100L, config.backOffFor(IllegalStateException(), settings).start().nextBackOff())
         assertEquals(BackOffExecution.STOP, config.backOffFor(InvalidEventException(RejectionReason.INVALID_VALUE), settings).start().nextBackOff())

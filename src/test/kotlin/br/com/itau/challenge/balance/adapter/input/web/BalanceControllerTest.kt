@@ -189,7 +189,7 @@ class BalanceControllerTest {
                 .response
                 .contentAsString
 
-        assertFalse("ownerId" in body && "corrupted" in body)
+        assertFalse("ownerId" in body || "corrupted" in body)
     }
 
     @Test

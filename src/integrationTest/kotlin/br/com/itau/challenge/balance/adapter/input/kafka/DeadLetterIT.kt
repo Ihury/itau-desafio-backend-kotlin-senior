@@ -107,7 +107,7 @@ class DeadLetterIT : KafkaITBase() {
             Defect("malformed", "{not json".toByteArray(), "malformed_payload", null),
             defect("missing owner", valid(a).replace(""""owner":"${EventPayloads.DEFAULT_OWNER}",""", ""), "missing_field", "account.owner", a),
             defect("bad transaction id", EventPayloads.transaction(b, transactionId = "1-1-1-1-1"), "invalid_identifier", "transaction.id", b),
-            defect("bad currency", EventPayloads.transaction(c, balanceCurrency = "brl"), "invalid_currency", "transaction.currency", c),
+            defect("bad currency", EventPayloads.transaction(c, currency = "brl"), "invalid_currency", "transaction.currency", c),
             defect("string amount", EventPayloads.transaction(d, balanceAmount = "\"10.00\""), "invalid_value", "account.balance.amount", d),
             defect("milliseconds", valid(e, timestampMicros = 1751749453433L), "invalid_timestamp", "transaction.timestamp", e),
             defect("future beyond tolerance", valid(f, timestampMicros = futureBeyond), "invalid_timestamp", "transaction.timestamp", f),
@@ -290,7 +290,7 @@ class DeadLetterIT : KafkaITBase() {
         while (nextDefect < interleavedDefects.size) topics.publish(interleavedDefects[nextDefect++].payload)
     }
 
-    /** Uma rodada de 200 validas (com ou sem defeitos intercalados); devolve o p99 do tempo de ingestao das validas, em ns. */
+    /** Uma rodada de VALID_PER_ROUND validas (com ou sem defeitos intercalados); devolve o p99 do tempo de ingestao das validas, em ns. */
     private fun round(withDefects: Boolean): Long {
         val before = ingestTimer().takeSnapshot()
         publishValidBatch(VALID_PER_ROUND, if (withDefects) nineDefects() else emptyList())

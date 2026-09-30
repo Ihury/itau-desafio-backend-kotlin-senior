@@ -13,7 +13,7 @@ object EventPayloads {
         timestampMicros: Long = BASE_TIMESTAMP_MICROS,
         transactionId: String = UUID.randomUUID().toString(),
         balanceAmount: String = "183.12",
-        balanceCurrency: String = "BRL",
+        currency: String = "BRL",
         ownerId: String = DEFAULT_OWNER,
         accountStatus: String = "ENABLED",
         transactionStatus: String = "APPROVED",
@@ -21,7 +21,7 @@ object EventPayloads {
         transactionAmount: String = "97.07",
         accountCreatedAtMicros: Long = 1634874339000000L,
     ): String =
-        """{"transaction":{"id":"$transactionId","type":"$transactionType","amount":$transactionAmount,"currency":"$balanceCurrency",""" +
+        """{"transaction":{"id":"$transactionId","type":"$transactionType","amount":$transactionAmount,"currency":"$currency",""" +
             """"status":"$transactionStatus","timestamp":$timestampMicros},"account":{"id":"$accountId","owner":"$ownerId",""" +
-            """"created_at":$accountCreatedAtMicros,"status":"$accountStatus","balance":{"amount":$balanceAmount,"currency":"$balanceCurrency"}}}"""
+            """"created_at":$accountCreatedAtMicros,"status":"$accountStatus","balance":{"amount":$balanceAmount,"currency":"$currency"}}}"""
 }

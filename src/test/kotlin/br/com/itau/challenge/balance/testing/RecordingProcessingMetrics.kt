@@ -6,7 +6,7 @@ import br.com.itau.challenge.balance.port.output.ProcessingMetrics
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
 
-/** Dublê de [ProcessingMetrics] que registra, em ordem, cada desfecho contabilizado. */
+/** Duble de [ProcessingMetrics] que registra, em ordem, cada desfecho contabilizado. */
 class RecordingProcessingMetrics : ProcessingMetrics {
     private val recorded = CopyOnWriteArrayList<String>()
 
