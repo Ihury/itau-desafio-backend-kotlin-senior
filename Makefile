@@ -1,15 +1,16 @@
 .DEFAULT_GOAL := help
 
-IMAGE := itau-hello-world
+IMAGE := consulta-saldo
 COMPOSE := docker compose
 HTTP_DIR := http
 COMPOSE_PROJECT := $(notdir $(CURDIR))
 PARTITIONS ?= 1
 COUNT ?= 100
+SCENARIO_TOPIC := $(or $(TOPIC),transacoes-financeiras-processadas)
 
 .PHONY: help
 help: ## Show this help
-	@grep -E '^[a-zA-Z0-9_-]+:.*##' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*##"}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z0-9_-]+:.*##' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*##"}; {printf "  \033[36m%-34s\033[0m %s\n", $$1, $$2}'
 
 .PHONY: build
 build: ## Build the application image
@@ -106,6 +107,11 @@ kafka-produce-transactions-events: ## Produce random transaction+account event J
 	$(COMPOSE) run --rm --entrypoint /bin/bash redpanda-seed \
 		/redpanda-seed/produce-transactions-events.sh $(TOPIC) $(COUNT)
 
+.PHONY: kafka-produce-scenario
+kafka-produce-scenario: ## Publish the deterministic scenario (disorder, duplicate, tie, DISABLED, invalid, poison) and print the expected results (optional TOPIC=)
+	$(COMPOSE) run --rm --entrypoint /bin/bash redpanda-seed \
+		/redpanda-seed/produce-scenario-events.sh $(SCENARIO_TOPIC)
+
 .PHONY: kafka-consume
 kafka-consume: ## Print all messages on a Kafka topic (usage: make kafka-consume TOPIC=my-topic)
 	@if [ -z "$(TOPIC)" ]; then \
@@ -119,10 +125,21 @@ kafka-consume: ## Print all messages on a Kafka topic (usage: make kafka-consume
 kafka-down: ## Stop Redpanda + Console
 	$(COMPOSE) stop redpanda redpanda-seed redpanda-console
 
+.PHONY: wait-seeds
+wait-seeds: ## Wait for the DynamoDB and Redpanda seed jobs to finish (works whether they already exited or not)
+	./infra/wait-seeds.sh
+
 .PHONY: integration-test
-integration-test: db-up kafka-up ## Run all integration tests against live DynamoDB + Redpanda
-	$(COMPOSE) wait dynamodb-seed redpanda-seed
-	./gradlew integrationTest
+integration-test: db-up kafka-up wait-seeds ## Run all integration tests against live DynamoDB + Redpanda (always re-executed)
+	./gradlew cleanIntegrationTest integrationTest
+
+.PHONY: chaos-dynamodb-pause
+chaos-dynamodb-pause: ## Chaos: freeze DynamoDB Local (queries answer 503, ingestion applies backpressure). Undo with chaos-dynamodb-unpause
+	$(COMPOSE) pause dynamodb
+
+.PHONY: chaos-dynamodb-unpause
+chaos-dynamodb-unpause: ## Chaos: resume DynamoDB Local (the consumer recovers on its own)
+	$(COMPOSE) unpause dynamodb
 
 .PHONY: clean-containers
 clean-containers: ## Remove every container for this project, running or stopped, including orphans
