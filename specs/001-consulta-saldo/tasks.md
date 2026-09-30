@@ -499,7 +499,7 @@ Os atalhos abaixo são expandidos nos caminhos deste arquivo; todos os caminhos 
 
 ### Commit C44: `fix(docker): passa flags da jvm no entrypoint para manter os logs em json`
 
-- [ ] T188 `Dockerfile`: remover `JAVA_TOOL_OPTIONS` e passar `-XX:MaxRAMPercentage=75 -XX:+ExitOnOutOfMemoryError` no `ENTRYPOINT` exec form (a linha `Picked up JAVA_TOOL_OPTIONS` não é JSON); ajustar `.github/workflows/docker.yml` se verificar a env; conferir com `docker build --target runtime` e `docker run` que a primeira linha de log é JSON
+- [X] T188 `Dockerfile`: remover `JAVA_TOOL_OPTIONS` e passar `-XX:MaxRAMPercentage=75 -XX:+ExitOnOutOfMemoryError` no `ENTRYPOINT` exec form (a linha `Picked up JAVA_TOOL_OPTIONS` não é JSON); ajustar `.github/workflows/docker.yml` se verificar a env; conferir com `docker build --target runtime` e `docker run` que a primeira linha de log é JSON
 
 ### Commit C45: `build: evita reexecutar testes unitarios nas tasks de integracao`
 
@@ -516,7 +516,7 @@ Os atalhos abaixo são expandidos nos caminhos deste arquivo; todos os caminhos 
 - [ ] T193 [P] `README.md`: seção "Interpretações do enunciado" (decisões tomadas onde o enunciado é ambíguo)
 - [ ] T194 [P] `README.md`: seção "Rodando na AWS" (credencial, endpoint, região, IAM mínimo, autenticação do Kafka, encerramento gracioso); registrar que `DynamoDbClientsConfig` mantém credencial/endpoint do starter por decisão do usuário
 - [ ] T195 [P] `README.md`: premissas de carga (volumes e taxas assumidos) e JDK 21 como pré-requisito local
-- [ ] T196 [P] Textos desatualizados em README, `docs/adr/*` e `docs/metodologia-ia.md` (nome do projeto, `JAVA_TOOL_OPTIONS`, comentário da pausa por container, causa `misconfigured`) e ADR-0008: escopo da pausa (container pai, todas as threads da instância)
+- [ ] T196 [P] Textos desatualizados em README, `docs/adr/*` e `docs/metodologia-ia.md` (nome do projeto, `JAVA_TOOL_OPTIONS` agora no `ENTRYPOINT` — inclusive ADR-0015, `research.md` e `contracts/configuration.md` —, comentário da pausa por container, causa `misconfigured`) e ADR-0008: escopo da pausa (container pai, todas as threads da instância)
 - [ ] T197 [P] README/ADRs: riscos conhecidos documentados como evolução (ex.: formato do `updated_at`, credencial estática do starter, cardinalidade e limites de carga)
 
 ---

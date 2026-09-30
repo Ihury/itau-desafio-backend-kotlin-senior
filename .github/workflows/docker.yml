@@ -29,3 +29,18 @@ jobs:
         run: |
           test "$(docker run --rm --entrypoint id consulta-saldo -u)" = "10001"
           docker inspect --format '{{json .Config.Healthcheck.Test}}' consulta-saldo | grep -q 'actuator/health/liveness'
+
+      # As flags da JVM vao no ENTRYPOINT: `JAVA_TOOL_OPTIONS` faria a JVM imprimir uma linha nao-JSON no inicio do log.
+      - name: Check the JVM flags are in the entrypoint and the log stays pure JSON
+        run: |
+          test -z "$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' consulta-saldo | grep '^JAVA_TOOL_OPTIONS=')"
+          docker inspect --format '{{json .Config.Entrypoint}}' consulta-saldo | grep -q 'ExitOnOutOfMemoryError'
+          cid="$(docker run -d consulta-saldo)"
+          logs="$(mktemp)"
+          trap 'docker rm -f "$cid" > /dev/null; rm -f "$logs"' EXIT
+          for _ in $(seq 1 30); do
+            docker logs "$cid" > "$logs" 2>&1 || true
+            test -s "$logs" && break
+            sleep 1
+          done
+          head -n 1 "$logs" | grep -q '^{'
