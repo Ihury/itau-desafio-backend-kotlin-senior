@@ -164,7 +164,7 @@ Item de exemplo (~300 bytes -> 1 WCU/RCU); mesmos valores do seed `infra/dynamod
 }
 ```
 
-Configuração: `PAY_PER_REQUEST` (on-demand; carga de referência 1.000 ev/s é imprevisível e por conta), **sem TTL, sem
+Configuração: `PAY_PER_REQUEST` (on-demand; carga de referência de 1.000 ev/s, premissa do autor, é imprevisível e por conta), **sem TTL, sem
 GSI, sem streams** (não há requisito). Em produção: PITR habilitado e *deletion protection* (IaC fora do escopo; ver R-17).
 
 ### 4.2 `balanceAmount` como `N` (decisão do usuário) e a normalização de zeros (evidência no DynamoDB Local 3.3.0)

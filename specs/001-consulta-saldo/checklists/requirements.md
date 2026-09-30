@@ -35,5 +35,5 @@
 - **Ressalvas nos itens marcados**:
   - "No implementation details": a seção *External Interfaces* cita o nome do tópico, o caminho `GET /balances/{accountId}` e os campos do payload, além de Kotlin/Kafka/DynamoDB como *restrições impostas pelo cliente*. São contratos de integração e restrições do desafio, não escolhas de solução; os requisitos e critérios de sucesso em si permanecem agnósticos de tecnologia.
   - "Written for non-technical stakeholders": as histórias e critérios de sucesso são acessíveis; a seção de contratos externos é inevitavelmente técnica.
-  - Cargas de referência (SC-001/SC-002) são premissas a confirmar com o cliente (ver Assumptions).
+  - Cargas de referência (SC-001/SC-002) são premissas do autor; o enunciado não fixa volume (ver Assumptions).
 - **Revisão 2**: taxonomia de desfechos unificada (processado | obsoleto | duplicado | rejeitado, mutuamente exclusivos); FR-035 reescrito com MUST NOT; premissa duplicado/obsoleto neutra quanto a histórico de transações. Validação re-executada: mesmo resultado (15/16; só falha o item dos marcadores intencionais).

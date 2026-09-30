@@ -8,8 +8,8 @@ Interface de mensageria da feature `001-consulta-saldo`. O formato do evento de 
 
 | Tópico | Papel | Partições | Réplicas | Retenção | Observações |
 |--------|-------|-----------|----------|----------|-------------|
-| `transacoes-financeiras-processadas` | Entrada (produzido pelo autorizador, fora do escopo) | 12 (decisão proposta) | 1 local / 3 em produção | padrão do broker (7 d) | Mensagens **sem chave**; nenhuma ordenação por conta é assumida. |
-| `transacoes-financeiras-processadas.DLT` | Isolamento de mensagens inválidas | 3 (decisão proposta) | 1 local / 3 em produção | 14 dias (`retention.ms=1209600000`) | Sem reprocessamento automático; reprocessamento manual (seção 6). |
+| `transacoes-financeiras-processadas` | Entrada (produzido pelo autorizador, fora do escopo) | 12 (decisão do autor) | 1 local / 3 em produção | padrão do broker (7 d) | Mensagens **sem chave**; nenhuma ordenação por conta é assumida. |
+| `transacoes-financeiras-processadas.DLT` | Isolamento de mensagens inválidas | 3 (decisão do autor) | 1 local / 3 em produção | 14 dias (`retention.ms=1209600000`) | Sem reprocessamento automático; reprocessamento manual (seção 7). |
 
 - Auto-criação de tópicos está **desligada** no Redpanda do starter-kit: o seed (`infra/redpanda/seed.sh`)
   cria ambos de forma idempotente, com as partições acima.
