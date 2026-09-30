@@ -2,13 +2,12 @@
 
 **Feature**: `001-consulta-saldo` | **Plano**: [plan.md](./plan.md) | **Contratos**: [contracts/](./contracts/) | **Modelo**: [data-model.md](./data-model.md)
 
-Guia de **validação e execução** (não de implementação). Cada cenário prova um requisito/critério de sucesso da spec.
-Os alvos `make` marcados com **(novo)** e o serviço em si são entregues na fase de implementação (`/speckit-tasks` -> `/speckit-implement`);
-este guia define o comportamento esperado que a implementação deve satisfazer.
+Guia de **validação e execução**. Cada cenário prova um requisito/critério de sucesso da spec e traz o comportamento esperado.
 
 ## 0. Pré-requisitos
 
-- Docker com Docker Compose, `make`, `curl`, JDK 21 (para `./gradlew` local; `make test` roda tudo em container).
+- Docker com Docker Compose, `make` e `curl`. `make up` e `make test` (que roda tudo em container) só precisam de Docker.
+- **JDK 21** (Temurin recomendado) no host para `./gradlew`, `make integration-test` e `make perf-test`, que executam o Gradle fora do container.
 - Portas livres: 8080 (API), 8082 (gerenciamento), 8000 (DynamoDB Local), 8001 (admin), 19092 (Redpanda), 8081 (Console).
 - Referências de contrato: `contracts/openapi.yaml` (API), `contracts/kafka-events.md` (validação/DLT), `contracts/observability.md` (métricas).
 
@@ -256,11 +255,12 @@ Esperado: verdes — ingestão ponta a ponta; duplicata/desordem/empate; **N thr
 ## 11. Carga (opcional — R-14)
 
 ```bash
-make load-test                 # (novo) k6 (grafana/k6:2.3.0) contra GET /balances/{accountId}
+make load-test                 # k6 (grafana/k6:2.3.0) contra GET /balances/{accountId}
 ```
 
-Esperado (referência, a confirmar com o cliente): 500 req/s com p99 <= 300 ms e p50 <= 50 ms; ingestão ~1.000 ev/s com o gerador do starter
-(`COUNT` alto). Se não houver tempo, o item consta como não implementado em `research.md` R-17.
+Esperado (premissa do autor; o enunciado não fixa volume): 500 req/s com p99 <= 300 ms e p50 <= 50 ms. O alvo foi executado e o
+resultado está no README ("Teste de carga"), só em ambiente local. A ingestão sustentada de ~1.000 ev/s com o gerador do starter
+(`COUNT` alto) não foi medida (`research.md` R-17).
 
 ## 12. Matriz de rastreabilidade
 

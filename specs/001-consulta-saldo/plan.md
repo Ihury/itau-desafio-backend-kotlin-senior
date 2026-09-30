@@ -4,8 +4,6 @@
 
 **Input**: Feature specification from `/specs/001-consulta-saldo/spec.md` (inclui `## Clarifications`: sessão 2026-09-29 e revisão do plano)
 
-**Note**: This template is filled in by the `/speckit-plan` command; its definition describes the execution workflow.
-
 ## Summary
 
 Serviço de missão crítica do core banking com duas responsabilidades sobre um único modelo de dados, o **snapshot de saldo por conta**:
@@ -40,11 +38,11 @@ Spring Boot Actuator. **Novas**: `io.github.resilience4j:resilience4j-circuitbre
 **Testing**: JUnit Jupiter 6.0.3 + kotlin-test, Mockito, MockMvc (`@WebMvcTest`), Konsist 0.17.3 (arquitetura), kotest-property (propriedade),
 Awaitility; `integrationTest` contra DynamoDB Local + Redpanda reais (docker compose); JaCoCo 0.8.12 com gate de 90% de instruções
 
-**Target Platform**: Linux container (`eclipse-temurin:21-jre`, processo não-root), múltiplas instâncias atrás de um balanceador; Redpanda/Kafka e DynamoDB gerenciados em produção
+**Target Platform**: Linux container (imagem `eclipse-temurin:21.0.12_8-jre-noble`, processo não-root, uid 10001), múltiplas instâncias atrás de um balanceador; Redpanda/Kafka e DynamoDB gerenciados em produção
 
 **Project Type**: web-service (API REST síncrona + consumer Kafka assíncrono no mesmo processo), módulo Gradle único
 
-**Performance Goals**: carga de referência (a confirmar com o cliente) 1.000 eventos/s na ingestão e 500 consultas/s; consulta p50 <= 50 ms e p99 <= 300 ms (SC-001);
+**Performance Goals**: carga de referência (premissa do autor; o enunciado não fixa volume) 1.000 eventos/s na ingestão e 500 consultas/s; consulta p50 <= 50 ms e p99 <= 300 ms (SC-001);
 saldo consultável em <= 5 s (p95) / <= 15 s (p99) após a publicação (SC-002); backlog totalmente drenado em <= 5 min após restabelecer o armazenamento (SC-007)
 
 **Constraints**: 503 em <= 2 s com o armazenamento fora (SC-008, `apiCallTimeout` 1,5 s); nenhuma suposição de ordem do broker; sem read-modify-write nem locks locais;
@@ -52,12 +50,12 @@ suíte unitária sem infraestrutura; o enunciado do desafio não é versionado; 
 
 **Scale/Scope**: 1 bounded context, 1 endpoint REST, 1 consumer Kafka (1 tópico de entrada + 1 DLT), 1 tabela DynamoDB, 1 item por conta; ~1 milhão+ de contas, 12 partições, 2+ instâncias
 
-Todas as incógnitas do template foram resolvidas em `research.md`; **nenhum `NEEDS CLARIFICATION` remanescente**. Decisões que dependem do usuário estão marcadas como
-"decisão proposta — requer validação" (`research.md` seção 5).
+Todas as incógnitas do Technical Context foram resolvidas em `research.md`; **nenhum `NEEDS CLARIFICATION` remanescente**. As decisões que dependiam do usuário foram propostas, revisadas e aprovadas pelo autor
+(registro em `research.md` seção 5 e em `docs/metodologia-ia.md`).
 
 ## Constitution Check
 
-*GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
+*Verificado antes da pesquisa (Phase 0) e reverificado depois do desenho (Phase 1).*
 
 Avaliação pré-pesquisa (Phase 0) contra `.specify/memory/constitution.md` v1.0.1:
 
@@ -160,7 +158,7 @@ src/integrationTest/kotlin/br/com/itau/challenge/balance/   # ingestão ponta a 
                                                             # DynamoDbBalanceSnapshotWriterContractIT, métricas do circuit breaker
 
 infra/dynamodb/{seed.sh, account-balances.json}     # tabela AccountBalances + conta de exemplo (substitui GreetingMessages)
-infra/redpanda/{config.sh, seed.sh, produce-transactions-events.sh (inalterado), produce-scenario-events.sh (novo)}
+infra/redpanda/{config.sh, seed.sh, produce-transactions-events.sh (inalterado), produce-scenario-events.sh}
 docker-compose.yml, Makefile, Dockerfile, .github/workflows/*   # ajustes descritos em R-15; CI segue verde
 http/balances.http                                   # substitui http/hello.http
 docs/adr/0001..0015-*.md                             # ADRs (lista abaixo)
@@ -175,8 +173,6 @@ do exemplo `hello` do starter. Adapters isolados por tecnologia (`input/web`, `i
 
 ## Complexity Tracking
 
-> **Fill ONLY if Constitution Check has violations that must be justified**
-
 O Constitution Check **não tem violações**; a interpretação do Princípio I para `@Service`/`org.slf4j` na camada `application` está registrada abaixo e no ADR-0001. Registram-se, por transparência, as escolhas que aumentam a complexidade ou divergem da diretriz do arquiteto:
 
 | Violation | Why Needed | Simpler Alternative Rejected Because |
@@ -186,7 +182,7 @@ O Constitution Check **não tem violações**; a interpretação do Princípio I
 | Sem `ErrorHandlingDeserializer` (diretriz sugeria) | `ByteArrayDeserializer` nunca lança e preserva os bytes originais no DLT; o parser próprio produz os 7 motivos | Delegar ao `ErrorHandlingDeserializer(JsonDeserializer)` perderia motivos finos e bytes originais |
 | Pacote `config` fora das quatro camadas | Composition root (propriedades, `Clock`, registry do CB, beans) | Espalhar `@Bean` pelas camadas acoplaria `application` ao Spring além do `@Service` do starter |
 | `@Service` e `org.slf4j` na camada `application` | Convenção do starter-kit. Princípio I lido como direção de dependência entre camadas (`application` só depende de `domain` e `port`); os únicos imports externos permitidos são `org.springframework.stereotype.Service` e `org.slf4j`, verificados por whitelist Konsist (regra b). Exceção controlada, decisão do orquestrador; registrada no ADR-0001 e sem emenda na constitution | `application` 100% sem Spring divergiria do starter sem ganho verificável |
-| Remoção do exemplo `hello` (*decisão proposta — requer validação*) | Ruído e risco (listener de outro tópico, tabela sem uso) num serviço de core banking; Konsist precisa cobrir todos os contextos | Manter `hello` exige proteger um contexto irrelevante e confunde o avaliador |
+| Remoção do exemplo `hello` (*decisão aprovada pelo autor na revisão do plano*) | Ruído e risco (listener de outro tópico, tabela sem uso) num serviço de core banking; Konsist precisa cobrir todos os contextos | Manter `hello` exige proteger um contexto irrelevante e confunde o avaliador |
 
 ## ADRs planejados (`docs/adr/`, escritos na implementação)
 

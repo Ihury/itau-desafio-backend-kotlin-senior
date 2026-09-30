@@ -3,8 +3,8 @@
 **Feature**: `001-consulta-saldo` | **Spec**: [spec.md](./spec.md) | **Plano**: [plan.md](./plan.md) | **Data**: 2026-09-29
 
 Resolve todas as incógnitas do Technical Context. Formato de cada decisão: **Decision / Rationale / Alternatives considered**.
-Onde a decisão depende de escolha do usuário que não pôde ser consultado, ela aparece como
-**"decisão proposta — requer validação"** e é reunida na seção 5.
+As decisões que dependiam de escolha do usuário foram reunidas na seção 5, que registra o que foi decidido e por quem
+(o texto original as marcava como "decisão proposta — requer validação", antes da revisão do plano).
 
 ## 0. Método e evidências
 
@@ -44,7 +44,7 @@ Sem alteração de versões existentes: AWS SDK BOM 2.46.7 (última: 2.55.7; sem
 
 - **Decision**: novo pacote `br.com.itau.challenge.balance` com `domain/{model,exception}`, `port/{input,output}`, `application`,
   `adapter/{input/web,input/kafka,output/dynamodb,output/metrics}` e `config` (composition root, fora das quatro camadas).
-  **Remover** o exemplo `hello` (fontes, testes, seed `GreetingMessages`, `http/hello.http`) — *decisão proposta — requer validação*.
+  **Remover** o exemplo `hello` (fontes, testes, seed `GreetingMessages`, `http/hello.http`) — *decisão aprovada pelo autor na revisão do plano*.
   Generalizar `HexagonalArchitectureTest` para **todos** os pacotes de negócio (`Konsist.scopeFromProduction()`, camadas por
   padrão `..domain..` etc.) e acrescentar: (a) `domain` importa só `kotlin.*`/`java.*`/o próprio domínio (nenhum Spring, AWS,
   Kafka, Jackson, Micrometer, Resilience4j); (b) `application` importa só domain/port, `org.springframework.stereotype.Service`
@@ -169,7 +169,7 @@ Sem alteração de versões existentes: AWS SDK BOM 2.46.7 (última: 2.55.7; sem
   `max.poll.records x apiCallTimeout(escrita)` = 200 s < 300 s; `concurrency=4` por instância (soma entre instâncias <= partições);
   `immediate-stop=true` + `server.shutdown=graceful` + `spring.lifecycle.timeout-per-shutdown-phase=30s` (o container para após o
   registro atual; o resto do poll é reentregue e é idempotente); `stop_grace_period: 40s` no compose. **Partições: 12 (principal) e 3 (DLT)**,
-  RF 1 local / 3 produção, DLT com retenção de 14 d — *decisão proposta — requer validação*.
+  RF 1 local / 3 produção, DLT com retenção de 14 d — *decisão aprovada pelo autor na revisão do plano*.
 - **Rationale**: *[Spike]* `enable.auto.commit=false` e `CooperativeStickyAssignor` confirmados na configuração efetiva do consumer;
   após DLT e recuperação o *lag* do grupo foi 0 (offsets confirmados). Bytes verbatim garantem que o DLT preserve o conteúdo original
   mesmo se binário/UTF-8 inválido (com `StringDeserializer` os bytes seriam substituídos por `U+FFFD`, e `ErrorHandlingDeserializer`
@@ -190,7 +190,7 @@ Sem alteração de versões existentes: AWS SDK BOM 2.46.7 (última: 2.55.7; sem
 | Classe | Exceção | Tratamento |
 |--------|---------|-----------|
 | **Permanente** | `InvalidEventException(reason, detail?)` (formato, campo, id, valor, moeda, timestamp, domínio, inclusive futuro) | *não-retentável* -> DLT imediato com `x-rejection-reason`/`-detail`/`-at`; desfecho `rejected{reason}` |
-| **Transitória** | `BalanceStoreUnavailableException(failureCause = THROTTLED\|UNAVAILABLE\|TIMEOUT)` (throttling, 5xx, timeout, conexão, DynamoDB fora) | `ExponentialBackOff(500 ms, x2, máx 30 s, jitter 250 ms, tentativas ilimitadas)` + `ContainerPausingBackOffHandler` (pausa o container, mantém o poll, mensagem fica no broker); **nunca** DLT; `balance.consumer.backpressure` |
+| **Transitória** | `BalanceStoreUnavailableException(failureCause = THROTTLED\|UNAVAILABLE\|TIMEOUT\|MISCONFIGURED)` (throttling, 5xx, timeout, conexão, DynamoDB fora; `MISCONFIGURED` = tabela inexistente, acesso negado ou credencial ausente/inválida/expirada, só muda o diagnóstico) | `ExponentialBackOff(500 ms, x2, máx 30 s, jitter 250 ms, tentativas ilimitadas)` + `ContainerPausingBackOffHandler` (pausa o container PAI, isto é, todas as threads de consumo da instância; mantém o poll; mensagem fica no broker); **nunca** DLT; `balance.consumer.backpressure` |
 | **Não classificada** | qualquer outra exceção (inclui `BalanceStoreRejectedException`) | `FixedBackOff(100 ms, 2)` (3 entregas) e DLT `unprocessable_event` — evita que um defeito determinístico bloqueie a partição para sempre (Constitution III) |
 
   DLT indisponível => a publicação falha, o registro **não é confirmado** e é reentregue (`waitForSendResultTimeout=5 s`,
@@ -347,10 +347,11 @@ Sem alteração de versões existentes: AWS SDK BOM 2.46.7 (última: 2.55.7; sem
     nos seeds, `stop_grace_period: 40s`, porta de gerenciamento 8082, `healthcheck` do app.
   - `Makefile`: remove alvos/variáveis de `hello`; novos: `kafka-produce-scenario` (eventos determinísticos: mesma conta, desordem, duplicata,
     empate, DISABLED, veneno), `balance-get ACCOUNT=<uuid>`, `chaos-dynamodb-pause/unpause`, `load-test` (opcional); `db-scan` aponta para a nova tabela.
-  - `Dockerfile`: usuário **não-root** (uid 10001), `JAVA_TOOL_OPTIONS="-XX:MaxRAMPercentage=75 -XX:+ExitOnOutOfMemoryError"`,
+  - `Dockerfile`: usuário **não-root** (uid 10001), flags da JVM `-XX:MaxRAMPercentage=75 -XX:+ExitOnOutOfMemoryError` **no `ENTRYPOINT`** (a versão inicial usava `JAVA_TOOL_OPTIONS`; a linha
+    `Picked up JAVA_TOOL_OPTIONS` da JVM não é JSON e quebraria o log estruturado; corrigido na Phase 11 do `tasks.md`),
     `HEALTHCHECK` (curl está na imagem `eclipse-temurin:21-jre`, verificado) em `/actuator/health/liveness`, `EXPOSE 8080 8082`, ENTRYPOINT em
     *exec form* (JVM recebe SIGTERM e o graceful shutdown funciona). **Tags fixas** `eclipse-temurin:21.0.12_8-jdk-noble`/`-jre-noble`
-    (a atual `21-jre` flutua; tag fixa exige rotina de atualização) — *decisão proposta — requer validação*.
+    (a atual `21-jre` flutua; tag fixa exige rotina de atualização) — *decisão aprovada pelo autor na revisão do plano*.
   - `DynamoDbConfig`: `endpointOverride` e credenciais estáticas somente se `DYNAMODB_ENDPOINT` estiver definido; senão `DefaultCredentialsProvider` (Constitution: sem segredos; chain fora do local).
   - CI (`build`, `test`, `docker`, `codeql`): sem mudança de estrutura. O job de integração continua `docker compose up dynamodb dynamodb-seed redpanda redpanda-seed`;
     imagem `itau-hello-world` renomeada para `consulta-saldo` em Makefile e `docker.yml` (opcional).
@@ -419,28 +420,30 @@ Cada ADR: contexto, decisão, alternativas, consequências (Constitution VIII). 
 | Mesmo `transaction.id` + timestamp com conteúdo divergente | `duplicate` + anomalia — R-04 |
 | Partições, retries, circuit breaker, modelagem | R-03, R-07..R-11 |
 | Retenção de mensagens rejeitadas | DLT 14 dias — `kafka-events.md` |
-| Carga de referência (a confirmar com o cliente) | 1.000 ev/s e 500 consultas/s usados no dimensionamento; ver seção 5 |
+| Carga de referência | Premissa do autor (o enunciado não fixa volume): 1.000 ev/s e 500 consultas/s usados no dimensionamento; ver seção 5 |
 
-## 5. Decisões propostas que requerem validação do usuário
+## 5. Decisões que dependiam do usuário e o que foi decidido
+
+Todas as decisões abaixo foram propostas nesta pesquisa e **aprovadas pelo autor na revisão do plano** (`docs/metodologia-ia.md`, "Decisões tomadas pelo autor humano"); os itens 2 e 3 têm decisão explícita do autor, registrada no próprio item. O item 11 não foi validado com o cliente: é premissa do autor.
 
 1. **Remover o exemplo `hello`** (código, testes, seeds, `http/hello.http`) e generalizar o teste Konsist (R-01).
 2. ~~`balanceAmount` como `S`~~ **Decidido pelo usuário: `N` + `BigDecimal`**, escala completada às casas da moeda na resposta (R-06).
 3. **Tolerância de futuro `PT5M`**, **mínimo 2000-01-01** para `transaction.timestamp` e **mínimo 1900-01-01** para `account.created_at` (R-06; aprovado pelo usuário, com a correção da revisão).
-4. **Fuso `America/Sao_Paulo`** e formato `ISO_OFFSET_DATE_TIME` (fração só quando não nula) (R-06).
+4. **Fuso `America/Sao_Paulo`** e formato `ISO_OFFSET_DATE_TIME` (fração sem zeros à direita e ausente quando zero; ver ADR-0005) (R-06).
 5. **12 partições** (principal) e **3** (DLT); **retenção do DLT 14 dias**; RF 3 em produção (R-07).
 6. **Sem ledger, sem GSI** na v1 (R-03) e **sem coalescência** (R-09).
 7. **Tags Docker fixas** (`21.0.12_8-*-noble`) e renomear a imagem `itau-hello-world` (R-15).
 8. **Porta de gerenciamento 8082** separada da API (R-13).
 9. **Sem OpenTelemetry** e **sem springdoc** (R-12, R-16).
 10. **k6** como teste de carga opcional (R-14).
-11. Carga de referência de 1.000 ev/s e 500 req/s ainda **a confirmar com o cliente** (Assumptions da spec).
+11. Carga de referência de 1.000 ev/s e 500 req/s: **premissa do autor; o enunciado não fixa volume** (Assumptions da spec). Usada só no dimensionamento (12 partições, on-demand) e para dar sentido a SC-001/SC-002.
 
 ## 6. Riscos e itens em aberto
 
 | # | Risco | Mitigação |
 |---|-------|-----------|
 | R1 | `resilience4j-micrometer` compilada contra Micrometer 1.16 e executada com 1.17 | Comprovado no spike; teste de integração de métricas do CB na implementação |
-| R2 | Sem DLT, a publicação é retentada sem backoff exponencial próprio (limitada por `max.block.ms`) | Alerta em `balance.dlt.publish.failures`; considerar `BackOff` dedicado se relevante |
+| R2 | Sem DLT, a publicação é retentada sem backoff exponencial próprio (limitada por `max.block.ms`) e o laço de reentrega ocupa a thread de consumo inteira, não só a partição | Alerta em `balance.dlt.publish.failures`; evolução: `BackOff` dedicado (ADR-0008) |
 | R3 | DynamoDB Local não emula throttling/5xx/latência: a classificação transitória só se prova com injeção de falhas no SDK | Testes com cliente decorado que lança as exceções reais do SDK; outage real via `docker compose pause` |
 | R4 | Nulidade JSpecify do Spring Kafka 4.1 (`RetryListener.failedDelivery(record, Exception?, int)`) surpreende em Kotlin | Anotado; usar `Exception?` (comprovado no spike) |
 | R5 | Cobertura JaCoCo com classes geradas do Kotlin (`data class`, `value class`) pode derrubar o gate | Manter modelos enxutos; testar `equals/hashCode` só onde há regra; sem exclusões novas |
@@ -449,6 +452,9 @@ Cada ADR: contexto, decisão, alternativas, consequências (Constitution VIII). 
 | R8 | O gerador do starter usa conta aleatória por evento: nunca produz desordem por conta | `make kafka-produce-scenario` (tarefa) gera casos determinísticos |
 | R9 | `HealthIndicator` (grupo `dependencies`) chamando `DescribeTable` pode competir com limites de plano de controle | Cache de 5 s; alternativa `GetItem` de chave inexistente |
 | R10 | Constitution proíbe co-autoria de IA em commits; o contexto de execução sugere trailer de atribuição | A Constitution prevalece (Governance); conferir antes de commitar |
+| R11 | A pausa do backoff vale para todas as threads da instância (container pai), excessiva para *throttling* de uma conta quente | Correta para indisponibilidade geral; evolução: pausa por thread ou partição (ADR-0008) |
+| R12 | Defeito sistêmico manda mensagens válidas ao DLT como `unprocessable_event` | Alerta em `rate(balance_events_total{reason="unprocessable_event"}[5m]) > 0` e replay manual; evolução: fusível por taxa (ADR-0008) |
+| R13 | Limites de tamanho do DLT (`max.request.size`, `max.message.bytes`) e invariantes de configuração (`max.poll.records x write timeout < max.poll.interval`, `dlt != topic`) não validados na partida | Invariante coberto por teste com os valores padrão; evolução: validar na partida (README, "Riscos conhecidos") |
 
 ## 7. Cobertura dos critérios de avaliação do cliente
 
