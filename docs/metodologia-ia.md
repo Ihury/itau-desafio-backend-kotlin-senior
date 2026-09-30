@@ -74,7 +74,7 @@ antes de seguir. Exemplos:
 - **TDD com evidência de vermelho**: em cada unidade o teste é escrito e falha antes da implementação. Para os testes de
   integração escritos depois do código, a evidência é uma **mutação temporária descartável** (por exemplo, inverter a condição da
   escrita ou usar "o último a chegar vence") que faz o teste falhar, registrada na nota de execução da tarefa correspondente.
-- **Gates em todo commit**: `./gradlew check` com **JaCoCo >= 90%** (nunca reduzido, sem exclusões) e o teste de arquitetura
+- **Gates em todo commit**: `./gradlew check` com **JaCoCo >= 90%** (nunca reduzido; sem exclusões novas: a única é a classe `Application`, herdada do starter) e o teste de arquitetura
   **Konsist**; `make integration-test` (DynamoDB Local e Redpanda reais) sempre que a unidade toca infraestrutura ou testes de
   integração.
 - **Revisão a cada fase**: o orquestrador reexecutou os gates, leu os diffs contra a constitution e devolveu ajustes.
@@ -86,6 +86,24 @@ antes de seguir. Exemplos:
   divergências e evidências).
 - **Privacidade por construção**: teste com valores sentinela garante que logs não contêm saldo, titular nem payload.
 - **Sem co-autoria de IA nos commits**. O uso de IA é declarado **neste documento e no README**, não nos commits.
+
+## Code review pré-entrega
+
+Antes da entrega foi feito um code review do código já implementado. Os fatos:
+
+- **Seis revisores** (subagentes Claude Sonnet) rodaram **em paralelo e somente leitura**, cada um com um foco: (1) concorrência e
+  domínio; (2) Kafka e resiliência; (3) API e leitura; (4) qualidade dos testes; (5) produção, infraestrutura e segurança; (6) olhar
+  do avaliador e aderência ao enunciado.
+- Resultado: **0 achados críticos e 0 altos**. Os achados médios e baixos foram **triados pelo orquestrador**, que verificou cada um
+  no código antes de propor uma ação.
+- **O autor decidiu o escopo.** Foi decidido **corrigir**: testes de caos que pulavam em silêncio, leitura que reaplicava os limites de
+  timestamp da escrita, diagnóstico `misconfigured` para falha de configuração do DynamoDB, nome do projeto, log JSON puro na imagem
+  (flags da JVM no `ENTRYPOINT`), CI sem reexecutar os testes unitários, ruído de log com o circuit breaker aberto e a documentação. Foi
+  decidido **não alterar** o material do starter (`Makefile`, compose do DynamoDB e portas publicadas) nem o formato de `updated_at`,
+  que ficaram apenas documentados como riscos conhecidos e evolução.
+- O trabalho está na **Phase 11** do
+  [`tasks.md`](../specs/001-consulta-saldo/tasks.md#phase-11-remediação-do-code-review-pré-entrega): a etapa 1 (código, testes e build) e a
+  etapa 2 (documentação), cada tarefa com sua nota de execução.
 
 ## Como reproduzir e auditar
 
