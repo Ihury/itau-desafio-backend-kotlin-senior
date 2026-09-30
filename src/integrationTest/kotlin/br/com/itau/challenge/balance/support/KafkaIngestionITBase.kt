@@ -7,6 +7,7 @@ import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
+import org.springframework.boot.test.web.server.LocalManagementPort
 import org.springframework.boot.test.web.server.LocalServerPort
 import org.springframework.kafka.config.KafkaListenerEndpointRegistry
 import org.springframework.test.context.ActiveProfiles
@@ -46,6 +47,10 @@ abstract class KafkaITBase {
     @LocalServerPort
     protected var port: Int = 0
 
+    /** Porta do Actuator (health e prometheus), separada da API. */
+    @LocalManagementPort
+    protected var managementPort: Int = 0
+
     @Autowired
     protected lateinit var registry: KafkaListenerEndpointRegistry
 
@@ -74,6 +79,21 @@ abstract class KafkaITBase {
 
     protected fun get(accountId: String): HttpResponse<String> =
         http.send(HttpRequest.newBuilder(URI.create("http://localhost:$port/balances/$accountId")).GET().build(), HttpResponse.BodyHandlers.ofString())
+
+    /** GET na porta da API, em um caminho qualquer. */
+    protected fun api(path: String): HttpResponse<String> =
+        http.send(HttpRequest.newBuilder(URI.create("http://localhost:$port$path")).GET().build(), HttpResponse.BodyHandlers.ofString())
+
+    /** GET na porta de gerenciamento (Actuator). */
+    protected fun management(path: String): HttpResponse<String> =
+        http.send(HttpRequest.newBuilder(URI.create("http://localhost:$managementPort$path")).GET().build(), HttpResponse.BodyHandlers.ofString())
+
+    /** Amostras de `/actuator/prometheus` na porta de gerenciamento. */
+    protected fun scrape(): List<PrometheusSample> {
+        val response = management("/actuator/prometheus")
+        assertEquals(200, response.statusCode(), "GET /actuator/prometheus")
+        return PrometheusSample.parse(response.body())
+    }
 
     protected fun publish(payload: String) = topics.publish(payload)
 

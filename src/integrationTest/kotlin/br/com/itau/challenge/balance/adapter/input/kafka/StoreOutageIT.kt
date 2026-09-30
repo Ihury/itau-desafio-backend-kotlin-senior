@@ -5,6 +5,7 @@ import br.com.itau.challenge.balance.support.DynamoDbTestSupport
 import br.com.itau.challenge.balance.support.EventPayloads
 import br.com.itau.challenge.balance.support.KafkaITBase
 import br.com.itau.challenge.balance.support.TopicSet
+import br.com.itau.challenge.balance.support.single
 import io.github.resilience4j.circuitbreaker.CircuitBreaker
 import org.awaitility.kotlin.await
 import org.awaitility.kotlin.until
@@ -58,6 +59,24 @@ class StoreOutageIT : KafkaITBase() {
     private fun backpressureTotal(): Double = meterRegistry.find("balance.consumer.backpressure").counters().sumOf { it.count() }
 
     private fun backpressure(cause: String): Double = meterRegistry.get("balance.consumer.backpressure").tag("cause", cause).counter().count()
+
+    private fun dependencyUp(): Double = scrape().single("balance_dependency_up", "dependency" to "dynamodb")
+
+    private fun status(group: String): Int = management("/actuator/health/$group").statusCode()
+
+    /** Saude com o DynamoDB fora (FR-033): so `dependencies` cai; a instancia continua em rotacao (liveness e readiness 200). */
+    private fun assertHealthDuringOutage(knownAccount: String) {
+        // o probe tem timeout curto e o resultado fica em cache por 5 s: dentro de 5 s + cache o grupo cai
+        await.atMost(Duration.ofSeconds(15)).pollInterval(Duration.ofMillis(500)).untilAsserted { assertEquals(503, status("dependencies"), "dependencies") }
+        assertEquals("""{"status":"DOWN"}""", management("/actuator/health/dependencies").body(), "show-details=never")
+        assertEquals(200, status("readiness"), "a readiness NAO depende do DynamoDB (a instancia continua em rotacao)")
+        assertEquals("""{"status":"UP"}""", management("/actuator/health/readiness").body())
+        assertEquals(200, status("liveness"), "a liveness independe do banco")
+        assertEquals("""{"status":"UP"}""", management("/actuator/health/liveness").body())
+        assertEquals(503, management("/actuator/health").statusCode(), "a raiz agrega as dependencias: nao serve de sonda")
+        await.atMost(Duration.ofSeconds(15)).pollInterval(Duration.ofMillis(500)).untilAsserted { assertEquals(0.0, dependencyUp(), "balance_dependency_up{dependency=dynamodb}") }
+        assertEquals(503, get(knownAccount).statusCode(), "a API segue respondendo 503 explicito")
+    }
 
     private data class Timed(
         val response: HttpResponse<String>,
@@ -120,6 +139,7 @@ class StoreOutageIT : KafkaITBase() {
             assertEquals(503, fast.response.statusCode())
             assertTrue(fast.millis < 500, "com o circuito aberto a resposta e imediata: ${fast.millis} ms")
             println("OUTAGE-503-OPEN-CIRCUIT-MS=${fast.millis}")
+            assertHealthDuringOutage(known)
 
             // ingestao durante a falha (o evento foi publicado logo apos o pause, junto das consultas): ele fica no broker, nada vai
             // ao DLT e o backpressure cresce a cada tentativa, com o backoff (500 ms x2, jitter) chegando a varios segundos
@@ -156,6 +176,13 @@ class StoreOutageIT : KafkaITBase() {
         }
         awaitBalance(eventAccount, "321.00")
         assertEquals(200, get(known).statusCode())
+        // a dependencia volta sozinha (cache de 5 s): dependencies 200, gauge 1; liveness e readiness nunca cairam
+        await.atMost(Duration.ofSeconds(20)).pollInterval(Duration.ofMillis(500)).untilAsserted { assertEquals(200, status("dependencies"), "dependencies apos o unpause") }
+        assertEquals("""{"status":"UP"}""", management("/actuator/health/dependencies").body())
+        assertEquals(1.0, dependencyUp(), "balance_dependency_up apos o unpause")
+        assertEquals(200, status("readiness"))
+        assertEquals(200, status("liveness"))
+        assertEquals(200, management("/actuator/health").statusCode(), "a raiz volta a 200")
         assertTrue(
             backpressure("timeout") + backpressure("unavailable") - unavailableTimeoutBefore >= 5,
             "com o DynamoDB pausado a falha e classificada como timeout/unavailable",

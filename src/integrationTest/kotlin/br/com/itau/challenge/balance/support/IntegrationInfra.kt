@@ -125,14 +125,25 @@ class TopicSet(
         IntegrationInfra.adminClient().use { it.createTopics(listOf(dltDefinition())).all().get(30, TimeUnit.SECONDS) }
     }
 
-    /** Registra as propriedades do teste (`@DynamicPropertySource`); cria os topicos antes de o contexto subir. */
-    fun registerProperties(registry: DynamicPropertyRegistry) {
+    /**
+     * Propriedades do teste (topicos, grupo, broker, listener ligado e portas aleatorias para a API e o gerenciamento, de modo que
+     * um `docker compose up app` na 8080/8082 nunca colida com os ITs); cria os topicos antes de o contexto subir.
+     */
+    fun properties(): Map<String, String> {
         check(topicsCreated)
-        registry.add("balance.events.topic") { topic }
-        registry.add("balance.events.dlt-topic") { dltTopic }
-        registry.add("spring.kafka.bootstrap-servers") { IntegrationInfra.bootstrapServers }
-        registry.add("spring.kafka.consumer.group-id") { groupId }
-        registry.add("spring.kafka.listener.auto-startup") { "true" }
+        return mapOf(
+            "balance.events.topic" to topic,
+            "balance.events.dlt-topic" to dltTopic,
+            "spring.kafka.bootstrap-servers" to IntegrationInfra.bootstrapServers,
+            "spring.kafka.consumer.group-id" to groupId,
+            "spring.kafka.listener.auto-startup" to "true",
+            "management.server.port" to "0",
+        )
+    }
+
+    /** Registra as propriedades do teste (`@DynamicPropertySource`). */
+    fun registerProperties(registry: DynamicPropertyRegistry) {
+        properties().forEach { (name, value) -> registry.add(name) { value } }
     }
 
     /** Publica os bytes no topico principal, sem chave (como o autorizador), e espera a confirmacao do broker. */
