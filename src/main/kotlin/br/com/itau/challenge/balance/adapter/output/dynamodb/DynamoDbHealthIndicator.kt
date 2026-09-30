@@ -72,6 +72,8 @@ class DynamoDbHealthIndicator(
             val status = client.describeTable(request).table()?.tableStatus()
             if (status == TableStatus.ACTIVE || status == TableStatus.UPDATING) null else "table status ${status ?: "unknown"}"
         } catch (failure: RuntimeException) {
+            // Falha do probe: vira estado DOWN (gauge e grupo `dependencies`); so a classe da excecao vai ao log, nunca a mensagem.
+            log.debug("dynamodb probe failed exception={}", failure.javaClass.simpleName)
             failure.javaClass.simpleName
         }
 

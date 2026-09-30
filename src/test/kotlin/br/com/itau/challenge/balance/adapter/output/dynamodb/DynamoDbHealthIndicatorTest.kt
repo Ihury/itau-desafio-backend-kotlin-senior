@@ -213,10 +213,13 @@ class DynamoDbHealthIndicatorTest {
         tableIs(TableStatus.ACTIVE)
         indicator.health()
 
-        val messages = appender.list.map { it.formattedMessage + it.throwableProxy?.message.orEmpty() }
+        val transitions = appender.list.filter { it.level.isGreaterOrEqual(Level.INFO) }
+        val messages = transitions.map { it.formattedMessage + it.throwableProxy?.message.orEmpty() }
         assertEquals(2, messages.size, "so as transicoes UP->DOWN e DOWN->UP: $messages")
         assertTrue(messages[0].contains("SdkClientException"), messages[0])
-        assertTrue(messages.none { it.contains("dynamodb:8000") }, "a mensagem da excecao nao pode ir ao log: $messages")
-        assertEquals(Level.WARN, appender.list[0].level)
+        assertEquals(Level.WARN, transitions[0].level)
+        val everything = appender.list.map { it.formattedMessage + it.throwableProxy?.message.orEmpty() }
+        assertTrue(everything.none { it.contains("dynamodb:8000") }, "a mensagem da excecao nao pode ir ao log: $everything")
+        assertTrue(appender.list.any { it.level == Level.DEBUG && it.formattedMessage.contains("SdkClientException") }, "cada falha do probe deixa um log de depuracao")
     }
 }

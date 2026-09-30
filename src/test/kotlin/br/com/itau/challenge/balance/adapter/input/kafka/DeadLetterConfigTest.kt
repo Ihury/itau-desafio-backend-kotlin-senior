@@ -6,6 +6,10 @@ import br.com.itau.challenge.balance.domain.exception.InvalidEventException
 import br.com.itau.challenge.balance.domain.model.RejectionReason
 import br.com.itau.challenge.balance.domain.model.StoreFailureCause
 import br.com.itau.challenge.balance.testing.RecordingProcessingMetrics
+import ch.qos.logback.classic.Level
+import ch.qos.logback.classic.Logger
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
 import org.apache.kafka.clients.consumer.Consumer
 import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.apache.kafka.clients.producer.ProducerRecord
@@ -20,6 +24,8 @@ import org.mockito.Mockito.mock
 import org.mockito.Mockito.never
 import org.mockito.Mockito.times
 import org.mockito.Mockito.verify
+import org.slf4j.LoggerFactory
+import org.slf4j.MDC
 import org.springframework.kafka.core.KafkaOperations
 import org.springframework.kafka.core.ProducerFactory
 import org.springframework.kafka.listener.BackOffHandler
@@ -356,5 +362,46 @@ class DeadLetterConfigTest {
         // o `DefaultErrorHandler` padrao trataria ClassCastException como fatal (sem espera); aqui so o evento invalido e permanente
         assertFalse(deliver(ClassCastException("x")))
         assertEquals(listOf(100L), backOffs.intervals)
+    }
+
+    // ----- logs do ciclo de falha (FR-032, FR-035) -------------------------------------------------------------------
+
+    private inline fun <T> capturingLogs(block: (ListAppender<ILoggingEvent>) -> T): T {
+        val logger = LoggerFactory.getLogger(DeadLetterConfig::class.java) as Logger
+        val appender = ListAppender<ILoggingEvent>().apply { start() }
+        logger.addAppender(appender)
+        try {
+            return block(appender)
+        } finally {
+            logger.detachAppender(appender)
+        }
+    }
+
+    @Test
+    fun `an invalid event is logged once as an isolation with the reason and never as an unclassified failure`() {
+        capturingLogs { logs ->
+            deliver(InvalidEventException(RejectionReason.INVALID_CURRENCY, "transaction.currency"))
+
+            assertTrue(logs.list.none { it.level == Level.ERROR }, "evento invalido e um desfecho esperado, nao um defeito: ${logs.list.map { it.formattedMessage }}")
+            val isolated = logs.list.single { it.formattedMessage.startsWith("message isolated in the dlt") }
+            assertEquals(Level.WARN, isolated.level)
+            assertTrue("reason=invalid_currency" in isolated.formattedMessage && "detail=transaction.currency" in isolated.formattedMessage)
+        }
+    }
+
+    @Test
+    fun `the failure cycle logs carry the topic partition offset as correlation id and clean the mdc afterwards`() {
+        capturingLogs { logs ->
+            deliver(IllegalStateException("defeito"))
+            deliver(BalanceStoreUnavailableException(StoreFailureCause.UNAVAILABLE))
+            deliver(InvalidEventException(RejectionReason.MISSING_FIELD))
+
+            val correlated = logs.list.filter { it.loggerName == DeadLetterConfig::class.java.name }
+            assertTrue(correlated.size >= 3)
+            correlated.forEach {
+                assertEquals("transacoes-financeiras-processadas-7@41", it.mdcPropertyMap["correlationId"], it.formattedMessage)
+            }
+            assertNull(MDC.get("correlationId"), "o MDC do thread do consumer e sempre limpo")
+        }
     }
 }

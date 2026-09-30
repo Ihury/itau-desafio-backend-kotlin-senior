@@ -6,6 +6,7 @@ import br.com.itau.challenge.balance.port.output.ProcessingMetrics
 import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.apache.kafka.common.TopicPartition
 import org.slf4j.LoggerFactory
+import org.slf4j.MDC
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.boot.context.properties.ConfigurationProperties
 import org.springframework.boot.context.properties.EnableConfigurationProperties
@@ -147,7 +148,8 @@ class DeadLetterConfig {
 
     /**
      * Metricas e logs do ciclo de falha. NUNCA registra payload, saldo, titular nem texto de excecao: so coordenadas do
-     * registro, classe da excecao e motivo.
+     * registro, classe da excecao e motivo. O MDC `correlationId` (`<topic>-<partition>@<offset>`, o mesmo do listener) e posto
+     * so durante cada log e sempre removido.
      */
     private class DeadLetterRetryListener(
         private val metrics: ProcessingMetrics,
@@ -158,19 +160,23 @@ class DeadLetterConfig {
             deliveryAttempt: Int,
         ) {
             val failure = exception?.let { FailureClassifier.unwrap(it) }
-            when (failure) {
-                is BalanceStoreUnavailableException -> {
-                    metrics.backpressure(failure.failureCause)
-                    log.warn("store unavailable, container paused for the back off {} attempt={} cause={}", coordinates(record), deliveryAttempt, failure.failureCause)
+            correlated(record) {
+                when (failure) {
+                    is BalanceStoreUnavailableException -> {
+                        metrics.backpressure(failure.failureCause)
+                        log.warn("store unavailable, container paused for the back off {} attempt={} cause={}", coordinates(record), deliveryAttempt, failure.failureCause)
+                    }
+                    // Evento invalido e um desfecho esperado (permanente, sem reentrega): o isolamento e logado em `recovered`.
+                    is InvalidEventException -> log.debug("invalid event {} reason={}", coordinates(record), failure.reason.code)
+                    else ->
+                        log.error(
+                            "unclassified failure {} attempt={} exception={} at={}",
+                            coordinates(record),
+                            deliveryAttempt,
+                            failure?.javaClass?.name,
+                            failure?.stackTrace?.firstOrNull(),
+                        )
                 }
-                else ->
-                    log.error(
-                        "unclassified failure {} attempt={} exception={} at={}",
-                        coordinates(record),
-                        deliveryAttempt,
-                        failure?.javaClass?.name,
-                        failure?.stackTrace?.firstOrNull(),
-                    )
             }
         }
 
@@ -180,7 +186,9 @@ class DeadLetterConfig {
         ) {
             val rejection = FailureClassifier.rejectionOf(exception ?: IllegalStateException())
             metrics.rejected(rejection.reason)
-            log.warn("message isolated in the dlt {} reason={} detail={}", coordinates(record), rejection.reason.code, rejection.detail)
+            correlated(record) {
+                log.warn("message isolated in the dlt {} reason={} detail={}", coordinates(record), rejection.reason.code, rejection.detail)
+            }
         }
 
         override fun recoveryFailed(
@@ -189,16 +197,31 @@ class DeadLetterConfig {
             failure: Exception,
         ) {
             metrics.dltPublishFailed()
-            log.error("dlt publication failed, record not confirmed and will be redelivered {} exception={}", coordinates(record), failure.javaClass.name)
+            correlated(record) {
+                log.error("dlt publication failed, record not confirmed and will be redelivered {} exception={}", coordinates(record), failure.javaClass.name)
+            }
         }
 
         private fun coordinates(record: ConsumerRecord<*, *>) = "${record.topic()}-${record.partition()}@${record.offset()}"
+
+        private fun correlated(
+            record: ConsumerRecord<*, *>,
+            log: () -> Unit,
+        ) {
+            MDC.put(CORRELATION_ID, coordinates(record))
+            try {
+                log()
+            } finally {
+                MDC.remove(CORRELATION_ID)
+            }
+        }
     }
 
     private companion object {
         const val TRANSIENT_MULTIPLIER = 2.0
         const val UNCLASSIFIED_INTERVAL_MS = 100L
         const val UNCLASSIFIED_RETRIES = 2L
+        const val CORRELATION_ID = "correlationId"
         private val log = LoggerFactory.getLogger(DeadLetterConfig::class.java)
     }
 }

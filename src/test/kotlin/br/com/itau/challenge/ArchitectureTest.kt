@@ -5,6 +5,7 @@ import com.lemonappdev.konsist.api.architecture.KoArchitectureCreator.assertArch
 import com.lemonappdev.konsist.api.architecture.Layer
 import com.lemonappdev.konsist.api.declaration.KoFileDeclaration
 import org.junit.jupiter.api.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
@@ -166,7 +167,65 @@ class ArchitectureTest {
         assertNoViolations("balance.domain so pode importar kotlin.*, java.* e o proprio dominio", violations)
     }
 
+    @Test
+    fun `no catch block in production swallows an exception without a log, a metric or a rethrow`() {
+        val neverReturns = production.files.flatMap { NOTHING_FUNCTION.findAll(stripComments(it.text)).map { match -> match.groupValues[1] } }.toSet()
+        val violations = production.files.flatMap { file -> silentCatches(file.text, neverReturns).map { "${file.path}: $it" } }
+        assertNoViolations("todo catch em main precisa de log, metrica ou throw e nao pode ser vazio (Constitution VII, FR-035)", violations)
+    }
+
+    @Test
+    fun `the silent catch rule flags empty and swallowing catches and accepts log, metric, rethrow and never-returning helpers`() {
+        fun flagged(body: String) = silentCatches("fun f() { try { g() } catch (e: Exception) { $body } }", setOf("giveUp")).size
+        assertEquals(1, flagged(""), "catch vazio")
+        assertEquals(1, flagged("// ignora"), "catch so com comentario")
+        assertEquals(1, flagged("return null"), "catch que engole e devolve valor")
+        assertEquals(1, flagged("fallback = true"), "catch que engole e segue")
+        assertEquals(0, flagged("log.warn(\"x\", e)"), "com log")
+        assertEquals(0, flagged("failures.increment()"), "com contador")
+        assertEquals(0, flagged("durations.getValue(x).record(1, NANOSECONDS)"), "com timer")
+        assertEquals(0, flagged("throw IllegalStateException()"), "relancando")
+        assertEquals(0, flagged("giveUp(e)"), "helper que nunca retorna")
+    }
+
+    /** Descricao de cada `catch` de [source] que nao tem corpo util (vazio) ou nao registra log/metrica nem relanca. */
+    private fun silentCatches(
+        source: String,
+        neverReturns: Set<String>,
+    ): List<String> {
+        val text = stripComments(source)
+        return CATCH.findAll(text).mapNotNull { match ->
+            val open = text.indexOf('{', match.range.last)
+            val body = if (open < 0) "" else blockAt(text, open).trim()
+            val accepted =
+                body.isNotEmpty() &&
+                    (ACCOUNTED.containsMatchIn(body) || neverReturns.any { Regex("\\b${Regex.escape(it)}\\(").containsMatchIn(body) })
+            if (accepted) null else "catch (${match.groupValues[1].trim()}) { ${body.take(60)} }"
+        }.toList()
+    }
+
+    private fun blockAt(
+        text: String,
+        open: Int,
+    ): String {
+        var depth = 0
+        for (index in open until text.length) {
+            when (text[index]) {
+                '{' -> depth++
+                '}' -> if (--depth == 0) return text.substring(open + 1, index)
+            }
+        }
+        return text.substring(open + 1)
+    }
+
+    private fun stripComments(source: String): String = source.replace(BLOCK_COMMENT, "").replace(LINE_COMMENT, "")
+
     private companion object {
+        val CATCH = Regex("""catch\s*\(([^)]*)\)""")
+        val BLOCK_COMMENT = Regex("""/\*.*?\*/""", RegexOption.DOT_MATCHES_ALL)
+        val LINE_COMMENT = Regex("""(?m)^\s*//.*$|(?<=\s)//[^\n]*$""")
+        val ACCOUNTED = Regex("""\bthrow\b|\blog\.\w+\(|\.increment\(|\brecord\(|\bmetrics\.""")
+        val NOTHING_FUNCTION = Regex("""fun\s+(?:[\w<>?,. ]+\.)?(\w+)\([^)]*\)\s*:\s*Nothing""")
         const val ROOT = "br.com.itau.challenge"
         val LAYERS_WITH_DIRECTION = listOf("domain", "port", "application", "adapter")
         val REQUIRED_LAYERS = listOf("domain", "port", "application", "adapter")

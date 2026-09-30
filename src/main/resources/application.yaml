@@ -4,6 +4,9 @@ server:
 spring:
   application:
     name: consulta-saldo
+  # Sem banner: com logs JSON (uma linha = um objeto) o banner ASCII em varias linhas quebraria o parse do coletor de logs.
+  main:
+    banner-mode: "off"
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:19092}
     # Consumer at-least-once (contracts/kafka-events.md secao 2): bytes verbatim, commit so pelo container apos o listener
@@ -45,6 +48,13 @@ spring:
   jackson:
     write:
       write-bigdecimal-as-plain: true
+
+# Logs JSON nativos do Spring Boot (format `logstash`): o MDC vai como chaves de topo (`correlationId`, `accountId`, `transactionId`).
+# Nunca sao logados saldo, titular, payload nem mensagem de parser (FR-032); ver LoggingPrivacyTest.
+logging:
+  structured:
+    format:
+      console: ${LOGGING_STRUCTURED_FORMAT_CONSOLE:logstash}
 
 # Actuator em porta PROPRIA (contracts/observability.md): health, info e prometheus nunca respondem na porta da API. Em producao a porta de
 # gerenciamento nao deve ser roteada pelo balanceador publico. Histograma de `http.server.requests` com SLO de 50 ms a 2 s; os timers de
