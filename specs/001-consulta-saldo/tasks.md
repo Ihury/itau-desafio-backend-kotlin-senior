@@ -495,7 +495,7 @@ Os atalhos abaixo são expandidos nos caminhos deste arquivo; todos os caminhos 
 
 ### Commit C43: `build: renomeia o projeto para consulta-saldo`
 
-- [ ] T187 `settings.gradle.kts` (`rootProject.name = "consulta-saldo"`) e `build.gradle.kts` (`description`); conferir `Dockerfile` (cópia do jar), CI e ITs com o novo nome de jar
+- [X] T187 `settings.gradle.kts` (`rootProject.name = "consulta-saldo"`) e `build.gradle.kts` (`description`); conferir `Dockerfile` (cópia do jar), CI e ITs com o novo nome de jar
 
 ### Commit C44: `fix(docker): passa flags da jvm no entrypoint para manter os logs em json`
 
