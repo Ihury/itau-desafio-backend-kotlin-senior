@@ -4,8 +4,10 @@ import br.com.itau.challenge.balance.adapter.input.kafka.BackOffProperties
 import br.com.itau.challenge.balance.adapter.input.kafka.DeadLetterConfig
 import br.com.itau.challenge.balance.adapter.input.kafka.TransactionEventListener
 import br.com.itau.challenge.balance.adapter.output.dynamodb.BalanceItemMapper
+import br.com.itau.challenge.balance.domain.exception.BalanceStoreUnavailableException
 import br.com.itau.challenge.balance.domain.exception.InvalidEventException
 import br.com.itau.challenge.balance.domain.model.BalanceSnapshot
+import br.com.itau.challenge.balance.domain.model.StoreFailureCause
 import br.com.itau.challenge.balance.domain.model.TransactionEventFixtures.transactionEvent
 import br.com.itau.challenge.balance.testing.ManagedApplicationTest
 import br.com.itau.challenge.balance.testing.RecordingProcessingMetrics
@@ -41,13 +43,14 @@ import java.io.PrintWriter
 import java.io.StringWriter
 import java.time.Clock
 import java.time.Duration
+import java.util.concurrent.CompletableFuture
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
- * FR-032 e Constitution VII: os logs saem em JSON (um objeto por linha), com `correlationId`, `accountId` e `transactionId` como
+ * Os logs saem em JSON (um objeto por linha), com `correlationId`, `accountId` e `transactionId` como
  * chaves de topo, e NUNCA carregam saldo, titular, payload nem mensagem de parser. Valores sentinela sao usados em todos os
  * caminhos (aplicado, duplicado divergente, payload malformado, campos invalidos, falha do armazenamento, item corrompido e o
  * error handler do consumer, inclusive o que o proprio Spring Kafka emite).
@@ -131,11 +134,11 @@ class LoggingPrivacyTest : ManagedApplicationTest() {
         val corruptedAccount = "aaaaaaaa-1111-4222-8333-bbbbbbbbbbbb"
         assertEquals(500, api("/balances/$corruptedAccount", "X-Correlation-Id", "teste-456").statusCode())
 
-        val all = lines(output, from)
-        assertTrue(all.isNotEmpty(), "nenhum log capturado")
-        val records = all.map { line -> runCatching { parsed(line) }.getOrElse { throw AssertionError("linha que nao e JSON: $line") } }
-        all.forEach { assertTrue(it.startsWith("{") && it.endsWith("}"), "linha nao e um objeto JSON: $it") }
-        assertNoSensitiveData(all.joinToString("\n"), "a saida de log")
+        val emittedLines = lines(output, from)
+        assertTrue(emittedLines.isNotEmpty(), "nenhum log capturado")
+        val records = emittedLines.map { line -> runCatching { parsed(line) }.getOrElse { throw AssertionError("linha que nao e JSON: $line") } }
+        emittedLines.forEach { assertTrue(it.startsWith("{") && it.endsWith("}"), "linha nao e um objeto JSON: $it") }
+        assertNoSensitiveData(emittedLines.joinToString("\n"), "a saida de log")
 
         val applied = records.first { it.text("message")?.startsWith("event applied") == true }
         assertEquals("transacoes-financeiras-processadas-7@10", applied.text("correlationId"))
@@ -164,9 +167,9 @@ class LoggingPrivacyTest : ManagedApplicationTest() {
         val template = mock(KafkaOperations::class.java) as KafkaOperations<ByteArray, ByteArray>
         doAnswer { invocation ->
             val outbound = invocation.getArgument<ProducerRecord<ByteArray, ByteArray>>(0)
-            java.util.concurrent.CompletableFuture.completedFuture(SendResult(outbound, RecordMetadata(TopicPartition(outbound.topic(), 1), 0L, 0, 0L, 0, 0)))
-        }.`when`(template).send(nullSafeProducerRecord())
-        val noWait =
+            CompletableFuture.completedFuture(SendResult(outbound, RecordMetadata(TopicPartition(outbound.topic(), 1), 0L, 0, 0L, 0, 0)))
+        }.`when`(template).send(anyProducerRecord())
+        val noOpBackOffHandler =
             object : BackOffHandler {
                 override fun onNextBackOff(
                     container: MessageListenerContainer?,
@@ -188,7 +191,7 @@ class LoggingPrivacyTest : ManagedApplicationTest() {
                 Clock.systemUTC(),
                 RecordingProcessingMetrics(),
                 BackOffProperties(initialMs = 10, maxMs = 20, jitterMs = 0),
-                noWait,
+                noOpBackOffHandler,
             )
         val consumer = mock(Consumer::class.java)
         val container = mock(MessageListenerContainer::class.java)
@@ -209,11 +212,11 @@ class LoggingPrivacyTest : ManagedApplicationTest() {
             }
         }
 
-        // permanente (parser com sentinelas), nao classificada (falha interna) e transitoria (armazenamento), com o payload sentinela
+        // permanente (parser com sentinelas), nao classificada (falha interna) e transiente (armazenamento), com o payload sentinela
         val invalid = assertFailsWith<InvalidEventException> { listener.onMessage(record("""{"transaction": $textSentinel""", 20)) }
         deliver("""{"transaction": $textSentinel""", 20, invalid, times = 1)
         deliver(payload(), 21, IllegalStateException("current balance item contradicts the failed condition"), times = 3)
-        deliver(payload(), 22, br.com.itau.challenge.balance.domain.exception.BalanceStoreUnavailableException(br.com.itau.challenge.balance.domain.model.StoreFailureCause.TIMEOUT, SdkClientException.builder().message("connect to dynamodb:8000 failed").build()), times = 2)
+        deliver(payload(), 22, BalanceStoreUnavailableException(StoreFailureCause.TIMEOUT, SdkClientException.builder().message("connect to dynamodb:8000 failed").build()), times = 2)
 
         val emitted = lines(output, from)
         assertTrue(emitted.isNotEmpty(), "o handler deveria ter registrado algo")
@@ -222,7 +225,7 @@ class LoggingPrivacyTest : ManagedApplicationTest() {
     }
 
     /** Matcher do Mockito que devolve um valor do tipo esperado (o `any()` devolve `null`, que o Kotlin recusa em tipo nao nulo). */
-    private fun nullSafeProducerRecord(): ProducerRecord<ByteArray, ByteArray> {
+    private fun anyProducerRecord():ProducerRecord<ByteArray, ByteArray> {
         any(ProducerRecord::class.java)
         return nullOf()
     }

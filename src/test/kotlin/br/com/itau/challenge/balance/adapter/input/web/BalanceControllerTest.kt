@@ -48,12 +48,12 @@ class BalanceControllerTest {
     private val accountId = AccountId.parse(DEFAULT_ACCOUNT_ID)
     private val snapshot = BalanceSnapshot.from(transactionEvent())
 
-    private fun typeOf(slug: String) = "urn:problem-type:consulta-saldo:$slug"
+    private fun problemTypeUri(slug: String) = "urn:problem-type:consulta-saldo:$slug"
 
     private fun MvcResult.header(name: String): String? = response.getHeader(name)
 
     @Test
-    fun `200 returns the balance with json, no-store and a correlation id`() {
+    fun `an existing account is answered with the balance as json, no-store and a correlation id`() {
         doReturn(snapshot).`when`(getBalance).getBalance(accountId)
 
         val result =
@@ -73,9 +73,9 @@ class BalanceControllerTest {
     }
 
     @Test
-    fun `amount is written as plain decimal completed to the currency digits (spring jackson configuration)`() {
-        val sci = BalanceSnapshot.from(transactionEvent(balanceAmount = "1E+3"))
-        doReturn(sci).`when`(getBalance).getBalance(accountId)
+    fun `amount is written as plain decimal completed to the currency digits`() {
+        val scientificNotationSnapshot = BalanceSnapshot.from(transactionEvent(balanceAmount = "1E+3"))
+        doReturn(scientificNotationSnapshot).`when`(getBalance).getBalance(accountId)
 
         mockMvc
             .perform(get("/balances/{id}", DEFAULT_ACCOUNT_ID))
@@ -84,17 +84,18 @@ class BalanceControllerTest {
     }
 
     @Test
-    fun `400 for malformed ids and the use case is never invoked`() {
-        listOf("abc", "1-1-1-1-1", "5b19c8b6-0cc4-4c72-a989-0c2ee15fa97", "5b19c8b6-0cc4-4c72-a989-0c2ee15fa97g").forEach { bad ->
+    fun `malformed ids are answered as bad request and the use case is never invoked`() {
+        val oneCharacterShort = "5b19c8b6-0cc4-4c72-a989-0c2ee15fa97"
+        listOf("abc", "1-1-1-1-1", oneCharacterShort, "5b19c8b6-0cc4-4c72-a989-0c2ee15fa97g").forEach { bad ->
             mockMvc
                 .perform(get("/balances/{id}", bad))
                 .andExpect(status().isBadRequest)
                 .andExpect(content().contentTypeCompatibleWith("application/problem+json"))
-                .andExpect(jsonPath("$.type").value(typeOf("requisicao-invalida")))
+                .andExpect(jsonPath("$.type").value(problemTypeUri("requisicao-invalida")))
                 .andExpect(jsonPath("$.status").value(400))
                 .andExpect(header().exists(CorrelationIdFilter.HEADER))
         }
-        assertEquals(35, "5b19c8b6-0cc4-4c72-a989-0c2ee15fa97".length)
+        assertEquals(35, oneCharacterShort.length)
         verifyNoInteractions(getBalance)
     }
 
@@ -106,14 +107,14 @@ class BalanceControllerTest {
     }
 
     @Test
-    fun `404 when the account has no snapshot`() {
+    fun `an account without snapshot is answered as not found`() {
         doThrow(AccountNotFoundException(accountId)).`when`(getBalance).getBalance(accountId)
 
         mockMvc
             .perform(get("/balances/{id}", DEFAULT_ACCOUNT_ID))
             .andExpect(status().isNotFound)
             .andExpect(content().contentTypeCompatibleWith("application/problem+json"))
-            .andExpect(jsonPath("$.type").value(typeOf("conta-nao-encontrada")))
+            .andExpect(jsonPath("$.type").value(problemTypeUri("conta-nao-encontrada")))
             .andExpect(jsonPath("$.title").value("Conta não encontrada"))
             .andExpect(jsonPath("$.status").value(404))
             .andExpect(jsonPath("$.detail").exists())
@@ -122,7 +123,7 @@ class BalanceControllerTest {
     }
 
     @Test
-    fun `409 for a disabled account with a body that carries no balance data`() {
+    fun `a disabled account is answered as conflict with a body that carries no balance data`() {
         doThrow(AccountDisabledException(accountId)).`when`(getBalance).getBalance(accountId)
 
         val body =
@@ -130,7 +131,7 @@ class BalanceControllerTest {
                 .perform(get("/balances/{id}", DEFAULT_ACCOUNT_ID))
                 .andExpect(status().isConflict)
                 .andExpect(content().contentTypeCompatibleWith("application/problem+json"))
-                .andExpect(jsonPath("$.type").value(typeOf("conta-desabilitada")))
+                .andExpect(jsonPath("$.type").value(problemTypeUri("conta-desabilitada")))
                 .andExpect(jsonPath("$.status").value(409))
                 .andExpect(jsonPath("$.balance").doesNotExist())
                 .andExpect(jsonPath("$.owner").doesNotExist())
@@ -143,7 +144,7 @@ class BalanceControllerTest {
     }
 
     @Test
-    fun `503 with retry after when the store is unavailable`() {
+    fun `an unavailable store is answered as service unavailable with retry after`() {
         doThrow(BalanceStoreUnavailableException(StoreFailureCause.TIMEOUT)).`when`(getBalance).getBalance(accountId)
 
         mockMvc
@@ -151,13 +152,13 @@ class BalanceControllerTest {
             .andExpect(status().isServiceUnavailable)
             .andExpect(content().contentTypeCompatibleWith("application/problem+json"))
             .andExpect(header().string(HttpHeaders.RETRY_AFTER, "10"))
-            .andExpect(jsonPath("$.type").value(typeOf("servico-indisponivel")))
+            .andExpect(jsonPath("$.type").value(problemTypeUri("servico-indisponivel")))
             .andExpect(jsonPath("$.status").value(503))
             .andExpect(header().exists(CorrelationIdFilter.HEADER))
     }
 
     @Test
-    fun `500 for an unexpected failure with no stack trace and no internal message`() {
+    fun `an unexpected failure is answered as internal error with no stack trace and no internal message`() {
         doThrow(RuntimeException("tabela AccountBalances")).`when`(getBalance).getBalance(accountId)
 
         val body =
@@ -165,7 +166,7 @@ class BalanceControllerTest {
                 .perform(get("/balances/{id}", DEFAULT_ACCOUNT_ID))
                 .andExpect(status().isInternalServerError)
                 .andExpect(content().contentTypeCompatibleWith("application/problem+json"))
-                .andExpect(jsonPath("$.type").value(typeOf("erro-interno")))
+                .andExpect(jsonPath("$.type").value(problemTypeUri("erro-interno")))
                 .andExpect(jsonPath("$.status").value(500))
                 .andExpect(header().exists(CorrelationIdFilter.HEADER))
                 .andReturn()
@@ -184,7 +185,7 @@ class BalanceControllerTest {
             mockMvc
                 .perform(get("/balances/{id}", DEFAULT_ACCOUNT_ID))
                 .andExpect(status().isInternalServerError)
-                .andExpect(jsonPath("$.type").value(typeOf("erro-interno")))
+                .andExpect(jsonPath("$.type").value(problemTypeUri("erro-interno")))
                 .andReturn()
                 .response
                 .contentAsString
@@ -199,7 +200,7 @@ class BalanceControllerTest {
         mockMvc
             .perform(get("/balances/{id}", DEFAULT_ACCOUNT_ID))
             .andExpect(status().isInternalServerError)
-            .andExpect(jsonPath("$.type").value(typeOf("erro-interno")))
+            .andExpect(jsonPath("$.type").value(problemTypeUri("erro-interno")))
     }
 
     @Test

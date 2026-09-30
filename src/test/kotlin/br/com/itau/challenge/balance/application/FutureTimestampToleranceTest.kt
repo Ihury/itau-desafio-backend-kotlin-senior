@@ -19,7 +19,7 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 
 /**
- * Timestamp no futuro alem da tolerancia e invalido (FR-012). O relogio SO valida: nunca participa da precedencia (FR-003),
+ * Timestamp no futuro alem da tolerancia e invalido. O relogio SO valida: nunca participa da precedencia,
  * e a rejeicao acontece antes de qualquer escrita.
  */
 class FutureTimestampToleranceTest {
@@ -27,32 +27,32 @@ class FutureTimestampToleranceTest {
     private val store = InMemoryBalanceStore()
     private val metrics = RecordingProcessingMetrics()
 
-    private fun service(
+    private fun serviceAt(
         at: Instant = now,
         tolerance: Duration = Duration.ofMinutes(5),
     ) = ProcessTransactionEventService(store, metrics, Clock.fixed(at, ZoneOffset.UTC), FutureTolerance(tolerance))
 
     private fun micros(instant: Instant): Long = instant.epochSecond * 1_000_000L + instant.nano / 1_000L
 
-    private val account = AccountId.parse("5b19c8b6-0cc4-4c72-a989-0c2ee15fa975")
+    private val accountId = AccountId.parse("5b19c8b6-0cc4-4c72-a989-0c2ee15fa975")
 
     @Test
     fun `a transaction timestamp exactly at now plus the tolerance is accepted`() {
-        val result = service().process(transactionEvent(timestampMicros = micros(now.plus(Duration.ofMinutes(5)))))
+        val result = serviceAt().process(transactionEvent(timestampMicros = micros(now.plus(Duration.ofMinutes(5)))))
 
         assertEquals(ApplyResult.Applied, result)
-        assertNotNull(store.current(account))
+        assertNotNull(store.current(accountId))
     }
 
     @Test
     fun `one microsecond beyond the tolerance is rejected and the writer is never called`() {
         val beyond = micros(now.plus(Duration.ofMinutes(5))) + 1
 
-        val failure = assertFailsWith<InvalidEventException> { service().process(transactionEvent(timestampMicros = beyond)) }
+        val failure = assertFailsWith<InvalidEventException> { serviceAt().process(transactionEvent(timestampMicros = beyond)) }
 
         assertEquals(RejectionReason.INVALID_TIMESTAMP, failure.reason)
         assertEquals("transaction.timestamp", failure.fieldPath)
-        assertNull(store.current(account), "o armazenamento nao pode ser tocado")
+        assertNull(store.current(accountId), "o armazenamento nao pode ser tocado")
         assertEquals(emptyList(), metrics.outcomes)
     }
 
@@ -62,17 +62,17 @@ class FutureTimestampToleranceTest {
 
         val failure =
             assertFailsWith<InvalidEventException> {
-                service().process(transactionEvent(timestampMicros = micros(now), accountCreatedAtMicros = beyond))
+                serviceAt().process(transactionEvent(timestampMicros = micros(now), accountCreatedAtMicros = beyond))
             }
 
         assertEquals(RejectionReason.INVALID_TIMESTAMP, failure.reason)
         assertEquals("account.created_at", failure.fieldPath)
-        assertNull(store.current(account))
+        assertNull(store.current(accountId))
     }
 
     @Test
     fun `an account creation at the limit and an old one from 1998 are valid`() {
-        val service = service()
+        val service = serviceAt()
 
         assertEquals(
             ApplyResult.Applied,
@@ -96,7 +96,7 @@ class FutureTimestampToleranceTest {
 
         val failure =
             assertFailsWith<InvalidEventException> {
-                service().process(transactionEvent(timestampMicros = beyond, accountCreatedAtMicros = beyond))
+                serviceAt().process(transactionEvent(timestampMicros = beyond, accountCreatedAtMicros = beyond))
             }
 
         assertEquals("transaction.timestamp", failure.fieldPath)
@@ -106,19 +106,19 @@ class FutureTimestampToleranceTest {
     fun `an event in the future but inside the tolerance is processed normally and keeps its own instant`() {
         val inside = micros(now.plus(Duration.ofMinutes(2)))
 
-        assertEquals(ApplyResult.Applied, service().process(transactionEvent(timestampMicros = inside)))
+        assertEquals(ApplyResult.Applied, serviceAt().process(transactionEvent(timestampMicros = inside)))
 
-        assertEquals(inside, store.current(account)?.precedence?.timestamp?.micros)
+        assertEquals(inside, store.current(accountId)?.precedence?.timestamp?.micros)
     }
 
     @Test
     fun `the tolerance is configurable`() {
         val threeMinutes = micros(now.plus(Duration.ofMinutes(3)))
 
-        assertEquals(ApplyResult.Applied, service(tolerance = Duration.ofMinutes(5)).process(transactionEvent(timestampMicros = threeMinutes)))
+        assertEquals(ApplyResult.Applied, serviceAt(tolerance = Duration.ofMinutes(5)).process(transactionEvent(timestampMicros = threeMinutes)))
         val failure =
             assertFailsWith<InvalidEventException> {
-                service(tolerance = Duration.ofMinutes(1)).process(
+                serviceAt(tolerance = Duration.ofMinutes(1)).process(
                     transactionEvent(transactionId = "22222222-b154-48b5-9f3e-553935cc4543", timestampMicros = threeMinutes),
                 )
             }
@@ -136,7 +136,7 @@ class FutureTimestampToleranceTest {
                 val service = ProcessTransactionEventService(fresh, RecordingProcessingMetrics(), Clock.fixed(at, ZoneOffset.UTC), FutureTolerance(Duration.ofMinutes(5)))
                 service.process(newer)
                 service.process(older)
-                fresh.current(account)?.balance?.amount
+                fresh.current(accountId)?.balance?.amount
             }
 
         assertEquals(setOf(BigDecimal("2.00")), results.toSet())

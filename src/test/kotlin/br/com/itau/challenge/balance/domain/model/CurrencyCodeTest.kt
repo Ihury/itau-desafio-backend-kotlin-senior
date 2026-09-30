@@ -35,8 +35,8 @@ class CurrencyCodeTest {
         val codes = listOf(CurrencyCode.parse("BRL"), CurrencyCode.parse("USD"))
 
         assertEquals(listOf("BRL", "USD"), codes.map { it.value })
-        assertEquals(listOf("BRL", "USD"), codes.asAnyList().map { it.toString() })
+        assertEquals(listOf("BRL", "USD"), codes.boxedAsAny().map { it.toString() })
     }
 
-    private fun List<Any>.asAnyList(): List<Any> = this
+    private fun List<Any>.boxedAsAny(): List<Any> = this
 }

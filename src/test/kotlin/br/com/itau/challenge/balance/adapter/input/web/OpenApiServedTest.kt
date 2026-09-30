@@ -8,7 +8,6 @@ import org.springframework.test.context.ActiveProfiles
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
-import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
@@ -28,6 +27,6 @@ class OpenApiServedTest {
 
         assertTrue(expected.contentEquals(response.contentAsByteArray))
         assertTrue(response.contentType!!.contains("yaml"), "content type: ${response.contentType}")
-        assertEquals(true, response.contentAsString.startsWith("openapi: 3.1.0"))
+        assertTrue(response.contentAsString.startsWith("openapi: 3.1.0"))
     }
 }

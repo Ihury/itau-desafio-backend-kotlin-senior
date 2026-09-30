@@ -33,6 +33,7 @@ import software.amazon.awssdk.services.dynamodb.model.ProvisionedThroughputExcee
 import software.amazon.awssdk.services.dynamodb.model.ReturnValuesOnConditionCheckFailure
 import software.amazon.awssdk.services.dynamodb.model.UpdateItemRequest
 import software.amazon.awssdk.services.dynamodb.model.UpdateItemResponse
+import java.util.concurrent.TimeUnit
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
@@ -46,23 +47,23 @@ class DynamoDbBalanceSnapshotWriterTest {
     private val writer = DynamoDbBalanceSnapshotWriter(client, "AccountBalances", registry)
     private val snapshot = BalanceSnapshot.from(transactionEvent())
 
-    private fun succeed() {
+    private fun stubUpdateSucceeds() {
         doReturn(UpdateItemResponse.builder().build()).`when`(client).updateItem(any(UpdateItemRequest::class.java))
     }
 
-    private fun failWith(failure: Throwable) {
+    private fun stubUpdateFailsWith(failure: Throwable) {
         doThrow(failure).`when`(client).updateItem(any(UpdateItemRequest::class.java))
     }
 
     private fun itemOf(event: TransactionEvent) = BalanceItemMapper.toItem(BalanceSnapshot.from(event))
 
     /** Falha a condicao devolvendo o item vigente (`ALL_OLD`). */
-    private fun failConditionWith(current: Map<String, AttributeValue>) {
-        failWith(ConditionalCheckFailedException.builder().message("The conditional request failed").item(current).build())
+    private fun stubConditionFailedWithCurrentItem(current: Map<String, AttributeValue>) {
+        stubUpdateFailsWith(ConditionalCheckFailedException.builder().message("The conditional request failed").item(current).build())
     }
 
-    private fun failConditionWithoutItem() {
-        failWith(ConditionalCheckFailedException.builder().message("The conditional request failed").build())
+    private fun stubConditionFailedWithoutCurrentItem() {
+        stubUpdateFailsWith(ConditionalCheckFailedException.builder().message("The conditional request failed").build())
     }
 
     private fun stubGetItem(item: Map<String, AttributeValue>?) {
@@ -70,7 +71,7 @@ class DynamoDbBalanceSnapshotWriterTest {
         doReturn(response).`when`(client).getItem(any(GetItemRequest::class.java))
     }
 
-    private fun capturedRequest(): UpdateItemRequest {
+    private fun capturedUpdateRequest(): UpdateItemRequest {
         val captor = ArgumentCaptor.forClass(UpdateItemRequest::class.java)
         verify(client, times(1)).updateItem(captor.capture())
         return captor.value
@@ -88,12 +89,12 @@ class DynamoDbBalanceSnapshotWriterTest {
             .build() as DynamoDbException
 
     @Test
-    fun `a single conditional update item with the exact expressions is sent`() {
-        succeed()
+    fun `the write is a single conditional UpdateItem with the exact update and condition expressions`() {
+        stubUpdateSucceeds()
 
         writer.applyIfNewer(snapshot)
 
-        val request = capturedRequest()
+        val request = capturedUpdateRequest()
         assertEquals("AccountBalances", request.tableName())
         assertEquals(BalanceItemMapper.keyOf(snapshot.accountId), request.key())
         assertEquals(
@@ -110,12 +111,12 @@ class DynamoDbBalanceSnapshotWriterTest {
 
     @Test
     fun `values carry the snapshot with numbers as N and the transaction id in lower case`() {
-        succeed()
+        stubUpdateSucceeds()
         val upper = BalanceSnapshot.from(transactionEvent(transactionId = "8E8AE808-B154-48B5-9F3E-553935CC4543", timestampMicros = 1751749453433123L))
 
         writer.applyIfNewer(upper)
 
-        val values = capturedRequest().expressionAttributeValues()
+        val values = capturedUpdateRequest().expressionAttributeValues()
         assertEquals(
             setOf(":v", ":o", ":st", ":amt", ":cur", ":cr", ":ts", ":tx"),
             values.keys,
@@ -132,38 +133,38 @@ class DynamoDbBalanceSnapshotWriterTest {
 
     @Test
     fun `the balance is written as a plain decimal never in scientific notation`() {
-        succeed()
+        stubUpdateSucceeds()
 
         writer.applyIfNewer(BalanceSnapshot.from(transactionEvent(balanceAmount = "0.0000001")))
-        val small = capturedRequest().expressionAttributeValues().getValue(":amt")
+        val small = capturedUpdateRequest().expressionAttributeValues().getValue(":amt")
 
         assertEquals("0.0000001", small.n())
     }
 
     @Test
     fun `a successful update is applied`() {
-        succeed()
+        stubUpdateSucceeds()
 
         assertEquals(ApplyResult.Applied, writer.applyIfNewer(snapshot))
     }
 
     @Test
     fun `a failed condition against a greater current item is obsolete and never an error`() {
-        failConditionWith(itemOf(transactionEvent(timestampMicros = snapshot.precedence.timestamp.micros + 1, balanceAmount = "999.00")))
+        stubConditionFailedWithCurrentItem(itemOf(transactionEvent(timestampMicros = snapshot.precedence.timestamp.micros + 1, balanceAmount = "999.00")))
 
         assertEquals(ApplyResult.Obsolete, writer.applyIfNewer(snapshot))
     }
 
     @Test
     fun `a failed condition against the same timestamp and a greater transaction id is obsolete`() {
-        failConditionWith(itemOf(transactionEvent(transactionId = "ffffffff-ffff-4fff-8fff-ffffffffff01")))
+        stubConditionFailedWithCurrentItem(itemOf(transactionEvent(transactionId = "ffffffff-ffff-4fff-8fff-ffffffffff01")))
 
         assertEquals(ApplyResult.Obsolete, writer.applyIfNewer(snapshot))
     }
 
     @Test
     fun `a failed condition against the same key and content is a plain duplicate`() {
-        failConditionWith(itemOf(transactionEvent()))
+        stubConditionFailedWithCurrentItem(itemOf(transactionEvent()))
 
         assertEquals(ApplyResult.Duplicate(conflicting = false), writer.applyIfNewer(snapshot))
     }
@@ -172,13 +173,13 @@ class DynamoDbBalanceSnapshotWriterTest {
     fun `a duplicate whose balance differs only by scale is not conflicting`() {
         val stored = itemOf(transactionEvent()).toMutableMap()
         stored["balanceAmount"] = AttributeValue.builder().n("183.120").build()
-        failConditionWith(stored)
+        stubConditionFailedWithCurrentItem(stored)
 
         assertEquals(ApplyResult.Duplicate(conflicting = false), writer.applyIfNewer(snapshot))
 
         val normalized = itemOf(transactionEvent(balanceAmount = "183.10")).toMutableMap()
         normalized["balanceAmount"] = AttributeValue.builder().n("183.1").build()
-        failConditionWith(normalized)
+        stubConditionFailedWithCurrentItem(normalized)
         assertEquals(ApplyResult.Duplicate(conflicting = false), writer.applyIfNewer(BalanceSnapshot.from(transactionEvent(balanceAmount = "183.10"))))
     }
 
@@ -192,7 +193,7 @@ class DynamoDbBalanceSnapshotWriterTest {
                 "balanceAmount" to transactionEvent(balanceAmount = "999.99"),
             )
         divergent.forEach { (field, event) ->
-            failConditionWith(itemOf(event))
+            stubConditionFailedWithCurrentItem(itemOf(event))
 
             assertEquals(ApplyResult.Duplicate(conflicting = true), writer.applyIfNewer(snapshot), field)
         }
@@ -200,9 +201,9 @@ class DynamoDbBalanceSnapshotWriterTest {
 
     @Test
     fun `there is no read before the write and none when the failed condition carries the old item`() {
-        succeed()
+        stubUpdateSucceeds()
         writer.applyIfNewer(snapshot)
-        failConditionWith(itemOf(transactionEvent()))
+        stubConditionFailedWithCurrentItem(itemOf(transactionEvent()))
         writer.applyIfNewer(snapshot)
 
         verify(client, never()).getItem(any(GetItemRequest::class.java))
@@ -211,21 +212,21 @@ class DynamoDbBalanceSnapshotWriterTest {
 
     @Test
     fun `without the old item a single consistent get item classifies the outcome`() {
-        failConditionWithoutItem()
+        stubConditionFailedWithoutCurrentItem()
         stubGetItem(itemOf(transactionEvent(timestampMicros = snapshot.precedence.timestamp.micros + 5)))
 
         assertEquals(ApplyResult.Obsolete, writer.applyIfNewer(snapshot))
 
         val captor = ArgumentCaptor.forClass(GetItemRequest::class.java)
         verify(client, times(1)).getItem(captor.capture())
-        assertEquals(true, captor.value.consistentRead())
+        assertTrue(captor.value.consistentRead())
         assertEquals("AccountBalances", captor.value.tableName())
         assertEquals(BalanceItemMapper.keyOf(snapshot.accountId), captor.value.key())
     }
 
     @Test
     fun `the fallback read also distinguishes duplicate and conflicting duplicate`() {
-        failConditionWithoutItem()
+        stubConditionFailedWithoutCurrentItem()
         stubGetItem(itemOf(transactionEvent()))
         assertEquals(ApplyResult.Duplicate(conflicting = false), writer.applyIfNewer(snapshot))
 
@@ -234,8 +235,8 @@ class DynamoDbBalanceSnapshotWriterTest {
     }
 
     @Test
-    fun `when the item is missing even in the fallback read the failure is transitory and the event is redelivered`() {
-        failConditionWithoutItem()
+    fun `when the item is missing even in the fallback read the failure is transient and the event is redelivered`() {
+        stubConditionFailedWithoutCurrentItem()
         stubGetItem(null)
 
         val thrown = assertFailsWith<BalanceStoreUnavailableException> { writer.applyIfNewer(snapshot) }
@@ -244,8 +245,8 @@ class DynamoDbBalanceSnapshotWriterTest {
     }
 
     @Test
-    fun `a current item with a lower precedence than the event contradicts the failed condition and is not transitory`() {
-        failConditionWithoutItem()
+    fun `a current item with a lower precedence than the event contradicts the failed condition and is not transient`() {
+        stubConditionFailedWithoutCurrentItem()
         stubGetItem(itemOf(transactionEvent(timestampMicros = snapshot.precedence.timestamp.micros - 1, balanceAmount = "5555.55")))
 
         val thrown: Throwable = assertFailsWith<IllegalStateException> { writer.applyIfNewer(snapshot) }
@@ -256,7 +257,7 @@ class DynamoDbBalanceSnapshotWriterTest {
 
     @Test
     fun `the same contradiction carried by the old item of the failed condition is also an internal failure`() {
-        failConditionWith(itemOf(transactionEvent(timestampMicros = snapshot.precedence.timestamp.micros - 1, balanceAmount = "5555.55")))
+        stubConditionFailedWithCurrentItem(itemOf(transactionEvent(timestampMicros = snapshot.precedence.timestamp.micros - 1, balanceAmount = "5555.55")))
 
         val thrown = assertFailsWith<IllegalStateException> { writer.applyIfNewer(snapshot) }
 
@@ -266,7 +267,7 @@ class DynamoDbBalanceSnapshotWriterTest {
 
     @Test
     fun `a failure of the fallback read is translated and never swallowed`() {
-        failConditionWithoutItem()
+        stubConditionFailedWithoutCurrentItem()
         doThrow(ProvisionedThroughputExceededException.builder().message("x").build()).`when`(client).getItem(any(GetItemRequest::class.java))
 
         val thrown = assertFailsWith<BalanceStoreUnavailableException> { writer.applyIfNewer(snapshot) }
@@ -276,14 +277,14 @@ class DynamoDbBalanceSnapshotWriterTest {
 
     @Test
     fun `a current item without the precedence attributes is an internal failure and never a classification`() {
-        failConditionWith(mapOf("pk" to AttributeValue.builder().s("ACCOUNT#x").build()))
+        stubConditionFailedWithCurrentItem(mapOf("pk" to AttributeValue.builder().s("ACCOUNT#x").build()))
 
         assertFailsWith<IllegalStateException> { writer.applyIfNewer(snapshot) }
     }
 
     @Test
     fun `an unreadable current item fails without leaking balances or owners in the message`() {
-        failConditionWith(mapOf("lastTxTsMicros" to AttributeValue.builder().n("abc").build()))
+        stubConditionFailedWithCurrentItem(mapOf("lastTxTsMicros" to AttributeValue.builder().n("abc").build()))
 
         val thrown = assertFailsWith<IllegalStateException> { writer.applyIfNewer(snapshot) }
 
@@ -291,8 +292,8 @@ class DynamoDbBalanceSnapshotWriterTest {
     }
 
     @Test
-    fun `sdk failures are translated by the matrix and never swallowed`() {
-        val transitory =
+    fun `each sdk failure becomes its store failure cause and keeps the original as cause`() {
+        val transientFailures =
             mapOf(
                 ProvisionedThroughputExceededException.builder().message("x").build() to StoreFailureCause.THROTTLED,
                 serviceError(400, "ThrottlingException") to StoreFailureCause.THROTTLED,
@@ -302,8 +303,8 @@ class DynamoDbBalanceSnapshotWriterTest {
                 InternalServerErrorException.builder().message("x").build() to StoreFailureCause.UNAVAILABLE,
                 serviceError(503, "ServiceUnavailable") to StoreFailureCause.UNAVAILABLE,
             )
-        transitory.forEach { (failure, expected) ->
-            failWith(failure)
+        transientFailures.forEach { (failure, expected) ->
+            stubUpdateFailsWith(failure)
 
             val thrown = assertFailsWith<BalanceStoreUnavailableException> { writer.applyIfNewer(snapshot) }
 
@@ -315,7 +316,7 @@ class DynamoDbBalanceSnapshotWriterTest {
     @Test
     fun `a validation exception is a rejection of the store`() {
         val validation = serviceError(400, "ValidationException")
-        failWith(validation)
+        stubUpdateFailsWith(validation)
 
         val thrown = assertFailsWith<BalanceStoreRejectedException> { writer.applyIfNewer(snapshot) }
 
@@ -325,14 +326,14 @@ class DynamoDbBalanceSnapshotWriterTest {
     @Test
     fun `failures that are not from the sdk propagate as they are`() {
         val defect = IllegalStateException("defeito")
-        failWith(defect)
+        stubUpdateFailsWith(defect)
 
         assertSame(defect, assertFailsWith<IllegalStateException> { writer.applyIfNewer(snapshot) })
     }
 
     @Test
     fun `translated failures never carry the payload of the event`() {
-        failWith(serviceError(500, "InternalFailure"))
+        stubUpdateFailsWith(serviceError(500, "InternalFailure"))
 
         val thrown = assertFailsWith<BalanceStoreUnavailableException> { writer.applyIfNewer(snapshot) }
 
@@ -344,7 +345,7 @@ class DynamoDbBalanceSnapshotWriterTest {
 
     @Test
     fun `write duration is timed as applied when the condition holds`() {
-        succeed()
+        stubUpdateSucceeds()
 
         writer.applyIfNewer(snapshot)
 
@@ -355,9 +356,9 @@ class DynamoDbBalanceSnapshotWriterTest {
 
     @Test
     fun `write duration is timed as condition failed for duplicates and obsolete events, which are not errors`() {
-        failConditionWith(itemOf(transactionEvent()))
+        stubConditionFailedWithCurrentItem(itemOf(transactionEvent()))
         writer.applyIfNewer(snapshot)
-        failConditionWith(itemOf(transactionEvent(timestampMicros = 1751749453433999L)))
+        stubConditionFailedWithCurrentItem(itemOf(transactionEvent(timestampMicros = 1751749453433999L)))
         writer.applyIfNewer(snapshot)
 
         assertEquals(2L, writeTimer("condition_failed")?.count())
@@ -366,7 +367,7 @@ class DynamoDbBalanceSnapshotWriterTest {
 
     @Test
     fun `write duration is recorded as error when the sdk throws and is never tagged with account data`() {
-        failWith(ApiCallTimeoutException.builder().message("x").build())
+        stubUpdateFailsWith(ApiCallTimeoutException.builder().message("x").build())
 
         assertFailsWith<BalanceStoreUnavailableException> { writer.applyIfNewer(snapshot) }
 
@@ -377,10 +378,10 @@ class DynamoDbBalanceSnapshotWriterTest {
 
     @Test
     fun `write duration publishes a histogram with the documented service level objectives`() {
-        succeed()
+        stubUpdateSucceeds()
         writer.applyIfNewer(snapshot)
 
-        val buckets = writeTimer("applied")!!.takeSnapshot().histogramCounts().map { it.bucket(java.util.concurrent.TimeUnit.MILLISECONDS) }
+        val buckets = writeTimer("applied")!!.takeSnapshot().histogramCounts().map { it.bucket(TimeUnit.MILLISECONDS) }
         assertTrue(buckets.isNotEmpty(), "sem histograma")
         assertTrue(5.0 in buckets && 2000.0 in buckets, "buckets $buckets")
     }

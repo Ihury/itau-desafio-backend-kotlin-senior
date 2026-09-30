@@ -9,7 +9,7 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 class PrecedenceTest {
-    private val t = 1751749453433000L
+    private val baseMicros = 1751749453433000L
     private val lowId = "00000000-0000-4000-8000-000000000001"
     private val highId = "ffffffff-ffff-4fff-8fff-ffffffffff01"
 
@@ -28,26 +28,26 @@ class PrecedenceTest {
 
     @Test
     fun `orders by numeric timestamp first`() {
-        assertTrue(precedence(t + 1, lowId) > precedence(t, highId))
-        assertTrue(precedence(t, highId) < precedence(t + 1, lowId))
+        assertTrue(precedence(baseMicros + 1, lowId) > precedence(baseMicros, highId))
+        assertTrue(precedence(baseMicros, highId) < precedence(baseMicros + 1, lowId))
     }
 
     @Test
     fun `ties on timestamp are broken by the lexicographic order of the canonical id`() {
-        assertTrue(precedence(t, "a0000000-0000-4000-8000-000000000000") > precedence(t, "9fffffff-ffff-4fff-8fff-ffffffffffff"))
-        assertTrue(precedence(t, lowId) < precedence(t, highId))
+        assertTrue(precedence(baseMicros, "a0000000-0000-4000-8000-000000000000") > precedence(baseMicros, "9fffffff-ffff-4fff-8fff-ffffffffffff"))
+        assertTrue(precedence(baseMicros, lowId) < precedence(baseMicros, highId))
     }
 
     @Test
     fun `equal timestamp and id are the same event`() {
-        assertEquals(0, precedence(t, lowId).compareTo(precedence(t, lowId)))
-        assertEquals(precedence(t, lowId), precedence(t, lowId))
-        assertNotEquals(precedence(t, lowId), precedence(t, highId))
+        assertEquals(0, precedence(baseMicros, lowId).compareTo(precedence(baseMicros, lowId)))
+        assertEquals(precedence(baseMicros, lowId), precedence(baseMicros, lowId))
+        assertNotEquals(precedence(baseMicros, lowId), precedence(baseMicros, highId))
     }
 
     @Test
     fun `the UUID compareTo trap - signed longs diverge from the textual order`() {
-        assertTrue(precedence(t, highId) > precedence(t, lowId))
+        assertTrue(precedence(baseMicros, highId) > precedence(baseMicros, lowId))
         // java.util.UUID compara longs COM sinal: ffff... vira negativo e ordena antes de 0000...
         assertTrue(UUID.fromString(highId) < UUID.fromString(lowId))
     }
@@ -63,7 +63,7 @@ class PrecedenceTest {
             val a = randomUuid()
             val b = randomUuid()
             val expected = a.toString().compareTo(b.toString())
-            val actual = precedence(t, a.toString()).compareTo(precedence(t, b.toString()))
+            val actual = precedence(baseMicros, a.toString()).compareTo(precedence(baseMicros, b.toString()))
             assertEquals(Integer.signum(expected), Integer.signum(actual), "divergiu para $a x $b")
             if (Integer.signum(a.compareTo(b)) != Integer.signum(actual)) divergencesFromUuid++
         }
@@ -72,30 +72,51 @@ class PrecedenceTest {
 
     @Test
     fun `uppercase ids are normalized before comparing`() {
-        assertEquals(precedence(t, highId), precedence(t, highId.uppercase()))
-        assertEquals(0, precedence(t, highId.uppercase()).compareTo(precedence(t, highId)))
-        assertTrue(precedence(t, highId.uppercase()) > precedence(t, lowId))
+        assertEquals(precedence(baseMicros, highId), precedence(baseMicros, highId.uppercase()))
+        assertEquals(0, precedence(baseMicros, highId.uppercase()).compareTo(precedence(baseMicros, highId)))
+        assertTrue(precedence(baseMicros, highId.uppercase()) > precedence(baseMicros, lowId))
+    }
+
+    private val currentId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    private val greaterId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+
+    private fun snapshotAt(
+        micros: Long,
+        id: String,
+    ) = snapshotWith(precedence(micros, id))
+
+    @Test
+    fun `an event supersedes an absent snapshot`() {
+        assertTrue(snapshotAt(baseMicros, currentId).supersedes(null))
     }
 
     @Test
-    fun `supersedes follows the seven rows of the precedence table`() {
-        val a = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
-        val b = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
-        val current = snapshotWith(precedence(t, a))
+    fun `a newer timestamp supersedes the current snapshot whatever the id`() {
+        assertTrue(snapshotAt(baseMicros + 1, lowId).supersedes(snapshotAt(baseMicros, currentId)))
+    }
 
-        // ausente -> processed
-        assertTrue(snapshotWith(precedence(t, a)).supersedes(null))
-        // (t, A) x (t+1, X) -> processed
-        assertTrue(snapshotWith(precedence(t + 1, lowId)).supersedes(current))
-        // (t, A) x (t-1, X) -> obsolete
-        assertFalse(snapshotWith(precedence(t - 1, highId)).supersedes(current))
-        // (t, A) x (t, B) com B > A -> processed
-        assertTrue(snapshotWith(precedence(t, b)).supersedes(current))
-        // (t, B) x (t, A) com A < B -> obsolete
-        assertFalse(current.supersedes(snapshotWith(precedence(t, b))))
-        // (t, A) x (t, A) -> duplicate (nao supersede)
-        assertFalse(snapshotWith(precedence(t, a)).supersedes(current))
-        // (t, A) reentregue depois de superado por (t+1, X) -> obsolete
-        assertFalse(current.supersedes(snapshotWith(precedence(t + 1, lowId))))
+    @Test
+    fun `an older timestamp does not supersede the current snapshot whatever the id`() {
+        assertFalse(snapshotAt(baseMicros - 1, highId).supersedes(snapshotAt(baseMicros, currentId)))
+    }
+
+    @Test
+    fun `on a timestamp tie the greater id supersedes`() {
+        assertTrue(snapshotAt(baseMicros, greaterId).supersedes(snapshotAt(baseMicros, currentId)))
+    }
+
+    @Test
+    fun `on a timestamp tie the lower id does not supersede`() {
+        assertFalse(snapshotAt(baseMicros, currentId).supersedes(snapshotAt(baseMicros, greaterId)))
+    }
+
+    @Test
+    fun `the same timestamp and id do not supersede, it is a duplicate`() {
+        assertFalse(snapshotAt(baseMicros, currentId).supersedes(snapshotAt(baseMicros, currentId)))
+    }
+
+    @Test
+    fun `an event already superseded by a newer one does not supersede it again`() {
+        assertFalse(snapshotAt(baseMicros, currentId).supersedes(snapshotAt(baseMicros + 1, lowId)))
     }
 }

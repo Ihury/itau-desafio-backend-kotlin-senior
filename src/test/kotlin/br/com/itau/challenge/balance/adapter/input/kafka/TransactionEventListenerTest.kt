@@ -20,8 +20,10 @@ import org.slf4j.LoggerFactory
 import org.slf4j.MDC
 import org.springframework.kafka.annotation.KafkaListener
 import java.time.Instant
+import java.util.concurrent.TimeUnit
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
@@ -81,7 +83,9 @@ class TransactionEventListenerTest {
         offset: Long = 1234,
     ) = ConsumerRecord<ByteArray?, ByteArray?>(topic, partition, offset, null, value)
 
-    private fun allMdc(): Map<String, String?> = listOf("accountId", "transactionId", "correlationId").associateWith { MDC.get(it) }
+    private val emptyMdc = mapOf("accountId" to null, "transactionId" to null, "correlationId" to null)
+
+    private fun currentMdc(): Map<String, String?> = listOf("accountId", "transactionId", "correlationId").associateWith { MDC.get(it) }
 
     @Test
     fun `valid bytes are parsed and the use case is invoked once with the event`() {
@@ -107,7 +111,7 @@ class TransactionEventListenerTest {
             ),
             useCase.mdcDuringCall.single(),
         )
-        assertEquals(mapOf("accountId" to null, "transactionId" to null, "correlationId" to null), allMdc())
+        assertEquals(emptyMdc, currentMdc())
     }
 
     @Test
@@ -118,7 +122,7 @@ class TransactionEventListenerTest {
         val thrown = assertFailsWith<BalanceStoreUnavailableException> { listener(useCase).onMessage(record(validPayload.toByteArray())) }
 
         assertSame(failure, thrown, "a excecao do caso de uso propaga intacta (nao e engolida)")
-        assertEquals(mapOf("accountId" to null, "transactionId" to null, "correlationId" to null), allMdc())
+        assertEquals(emptyMdc, currentMdc())
     }
 
     @Test
@@ -130,7 +134,7 @@ class TransactionEventListenerTest {
 
         assertEquals(RejectionReason.INVALID_CURRENCY, thrown.reason)
         assertTrue(useCase.events.isEmpty())
-        assertEquals(mapOf("accountId" to null, "transactionId" to null, "correlationId" to null), allMdc())
+        assertEquals(emptyMdc, currentMdc())
     }
 
     @Test
@@ -152,7 +156,7 @@ class TransactionEventListenerTest {
         val annotation = method.getAnnotation(KafkaListener::class.java)
         assertEquals(listOf("\${balance.events.topic}"), annotation.topics.toList())
         assertEquals("transaction-event-listener", annotation.id)
-        assertEquals(false, annotation.idIsGroup, "o grupo vem de spring.kafka.consumer.group-id")
+        assertFalse(annotation.idIsGroup, "o grupo vem de spring.kafka.consumer.group-id")
     }
 
     @Test
@@ -207,7 +211,7 @@ class TransactionEventListenerTest {
         listener(RecordingUseCase()).onMessage(record(validPayload.toByteArray()))
 
         val timer = ingestTimer("processed")!!
-        val buckets = timer.takeSnapshot().histogramCounts().map { it.bucket(java.util.concurrent.TimeUnit.MILLISECONDS) }
+        val buckets = timer.takeSnapshot().histogramCounts().map { it.bucket(TimeUnit.MILLISECONDS) }
         assertTrue(5.0 in buckets && 2500.0 in buckets, "buckets $buckets")
         assertEquals(setOf("outcome"), meters.find("balance.ingest.duration").timers().flatMap { t -> t.id.tags.map { it.key } }.toSet())
     }

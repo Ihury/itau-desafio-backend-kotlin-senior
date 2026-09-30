@@ -31,7 +31,7 @@ object ConvergenceProperty {
     /** Relogio fixo depois de todos os eventos gerados (base em 2025): a tolerancia de futuro nunca interfere na propriedade. */
     private val CLOCK: Clock = Clock.fixed(Instant.parse("2026-01-01T00:00:00Z"), ZoneOffset.UTC)
 
-    /** Um armazenamento pronto para uma entrega e a remap das contas do modelo (identidade, ou contas aleatorias em tabela compartilhada). */
+    /** Um armazenamento pronto para uma entrega e o remapeamento das contas do modelo (identidade, ou contas aleatorias em tabela compartilhada). */
     class Scenario(
         val store: StoreUnderTest,
         val remap: (EventSpec) -> EventSpec = { it },
@@ -67,30 +67,29 @@ object ConvergenceProperty {
             assertEquals(
                 oracle.toSnapshot(),
                 scenario.store.current(AccountId.parse(account)),
-                "snapshot final da conta $account apos ${order.map { it.tsOffset to it.txIndex }}",
+                "snapshot final da conta $account apos ${order.map { it.timestampOffsetMicros to it.transactionIdIndex }}",
             )
         }
         if (!checkOutcomes) return
-        val maxSoFar = HashMap<String, EventSpec>()
+        val winnerSoFar = HashMap<String, EventSpec>()
         results.forEach { (spec, result) ->
-            val current = maxSoFar[spec.accountId]
+            val current = winnerSoFar[spec.accountId]
             val expected =
                 when {
-                    current == null || precedes(current, spec) -> ApplyResult.Applied
+                    current == null || isSuperseding(spec, current) -> ApplyResult.Applied
                     spec.key == current.key -> ApplyResult.Duplicate(conflicting = false)
                     else -> ApplyResult.Obsolete
                 }
             assertEquals(expected, result, "desfecho de ${spec.key}")
-            if (expected == ApplyResult.Applied) maxSoFar[spec.accountId] = spec
+            if (expected == ApplyResult.Applied) winnerSoFar[spec.accountId] = spec
         }
         assertEquals(order.size, metrics.outcomes.size, "um desfecho contabilizado por evento entregue")
         assertTrue(metrics.outcomes.none { it == "duplicate(conflicting)" }, "conteudo derivado da chave nunca diverge")
     }
 
-    /** `next` tem precedencia estritamente maior que `current` (timestamp numerico e, no empate, `transactionId` textual). */
-    private fun precedes(
-        current: EventSpec,
+    private fun isSuperseding(
         next: EventSpec,
+        current: EventSpec,
     ): Boolean =
         if (next.timestampMicros != current.timestampMicros) {
             next.timestampMicros > current.timestampMicros
@@ -116,6 +115,6 @@ object ConvergenceProperty {
     /** Conta aleatoria nova para cada indice de conta do modelo (tabela compartilhada). */
     fun randomAccounts(): (EventSpec) -> EventSpec {
         val mapping = HashMap<Int, String>()
-        return { spec -> spec.withAccount(mapping.getOrPut(spec.account) { UUID.randomUUID().toString() }) }
+        return { spec -> spec.withAccount(mapping.getOrPut(spec.accountIndex) { UUID.randomUUID().toString() }) }
     }
 }

@@ -71,12 +71,12 @@ class DynamoDbHealthIndicatorTest {
         indicatorLogger.level = originalLevel
     }
 
-    private fun tableIs(status: TableStatus) {
+    private fun stubTableStatus(status: TableStatus) {
         val response = DescribeTableResponse.builder().table(TableDescription.builder().tableName("AccountBalances").tableStatus(status).build()).build()
         doReturn(response).`when`(client).describeTable(any(DescribeTableRequest::class.java))
     }
 
-    private fun probeFails(failure: Throwable = SdkClientException.builder().message("Unable to execute HTTP request: connect to dynamodb:8000 failed").build()) {
+    private fun stubProbeFailure(failure: Throwable = SdkClientException.builder().message("Unable to execute HTTP request: connect to dynamodb:8000 failed").build()) {
         doThrow(failure).`when`(client).describeTable(any(DescribeTableRequest::class.java))
     }
 
@@ -84,7 +84,7 @@ class DynamoDbHealthIndicatorTest {
 
     @Test
     fun `an active table is up and the probe is a describe table of the configured table with a short timeout`() {
-        tableIs(TableStatus.ACTIVE)
+        stubTableStatus(TableStatus.ACTIVE)
 
         val health = indicator.health()
 
@@ -99,7 +99,7 @@ class DynamoDbHealthIndicatorTest {
 
     @Test
     fun `a table that is updating still serves reads`() {
-        tableIs(TableStatus.UPDATING)
+        stubTableStatus(TableStatus.UPDATING)
 
         assertEquals(Status.UP, indicator.health().status)
     }
@@ -107,10 +107,10 @@ class DynamoDbHealthIndicatorTest {
     @Test
     fun `a table that is not usable is down`() {
         listOf(TableStatus.CREATING, TableStatus.DELETING, TableStatus.INACCESSIBLE_ENCRYPTION_CREDENTIALS, TableStatus.ARCHIVING, TableStatus.ARCHIVED).forEach { status ->
-            val fresh = DynamoDbHealthIndicator(client, "AccountBalances", registry, clock)
-            tableIs(status)
+            val freshIndicator = DynamoDbHealthIndicator(client, "AccountBalances", registry, clock)
+            stubTableStatus(status)
 
-            assertEquals(Status.DOWN, fresh.health().status, "status $status")
+            assertEquals(Status.DOWN, freshIndicator.health().status, "status $status")
         }
     }
 
@@ -122,10 +122,10 @@ class DynamoDbHealthIndicatorTest {
             ResourceNotFoundException.builder().message("x").build(),
             IllegalStateException("x"),
         ).forEach { failure ->
-            val fresh = DynamoDbHealthIndicator(client, "AccountBalances", registry, clock)
-            probeFails(failure)
+            val freshIndicator = DynamoDbHealthIndicator(client, "AccountBalances", registry, clock)
+            stubProbeFailure(failure)
 
-            assertEquals(Status.DOWN, fresh.health().status, failure.javaClass.simpleName)
+            assertEquals(Status.DOWN, freshIndicator.health().status, failure.javaClass.simpleName)
         }
     }
 
@@ -138,7 +138,7 @@ class DynamoDbHealthIndicatorTest {
 
     @Test
     fun `the result is cached for five seconds, whether up or down`() {
-        tableIs(TableStatus.ACTIVE)
+        stubTableStatus(TableStatus.ACTIVE)
         repeat(3) { indicator.health() }
         clock.advance(Duration.ofMillis(4_999))
         indicator.health()
@@ -146,12 +146,12 @@ class DynamoDbHealthIndicatorTest {
         verify(client, times(1)).describeTable(any(DescribeTableRequest::class.java))
 
         clock.advance(Duration.ofMillis(1))
-        probeFails()
+        stubProbeFailure()
         assertEquals(Status.DOWN, indicator.health().status, "passados 5 s ha um novo probe")
         repeat(3) { indicator.health() }
         verify(client, times(2)).describeTable(any(DescribeTableRequest::class.java))
 
-        tableIs(TableStatus.ACTIVE)
+        stubTableStatus(TableStatus.ACTIVE)
         assertEquals(Status.DOWN, indicator.health().status, "a falha tambem fica em cache")
         clock.advance(Duration.ofSeconds(5))
         assertEquals(Status.UP, indicator.health().status)
@@ -160,10 +160,10 @@ class DynamoDbHealthIndicatorTest {
 
     @Test
     fun `the output never carries details, exception messages or infrastructure names`() {
-        probeFails()
+        stubProbeFailure()
         val down = indicator.health()
         clock.advance(Duration.ofSeconds(5))
-        tableIs(TableStatus.ACTIVE)
+        stubTableStatus(TableStatus.ACTIVE)
         val up = indicator.health()
 
         assertTrue(down.details.isEmpty(), "detalhes em DOWN: ${down.details}")
@@ -173,23 +173,23 @@ class DynamoDbHealthIndicatorTest {
 
     @Test
     fun `the dependency gauge is 1 when the last probe was ok and 0 when it failed and tracks the state`() {
-        tableIs(TableStatus.ACTIVE)
+        stubTableStatus(TableStatus.ACTIVE)
         assertEquals(1.0, gauge().value())
 
         clock.advance(Duration.ofSeconds(5))
-        probeFails()
+        stubProbeFailure()
         assertEquals(0.0, gauge().value())
 
         clock.advance(Duration.ofSeconds(5))
-        tableIs(TableStatus.ACTIVE)
+        stubTableStatus(TableStatus.ACTIVE)
         assertEquals(1.0, gauge().value())
     }
 
     @Test
     fun `the gauge and the health share the same cached state`() {
-        tableIs(TableStatus.ACTIVE)
+        stubTableStatus(TableStatus.ACTIVE)
         assertEquals(Status.UP, indicator.health().status)
-        probeFails() // dentro da janela: nem o gauge nem o health enxergam a nova falha
+        stubProbeFailure() // dentro da janela: nem o gauge nem o health enxergam a nova falha
 
         assertEquals(1.0, gauge().value())
         assertEquals(Status.UP, indicator.health().status)
@@ -198,7 +198,7 @@ class DynamoDbHealthIndicatorTest {
 
     @Test
     fun `the gauge has a description and the dependency tag only`() {
-        tableIs(TableStatus.ACTIVE)
+        stubTableStatus(TableStatus.ACTIVE)
 
         assertEquals(listOf("dependency"), gauge().id.tags.map { it.key })
         assertTrue(!gauge().id.description.isNullOrBlank())
@@ -206,14 +206,14 @@ class DynamoDbHealthIndicatorTest {
 
     @Test
     fun `state transitions are logged once with the exception class and never the message`() {
-        probeFails()
+        stubProbeFailure()
         indicator.health()
         indicator.health() // em cache: nao repete o log
         clock.advance(Duration.ofSeconds(5))
-        probeFails()
+        stubProbeFailure()
         indicator.health() // continua DOWN: sem novo log de transicao
         clock.advance(Duration.ofSeconds(5))
-        tableIs(TableStatus.ACTIVE)
+        stubTableStatus(TableStatus.ACTIVE)
         indicator.health()
 
         val transitions = appender.list.filter { it.level.isGreaterOrEqual(Level.INFO) }

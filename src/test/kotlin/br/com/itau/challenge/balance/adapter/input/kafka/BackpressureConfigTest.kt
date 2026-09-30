@@ -34,15 +34,13 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * Backpressure da falha transitoria (FR-028, FR-029): `ExponentialBackOff` com jitter nativo e sem esgotar, pausa do container
+ * Backpressure da falha transiente: `ExponentialBackOff` com jitter nativo e sem esgotar, pausa do container
  * durante a espera (o poll continua vivo) e `balance.consumer.backpressure{cause}`. O handler e chamado diretamente, sem broker.
  */
 class BackpressureConfigTest {
     private val settings = BackOffProperties(initialMs = 500, maxMs = 30_000, jitterMs = 250)
     private val config = DeadLetterConfig()
     private val backpressureConfig = BackpressureConfig()
-
-    // ----- o backoff ---------------------------------------------------------------------------------------------------------
 
     /**
      * Faixa do n-esimo intervalo (0-based) do `ExponentialBackOff` do Spring Framework 7: o jitter escala com o multiplicador
@@ -121,8 +119,6 @@ class BackpressureConfigTest {
         assertEquals(100L, config.backOffFor(IllegalStateException(), settings).start().nextBackOff())
         assertEquals(BackOffExecution.STOP, config.backOffFor(InvalidEventException(RejectionReason.INVALID_VALUE), settings).start().nextBackOff())
     }
-
-    // ----- pausa do container e recoverer nunca acionado ---------------------------------------------------------------------
 
     private val dlt = mock(KafkaOperations::class.java)
     private val metrics = RecordingProcessingMetrics()
@@ -225,8 +221,6 @@ class BackpressureConfigTest {
     fun `the container pausing handler is the one the configuration builds`() {
         assertTrue(backpressureConfig.containerPausingBackOffHandler(scheduler) is ContainerPausingBackOffHandler)
     }
-
-    // ----- metrica de backpressure ---------------------------------------------------------------------------------------------
 
     @Test
     fun `every failed delivery of a transient failure counts backpressure with the cause of the store failure`() {

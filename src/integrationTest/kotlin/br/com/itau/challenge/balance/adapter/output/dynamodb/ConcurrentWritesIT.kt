@@ -61,7 +61,7 @@ class ConcurrentWritesIT {
         account: String,
         seed: Long,
     ): List<EventSpec> {
-        val unique = (0 until UNIQUE_KEYS).map { EventSpec(0, it / TX_COUNT, it % TX_COUNT, upperCaseTx = it % 7 == 0, accountOverride = account) }
+        val unique = (0 until UNIQUE_KEYS).map { EventSpec(0, it / TX_COUNT, it % TX_COUNT, uppercaseTransactionId = it % 7 == 0, accountIdOverride = account) }
         val random = Random(seed)
         val duplicates = (0 until DUPLICATES).map { unique[random.nextInt(unique.size)] }
         val all = unique + duplicates
@@ -71,7 +71,7 @@ class ConcurrentWritesIT {
             1L -> all.shuffled(random)
             else -> {
                 val window = if (seed == 2L) 30 else 100
-                all.map { it to it.tsOffset * TX_COUNT + it.txIndex + random.nextInt(window) }.sortedBy { it.second }.map { it.first }
+                all.map { it to it.timestampOffsetMicros * TX_COUNT + it.transactionIdIndex + random.nextInt(window) }.sortedBy { it.second }.map { it.first }
             }
         }
     }

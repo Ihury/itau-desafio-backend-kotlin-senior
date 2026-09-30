@@ -8,35 +8,35 @@ import java.util.concurrent.atomic.AtomicInteger
 
 /** Duble de [ProcessingMetrics] que registra, em ordem, cada desfecho contabilizado. */
 class RecordingProcessingMetrics : ProcessingMetrics {
-    private val recorded = CopyOnWriteArrayList<String>()
+    private val outcomeLog = CopyOnWriteArrayList<String>()
 
     private val dltFailures = AtomicInteger()
 
     /** Falhas de publicacao no DLT (nao sao desfechos). */
     val dltPublishFailures: Int get() = dltFailures.get()
 
-    private val backpressure = CopyOnWriteArrayList<StoreFailureCause>()
+    private val backpressureLog = CopyOnWriteArrayList<StoreFailureCause>()
 
     /** Causas de cada pausa por backpressure, na ordem (nao sao desfechos). */
-    val backpressureCauses: List<StoreFailureCause> get() = backpressure.toList()
+    val backpressureCauses: List<StoreFailureCause> get() = backpressureLog.toList()
 
     /** Desfechos na ordem: `applied`, `obsolete`, `duplicate`, `duplicate(conflicting)` ou `rejected(<codigo>)`. */
-    val outcomes: List<String> get() = recorded.toList()
+    val outcomes: List<String> get() = outcomeLog.toList()
 
     override fun processed() {
-        recorded += "applied"
+        outcomeLog += "applied"
     }
 
     override fun obsolete() {
-        recorded += "obsolete"
+        outcomeLog += "obsolete"
     }
 
     override fun duplicate(conflicting: Boolean) {
-        recorded += if (conflicting) "duplicate(conflicting)" else "duplicate"
+        outcomeLog += if (conflicting) "duplicate(conflicting)" else "duplicate"
     }
 
     override fun rejected(reason: RejectionReason) {
-        recorded += "rejected(${reason.code})"
+        outcomeLog += "rejected(${reason.code})"
     }
 
     override fun dltPublishFailed() {
@@ -44,6 +44,6 @@ class RecordingProcessingMetrics : ProcessingMetrics {
     }
 
     override fun backpressure(cause: StoreFailureCause) {
-        backpressure += cause
+        backpressureLog += cause
     }
 }

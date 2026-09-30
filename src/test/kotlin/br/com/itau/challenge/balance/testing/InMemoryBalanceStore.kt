@@ -8,9 +8,8 @@ import br.com.itau.challenge.balance.port.output.BalanceSnapshotWriter
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Fake em memoria do armazenamento de snapshots (duble de teste, sem infraestrutura), com a mesma semantica do
- * DynamoDB: a arbitragem de precedencia e atomica por conta (`ConcurrentHashMap.compute`) e usa
- * [BalanceSnapshot.supersedes]. Leitura: [BalanceSnapshotReader]; escrita: [BalanceSnapshotWriter].
+ * Fake em memoria dos snapshots (sem infraestrutura), com a semantica do DynamoDB: a arbitragem de precedencia e atomica
+ * por conta (`ConcurrentHashMap.compute`) e usa [BalanceSnapshot.supersedes].
  */
 class InMemoryBalanceStore :
     BalanceSnapshotReader,
@@ -56,7 +55,7 @@ class InMemoryBalanceStore :
                     snapshot
                 }
                 current != null && snapshot.precedence == current.precedence -> {
-                    result = ApplyResult.Duplicate(conflicting = diverges(snapshot, current))
+                    result = ApplyResult.Duplicate(conflicting = hasDivergentContent(snapshot, current))
                     current
                 }
                 else -> {
@@ -68,8 +67,8 @@ class InMemoryBalanceStore :
         return result
     }
 
-    /** Conteudo divergente de um mesmo evento (data-model 4.4): titular, situacao ou saldo (valor e moeda). */
-    private fun diverges(
+    /** Conteudo divergente de um mesmo evento: titular, situacao ou saldo (valor e moeda). */
+    private fun hasDivergentContent(
         candidate: BalanceSnapshot,
         current: BalanceSnapshot,
     ): Boolean = candidate.ownerId != current.ownerId || candidate.status != current.status || candidate.balance != current.balance

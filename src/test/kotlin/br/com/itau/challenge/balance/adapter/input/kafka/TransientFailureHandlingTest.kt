@@ -28,13 +28,12 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * Prova que a falha TRANSITORIA nunca descarta mensagem (Constitution III, FR-017): com o armazenamento indisponivel o error
- * handler nunca confirma o offset nem aciona o recoverer do DLT (a mensagem valida fica no broker), e a espera entre
- * reentregas cresce ate um teto e nunca se esgota. A partir da US4 as falhas permanentes e nao classificadas vao ao DLT
- * (`DeadLetterConfigTest`); aqui o `KafkaOperations` do DLT e um mock que NAO PODE ser usado. O handler e chamado
- * diretamente, sem broker.
+ * Prova que a falha TRANSIENTE nunca descarta mensagem: com o armazenamento indisponivel o error handler nunca confirma o
+ * offset nem aciona o recoverer do DLT (a mensagem valida fica no broker), e a espera entre reentregas cresce ate um teto e
+ * nunca se esgota. As falhas permanentes e nao classificadas vao ao DLT (`DeadLetterConfigTest`); aqui o `KafkaOperations`
+ * do DLT e um mock que NAO PODE ser usado. O handler e chamado diretamente, sem broker.
  */
-class FailSafeErrorHandlerTest {
+class TransientFailureHandlingTest {
     /** `BackOffHandler` que so registra o intervalo pedido, para nao dormir de verdade em mil iteracoes. */
     private class RecordingBackOffHandler : BackOffHandler {
         val intervals = mutableListOf<Long>()
@@ -64,8 +63,9 @@ class FailSafeErrorHandlerTest {
     /** Sem jitter, para as esperas serem exatas (o jitter e coberto por `BackpressureConfigTest`). */
     private val noJitter = BackOffProperties(initialMs = 500, maxMs = 30_000, jitterMs = 0)
 
-    private fun failSafeErrorHandler(backOffHandler: BackOffHandler) =
+    private fun errorHandlerWith(backOffHandler: BackOffHandler) =
         config.deadLetterErrorHandler(dlt, "transacoes-financeiras-processadas.DLT", Duration.ofSeconds(5), Clock.systemUTC(), metrics, noJitter, backOffHandler)
+
     private val record = ConsumerRecord<Any, Any>("transacoes-financeiras-processadas", 2, 41L, null, ByteArray(0))
     private val partition = TopicPartition(record.topic(), record.partition())
 
@@ -77,8 +77,8 @@ class FailSafeErrorHandlerTest {
 
     private fun listenerFailure(cause: Exception) = ListenerExecutionFailedException("Listener failed", cause)
 
-    /** Falhas transitorias do armazenamento, com cada causa, embrulhadas como o container as entrega e sem embrulho. */
-    private val failures: Map<String, () -> Exception> =
+    /** Falhas transientes do armazenamento, com cada causa, embrulhadas como o container as entrega e sem embrulho. */
+    private val transientFailureFactories: Map<String, () -> Exception> =
         StoreFailureCause.entries.flatMap { cause ->
             listOf(
                 "store unavailable ($cause)" to { listenerFailure(BalanceStoreUnavailableException(cause)) },
@@ -113,9 +113,9 @@ class FailSafeErrorHandlerTest {
 
     @Test
     fun `no failure is ever recovered, however many times the same record fails`() {
-        failures.forEach { (label, failure) ->
+        transientFailureFactories.forEach { (label, failure) ->
             val backOffHandler = RecordingBackOffHandler()
-            val handler = failSafeErrorHandler(backOffHandler)
+            val handler = errorHandlerWith(backOffHandler)
             val consumer = mock(Consumer::class.java)
             val container = mock(MessageListenerContainer::class.java)
 
@@ -131,16 +131,14 @@ class FailSafeErrorHandlerTest {
 
     @Test
     fun `the record stays unconfirmed and is redelivered after every failure`() {
-        failures.forEach { (_, failure) ->
-            val handler = failSafeErrorHandler(RecordingBackOffHandler())
+        transientFailureFactories.forEach { (_, failure) ->
+            val handler = errorHandlerWith(RecordingBackOffHandler())
             val consumer = mock(Consumer::class.java)
             val container = mock(MessageListenerContainer::class.java)
             val attempts = 50
 
-            // RecordInRetryException e o sinal do Spring Kafka de que o registro sera reentregue (nao foi pulado)
             repeat(attempts) { assertRedelivery { handler.handleRemaining(failure(), listOf(record), consumer, container) } }
 
-            // o registro e reposicionado para reentrega a cada falha e nenhum offset e confirmado
             verify(consumer, times(attempts)).seek(partition, record.offset())
             verify(consumer, never()).commitSync()
             verify(consumer, never()).commitSync(anyMap())
@@ -150,9 +148,9 @@ class FailSafeErrorHandlerTest {
 
     @Test
     fun `the wait grows across redeliveries of the same record up to the ceiling for every kind of failure`() {
-        failures.forEach { (label, failure) ->
+        transientFailureFactories.forEach { (label, failure) ->
             val backOffHandler = RecordingBackOffHandler()
-            val handler = failSafeErrorHandler(backOffHandler)
+            val handler = errorHandlerWith(backOffHandler)
             val consumer = mock(Consumer::class.java)
             val container = mock(MessageListenerContainer::class.java)
 
@@ -166,8 +164,8 @@ class FailSafeErrorHandlerTest {
 
     @Test
     fun `the dlt is never touched and nothing is counted, however long the store stays down`() {
-        failures.forEach { (label, failure) ->
-            val handler = failSafeErrorHandler(RecordingBackOffHandler())
+        transientFailureFactories.forEach { (label, failure) ->
+            val handler = errorHandlerWith(RecordingBackOffHandler())
             val consumer = mock(Consumer::class.java)
             val container = mock(MessageListenerContainer::class.java)
 

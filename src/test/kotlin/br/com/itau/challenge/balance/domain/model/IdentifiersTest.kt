@@ -8,7 +8,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
 
 class IdentifiersTest {
-    private val canonical = "5b19c8b6-0cc4-4c72-a989-0c2ee15fa975"
+    private val canonicalId = "5b19c8b6-0cc4-4c72-a989-0c2ee15fa975"
 
     private val parsers: Map<String, (String) -> Any> =
         mapOf(
@@ -37,11 +37,11 @@ class IdentifiersTest {
     }
 
     @Test
-    fun `accepts canonical lowercase and uppercase identifiers and normalizes to lowercase`() {
-        assertEquals(canonical, AccountId.parse(canonical).value)
-        assertEquals(canonical, AccountId.parse(canonical.uppercase()).value)
-        assertEquals(canonical, TransactionId.parse(canonical.uppercase()).value)
-        assertEquals(canonical, OwnerId.parse("5B19C8B6-0cc4-4C72-a989-0C2EE15FA975").value)
+    fun `accepts canonicalId lowercase and uppercase identifiers and normalizes to lowercase`() {
+        assertEquals(canonicalId, AccountId.parse(canonicalId).value)
+        assertEquals(canonicalId, AccountId.parse(canonicalId.uppercase()).value)
+        assertEquals(canonicalId, TransactionId.parse(canonicalId.uppercase()).value)
+        assertEquals(canonicalId, OwnerId.parse("5B19C8B6-0cc4-4C72-a989-0C2EE15FA975").value)
     }
 
     @Test
@@ -55,37 +55,37 @@ class IdentifiersTest {
     }
 
     @Test
-    fun `equality is by canonical value regardless of input case`() {
-        assertEquals(AccountId.parse(canonical), AccountId.parse(canonical.uppercase()))
-        assertEquals(AccountId.parse(canonical).hashCode(), AccountId.parse(canonical.uppercase()).hashCode())
+    fun `equality is by canonicalId value regardless of input case`() {
+        assertEquals(AccountId.parse(canonicalId), AccountId.parse(canonicalId.uppercase()))
+        assertEquals(AccountId.parse(canonicalId).hashCode(), AccountId.parse(canonicalId.uppercase()).hashCode())
         assertNotEquals(
-            AccountId.parse(canonical),
+            AccountId.parse(canonicalId),
             AccountId.parse("8e8ae808-b154-48b5-9f3e-553935cc4543"),
         )
     }
 
     @Test
-    fun `toString exposes only the canonical value`() {
-        assertEquals(canonical, AccountId.parse(canonical.uppercase()).toString())
-        assertEquals(canonical, TransactionId.parse(canonical).toString())
-        assertEquals(canonical, OwnerId.parse(canonical).toString())
+    fun `toString exposes only the canonicalId value`() {
+        assertEquals(canonicalId, AccountId.parse(canonicalId.uppercase()).toString())
+        assertEquals(canonicalId, TransactionId.parse(canonicalId).toString())
+        assertEquals(canonicalId, OwnerId.parse(canonicalId).toString())
     }
 
     @Test
-    fun `boxed identifiers in collections keep canonical value and deduplicate`() {
-        val upper = canonical.uppercase()
-        val accounts = listOf(AccountId.parse(canonical), AccountId.parse(upper))
-        val transactions = listOf(TransactionId.parse(canonical), TransactionId.parse(upper))
-        val owners = listOf(OwnerId.parse(canonical), OwnerId.parse(upper))
+    fun `boxed identifiers in collections keep canonicalId value and deduplicate`() {
+        val upper = canonicalId.uppercase()
+        val accounts = listOf(AccountId.parse(canonicalId), AccountId.parse(upper))
+        val transactions = listOf(TransactionId.parse(canonicalId), TransactionId.parse(upper))
+        val owners = listOf(OwnerId.parse(canonicalId), OwnerId.parse(upper))
 
         assertEquals(1, accounts.toSet().size)
-        assertEquals(listOf(canonical, canonical), accounts.map { it.value })
-        assertEquals(listOf(canonical, canonical), accounts.asAnyList().map { it.toString() })
-        assertEquals(listOf(canonical, canonical), transactions.map { it.value })
-        assertEquals(listOf(canonical, canonical), transactions.asAnyList().map { it.toString() })
-        assertEquals(listOf(canonical, canonical), owners.map { it.value })
-        assertEquals(listOf(canonical, canonical), owners.asAnyList().map { it.toString() })
+        assertEquals(listOf(canonicalId, canonicalId), accounts.map { it.value })
+        assertEquals(listOf(canonicalId, canonicalId), accounts.boxedAsAny().map { it.toString() })
+        assertEquals(listOf(canonicalId, canonicalId), transactions.map { it.value })
+        assertEquals(listOf(canonicalId, canonicalId), transactions.boxedAsAny().map { it.toString() })
+        assertEquals(listOf(canonicalId, canonicalId), owners.map { it.value })
+        assertEquals(listOf(canonicalId, canonicalId), owners.boxedAsAny().map { it.toString() })
     }
 
-    private fun List<Any>.asAnyList(): List<Any> = this
+    private fun List<Any>.boxedAsAny(): List<Any> = this
 }

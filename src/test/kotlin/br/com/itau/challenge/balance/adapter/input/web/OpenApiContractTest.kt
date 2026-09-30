@@ -81,8 +81,7 @@ class OpenApiContractTest {
 
     private val responses: Map<String, Any?> get() = operation["responses"].asMap()
 
-    /** Produz a resposta real de cada status documentado. */
-    private fun perform(status: String): MvcResult {
+    private fun performRequestProducing(status: String): MvcResult {
         when (status) {
             "200" -> doReturn(snapshot).`when`(getBalance).getBalance(accountId)
             "404" -> doThrow(AccountNotFoundException(accountId)).`when`(getBalance).getBalance(accountId)
@@ -106,7 +105,7 @@ class OpenApiContractTest {
     @Test
     fun `each documented status matches the real response in status and media type`() {
         responses.keys.forEach { status ->
-            val result = perform(status)
+            val result = performRequestProducing(status)
 
             assertEquals(status.toInt(), result.response.status, "status $status")
             val expected = MediaType.parseMediaType(mediaTypeOf(status))
@@ -124,7 +123,7 @@ class OpenApiContractTest {
         responses.keys.filter { it != "200" }.forEach { status ->
             val schema = resolve(resolve(responses[status])["content"].asMap()["application/problem+json"].asMap()["schema"])
             val constants = schema["allOf"].asList()[1].asMap()["properties"].asMap()
-            val body = bodyOf(perform(status))
+            val body = bodyOf(performRequestProducing(status))
 
             assertEquals(constants["type"].asMap()["const"], body["type"].asString(), "type de $status")
             assertEquals(constants["status"].asMap()["const"], body["status"].asInt(), "status de $status")
@@ -141,7 +140,7 @@ class OpenApiContractTest {
         assertEquals(false, schema["additionalProperties"])
         assertEquals(false, money["additionalProperties"])
 
-        val body = bodyOf(perform("200"))
+        val body = bodyOf(performRequestProducing("200"))
 
         assertEquals(schema["required"].asList().toSet(), body.propertyNames().toSet())
         assertEquals(schema["properties"].asMap().keys, body.propertyNames().toSet())
@@ -151,8 +150,8 @@ class OpenApiContractTest {
     }
 
     @Test
-    fun `the disabled response documents and carries no balance owner or update time`() {
-        val body = bodyOf(perform("409"))
+    fun `the 409 response carries no balance, owner or update time`() {
+        val body = bodyOf(performRequestProducing("409"))
 
         listOf("balance", "owner", "updated_at").forEach { assertFalse(body.has(it), "$it nao pode aparecer no 409") }
     }
@@ -160,7 +159,7 @@ class OpenApiContractTest {
     @Test
     fun `declared response headers are present with the documented values`() {
         responses.keys.forEach { status ->
-            val result = perform(status)
+            val result = performRequestProducing(status)
             val headers = resolve(responses[status])["headers"]?.asMap().orEmpty()
 
             assertTrue(headers.isNotEmpty(), "todo status declara ao menos X-Correlation-Id: $status")
@@ -244,7 +243,7 @@ class OpenApiContractTest {
     fun `the problem examples of the document match title, detail and instance of the real responses`() {
         responses.keys.filter { it != "200" }.forEach { status ->
             val example = resolve(responses[status])["content"].asMap()["application/problem+json"].asMap()["example"].asMap()
-            val body = bodyOf(perform(status))
+            val body = bodyOf(performRequestProducing(status))
 
             assertEquals(example["type"], body["type"].asString(), "type do exemplo de $status")
             assertEquals(example["title"], body["title"].asString(), "title do exemplo de $status")

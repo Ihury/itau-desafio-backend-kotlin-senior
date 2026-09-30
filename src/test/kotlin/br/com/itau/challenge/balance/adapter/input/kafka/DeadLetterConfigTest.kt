@@ -49,7 +49,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * Isolamento no DLT (US4) com o handler chamado diretamente e um `KafkaOperations` mockado, sem broker: destino, bytes
+ * Isolamento no DLT com o handler chamado diretamente e um `KafkaOperations` mockado, sem broker: destino, bytes
  * verbatim, headers, as tres classes de falha, a contagem de `rejected` e o comportamento com o DLT indisponivel.
  */
 class DeadLetterConfigTest {
@@ -74,11 +74,11 @@ class DeadLetterConfigTest {
     }
 
     private val dltTopic = "transacoes-financeiras-processadas.DLT"
-    private val sent = CopyOnWriteArrayList<ProducerRecord<ByteArray, ByteArray>>()
+    private val dltPublications = CopyOnWriteArrayList<ProducerRecord<ByteArray, ByteArray>>()
     private var publishFailure: RuntimeException? = null
 
     @Suppress("UNCHECKED_CAST")
-    private val template = mock(KafkaOperations::class.java) as KafkaOperations<ByteArray, ByteArray>
+    private val dltTemplate = mock(KafkaOperations::class.java) as KafkaOperations<ByteArray, ByteArray>
     private val metrics = RecordingProcessingMetrics()
     private val clock = Clock.fixed(Instant.parse("2026-06-01T12:00:00Z"), ZoneOffset.UTC)
     private val backOffs = RecordingBackOffHandler()
@@ -86,14 +86,14 @@ class DeadLetterConfigTest {
 
     /** Sem jitter, para as esperas serem exatas (o jitter e coberto por `BackpressureConfigTest`). */
     private val noJitter = BackOffProperties(initialMs = 500, maxMs = 30_000, jitterMs = 0)
-    private val handler: DefaultErrorHandler = config.deadLetterErrorHandler(template, dltTopic, Duration.ofMillis(300), clock, metrics, noJitter, backOffs)
+    private val handler: DefaultErrorHandler = config.deadLetterErrorHandler(dltTemplate, dltTopic, Duration.ofMillis(300), clock, metrics, noJitter, backOffs)
     private val consumer = mock(Consumer::class.java)
     private val container = mock(MessageListenerContainer::class.java)
 
-    private val value = byteArrayOf(0xC3.toByte(), 0x28, 0x7B, 0x00, 0xFF.toByte())
-    private val key = byteArrayOf(0x01, 0x02, 0x03)
+    private val originalValue = byteArrayOf(0xC3.toByte(), 0x28, 0x7B, 0x00, 0xFF.toByte())
+    private val originalKey = byteArrayOf(0x01, 0x02, 0x03)
     private val record =
-        ConsumerRecord<Any, Any>("transacoes-financeiras-processadas", 7, 41L, key, value).also {
+        ConsumerRecord<Any, Any>("transacoes-financeiras-processadas", 7, 41L, originalKey, originalValue).also {
             it.headers().add(RecordHeader("origem", "autorizador".toByteArray()))
         }
     private val partition = TopicPartition(record.topic(), record.partition())
@@ -106,10 +106,10 @@ class DeadLetterConfigTest {
             if (failure != null) {
                 CompletableFuture.failedFuture<SendResult<ByteArray, ByteArray>>(failure)
             } else {
-                sent += outbound
+                dltPublications += outbound
                 CompletableFuture.completedFuture(SendResult(outbound, RecordMetadata(TopicPartition(outbound.topic(), 1), 0L, 0, 0L, 0, 0)))
             }
-        }.`when`(template).send(anyProducerRecord())
+        }.`when`(dltTemplate).send(anyProducerRecord())
     }
 
     /** Matcher do Mockito que devolve um valor do tipo esperado (o `any()` devolve `null`, que o Kotlin recusa em tipo nao nulo). */
@@ -139,18 +139,16 @@ class DeadLetterConfigTest {
         name: String,
     ): String? = outbound.headers().lastHeader(name)?.value()?.toString(Charsets.UTF_8)
 
-    private fun onlyRecord(): ProducerRecord<ByteArray, ByteArray> {
-        assertEquals(1, sent.size, "publicacoes no DLT")
-        return sent.single()
+    private fun singleDltRecord(): ProducerRecord<ByteArray, ByteArray> {
+        assertEquals(1, dltPublications.size, "publicacoes no DLT")
+        return dltPublications.single()
     }
-
-    // ----- permanente ----------------------------------------------------------------------------------------------
 
     @Test
     fun `an invalid event goes to the dlt on the first failure without redelivery`() {
         assertTrue(deliver(InvalidEventException(RejectionReason.INVALID_CURRENCY, "transaction.currency")))
 
-        assertEquals(1, sent.size)
+        assertEquals(1, dltPublications.size)
         assertEquals(emptyList(), backOffs.intervals, "sem espera nem reentrega")
         assertEquals(listOf("rejected(invalid_currency)"), metrics.outcomes)
     }
@@ -159,7 +157,7 @@ class DeadLetterConfigTest {
     fun `the destination is the dlt topic with the partition left to the partitioner`() {
         deliver(InvalidEventException(RejectionReason.MISSING_FIELD, "account.id"))
 
-        val outbound = onlyRecord()
+        val outbound = singleDltRecord()
         assertEquals(dltTopic, outbound.topic())
         assertNull(outbound.partition(), "partition -1 (o padrao 'mesma particao' falharia com 12 -> 3 particoes)")
     }
@@ -168,26 +166,26 @@ class DeadLetterConfigTest {
     fun `key and value reach the dlt as the original bytes, binary included`() {
         deliver(InvalidEventException(RejectionReason.MALFORMED_PAYLOAD))
 
-        val outbound = onlyRecord()
-        assertContentEquals(value, outbound.value())
-        assertContentEquals(key, outbound.key())
+        val outbound = singleDltRecord()
+        assertContentEquals(originalValue, outbound.value())
+        assertContentEquals(originalKey, outbound.key())
     }
 
     @Test
     fun `a record without key is published without key`() {
-        val keyless = ConsumerRecord<Any, Any>("transacoes-financeiras-processadas", 3, 9L, null, value)
+        val keyless = ConsumerRecord<Any, Any>("transacoes-financeiras-processadas", 3, 9L, null, originalValue)
 
         handler.handleRemaining(listenerFailure(InvalidEventException(RejectionReason.MALFORMED_PAYLOAD)), listOf(keyless), consumer, container)
 
-        assertNull(onlyRecord().key())
-        assertContentEquals(value, onlyRecord().value())
+        assertNull(singleDltRecord().key())
+        assertContentEquals(originalValue, singleDltRecord().value())
     }
 
     @Test
     fun `the rejection headers and the original coordinates are present and no exception header leaks`() {
         deliver(InvalidEventException(RejectionReason.INVALID_TIMESTAMP, "account.created_at"))
 
-        val outbound = onlyRecord()
+        val outbound = singleDltRecord()
         assertEquals("invalid_timestamp", header(outbound, "x-rejection-reason"))
         assertEquals("account.created_at", header(outbound, "x-rejection-detail"))
         assertEquals("2026-06-01T12:00:00Z", header(outbound, "x-rejected-at"))
@@ -206,7 +204,7 @@ class DeadLetterConfigTest {
     fun `headers never carry the exception text or values, only codes and paths`() {
         deliver(InvalidEventException(RejectionReason.INVALID_VALUE, "transaction.amount"))
 
-        val everything = onlyRecord().headers().joinToString(" ") { "${it.key()}=${it.value().toString(Charsets.UTF_8)}" }
+        val everything = singleDltRecord().headers().joinToString(" ") { "${it.key()}=${it.value().toString(Charsets.UTF_8)}" }
         assertFalse("Listener failed" in everything)
         assertFalse("ListenerExecutionFailedException" in everything)
         assertFalse("InvalidEventException" in everything)
@@ -216,25 +214,23 @@ class DeadLetterConfigTest {
     fun `the detail header is absent for a payload rejection without field path`() {
         deliver(InvalidEventException(RejectionReason.MALFORMED_PAYLOAD))
 
-        assertNull(onlyRecord().headers().lastHeader("x-rejection-detail"))
+        assertNull(singleDltRecord().headers().lastHeader("x-rejection-detail"))
     }
-
-    // ----- nao classificada ----------------------------------------------------------------------------------------
 
     @Test
     fun `an unclassified failure gets three deliveries and then goes to the dlt as unprocessable event`() {
         assertFalse(deliver(IllegalStateException("defeito")), "1a entrega")
-        assertEquals(0, sent.size)
+        assertEquals(0, dltPublications.size)
         assertFalse(deliver(IllegalStateException("defeito")), "2a entrega")
-        assertEquals(0, sent.size)
+        assertEquals(0, dltPublications.size)
         assertTrue(deliver(IllegalStateException("defeito")), "3a entrega vai ao DLT")
 
         assertEquals(listOf(100L, 100L), backOffs.intervals)
-        val outbound = onlyRecord()
+        val outbound = singleDltRecord()
         assertEquals("unprocessable_event", header(outbound, "x-rejection-reason"))
         assertNull(outbound.headers().lastHeader("x-rejection-detail"))
         assertEquals(listOf("rejected(unprocessable_event)"), metrics.outcomes)
-        assertContentEquals(value, outbound.value())
+        assertContentEquals(originalValue, outbound.value())
     }
 
     @Test
@@ -243,7 +239,7 @@ class DeadLetterConfigTest {
         assertFalse(deliver(BalanceStoreRejectedException()))
         assertTrue(deliver(BalanceStoreRejectedException()))
 
-        assertEquals("unprocessable_event", header(onlyRecord(), "x-rejection-reason"))
+        assertEquals("unprocessable_event", header(singleDltRecord(), "x-rejection-reason"))
     }
 
     @Test
@@ -252,10 +248,8 @@ class DeadLetterConfigTest {
         assertFalse(deliver(ClassCastException("x")))
         assertTrue(deliver(ClassCastException("x")))
 
-        assertEquals("unprocessable_event", header(onlyRecord(), "x-rejection-reason"))
+        assertEquals("unprocessable_event", header(singleDltRecord(), "x-rejection-reason"))
     }
-
-    // ----- transitoria ---------------------------------------------------------------------------------------------
 
     @Test
     fun `a transient failure never reaches the recoverer however many times it repeats`() {
@@ -263,8 +257,8 @@ class DeadLetterConfigTest {
             repeat(50) { assertFalse(deliver(BalanceStoreUnavailableException(cause)), "$cause na tentativa ${it + 1}") }
         }
 
-        assertEquals(0, sent.size)
-        verify(template, never()).send(anyProducerRecord())
+        assertEquals(0, dltPublications.size)
+        verify(dltTemplate, never()).send(anyProducerRecord())
         assertEquals(emptyList(), metrics.outcomes)
         assertEquals(0, metrics.dltPublishFailures)
         assertTrue(backOffs.intervals.all { it in 1..30_000 })
@@ -283,10 +277,8 @@ class DeadLetterConfigTest {
         repeat(3) { assertFalse(deliver(BalanceStoreUnavailableException(StoreFailureCause.THROTTLED))) }
         assertTrue(deliver(InvalidEventException(RejectionReason.INVALID_VALUE, "transaction.amount")))
 
-        assertEquals("invalid_value", header(onlyRecord(), "x-rejection-reason"))
+        assertEquals("invalid_value", header(singleDltRecord(), "x-rejection-reason"))
     }
-
-    // ----- contagem e DLT indisponivel --------------------------------------------------------------------------------
 
     @Test
     fun `rejected is counted exactly once and only after the dlt confirms`() {
@@ -308,7 +300,7 @@ class DeadLetterConfigTest {
 
         assertEquals(5, metrics.dltPublishFailures)
         assertEquals(emptyList(), metrics.outcomes)
-        assertEquals(0, sent.size)
+        assertEquals(0, dltPublications.size)
         verify(consumer, times(5)).seek(partition, record.offset())
         verify(consumer, never()).commitSync()
         verify(consumer, never()).commitAsync()
@@ -320,8 +312,8 @@ class DeadLetterConfigTest {
         // delivery.timeout.ms curto do produtor, vale o waitForSendResultTimeout (300 ms neste teste)
         val producerFactory = mock(ProducerFactory::class.java)
         doReturn(mapOf<String, Any>("delivery.timeout.ms" to 100)).`when`(producerFactory).configurationProperties
-        doReturn(producerFactory).`when`(template).producerFactory
-        doAnswer { CompletableFuture<SendResult<ByteArray, ByteArray>>() }.`when`(template).send(anyProducerRecord())
+        doReturn(producerFactory).`when`(dltTemplate).producerFactory
+        doAnswer { CompletableFuture<SendResult<ByteArray, ByteArray>>() }.`when`(dltTemplate).send(anyProducerRecord())
 
         val started = System.nanoTime()
         assertFalse(deliver(InvalidEventException(RejectionReason.MALFORMED_PAYLOAD)))
@@ -347,7 +339,7 @@ class DeadLetterConfigTest {
         assertFalse(deliver(IllegalStateException("x")))
         assertTrue(deliver(IllegalStateException("x")), "com o DLT de volta, o registro e isolado")
 
-        assertEquals("unprocessable_event", header(onlyRecord(), "x-rejection-reason"))
+        assertEquals("unprocessable_event", header(singleDltRecord(), "x-rejection-reason"))
         assertEquals(listOf("rejected(unprocessable_event)"), metrics.outcomes)
     }
 
@@ -355,18 +347,16 @@ class DeadLetterConfigTest {
     fun `record level handling recovers the same way`() {
         assertTrue(handler.handleOne(listenerFailure(InvalidEventException(RejectionReason.INVALID_VALUE)), record, consumer, container))
 
-        assertEquals("invalid_value", header(onlyRecord(), "x-rejection-reason"))
+        assertEquals("invalid_value", header(singleDltRecord(), "x-rejection-reason"))
         assertEquals(listOf("rejected(invalid_value)"), metrics.outcomes)
     }
 
     @Test
-    fun `the retry classification only makes the invalid event not retryable`() {
+    fun `a failure the spring default treats as fatal is still retried, only the invalid event is not retryable`() {
         // o `DefaultErrorHandler` padrao trataria ClassCastException como fatal (sem espera); aqui so o evento invalido e permanente
         assertFalse(deliver(ClassCastException("x")))
         assertEquals(listOf(100L), backOffs.intervals)
     }
-
-    // ----- logs do ciclo de falha (FR-032, FR-035) -------------------------------------------------------------------
 
     private inline fun <T> capturingLogs(block: (ListAppender<ILoggingEvent>) -> T): T {
         val logger = LoggerFactory.getLogger(DeadLetterConfig::class.java) as Logger
@@ -417,7 +407,7 @@ class DeadLetterConfigTest {
             val recovered = deliver(storeFailure(StoreFailureCause.MISCONFIGURED, StoreFailureDetails("software.amazon.awssdk.services.dynamodb.model.ResourceNotFoundException", "ResourceNotFoundException", 400)))
 
             assertFalse(recovered, "a falha de configuracao continua sendo retentada")
-            assertTrue(sent.isEmpty(), "nunca vai ao DLT")
+            assertTrue(dltPublications.isEmpty(), "nunca vai ao DLT")
             val line = logs.list.single { it.formattedMessage.startsWith("store unavailable") }
             assertEquals(Level.ERROR, line.level)
             assertTrue("cause=MISCONFIGURED" in line.formattedMessage && "errorCode=ResourceNotFoundException" in line.formattedMessage, line.formattedMessage)

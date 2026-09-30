@@ -16,7 +16,7 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
- * Encerramento gracioso (FR-034, US6.4): a API termina as requisicoes em andamento, o consumer para logo apos o registro corrente
+ * Encerramento gracioso: a API termina as requisicoes em andamento, o consumer para logo apos o registro corrente
  * e NAO confirma o que nao foi processado (commit so pelo container, depois do listener; sem auto-commit), de modo que o resto e
  * reentregue depois do reinicio e reconciliado pela idempotencia (`duplicate`/`obsolete`).
  */
@@ -52,7 +52,7 @@ class GracefulShutdownConfigTest : ManagedApplicationTest() {
 
     @Test
     fun `the graceful period fits inside the container stop grace of forty seconds`() {
-        // docker compose `stop_grace_period: 40s` (Phase 9): o encerramento gracioso precisa caber nele
+        // docker compose `stop_grace_period: 40s`: o encerramento gracioso precisa caber nele
         val shutdown = Binder.get(environment).bind("spring.lifecycle.timeout-per-shutdown-phase", Duration::class.java).get()
         assertTrue(shutdown < Duration.ofSeconds(40))
     }

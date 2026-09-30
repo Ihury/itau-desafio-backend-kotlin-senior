@@ -91,7 +91,7 @@ class DynamoDbExceptionTranslatorTest {
     }
 
     @Test
-    fun `misconfiguration stays a transitory failure on write, never a rejection`() {
+    fun `misconfiguration stays a transient failure on write, never a rejection`() {
         listOf<Throwable>(
             ResourceNotFoundException.builder().message("x").build(),
             serviceError(400, "AccessDeniedException"),
@@ -151,7 +151,7 @@ class DynamoDbExceptionTranslatorTest {
     }
 
     @Test
-    fun `validation failure on write is a rejection and other failures stay transitory`() {
+    fun `validation failure on write is a rejection and other failures stay transient`() {
         val validation = serviceError(400, "ValidationException")
         val rejected = DynamoDbExceptionTranslator.translateWriteFailure(validation)
         assertIs<BalanceStoreRejectedException>(rejected)

@@ -20,7 +20,7 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
- * Grupos de saude na porta de gerenciamento (FR-033, Constitution VII): `liveness` e `readiness` refletem so o estado do proprio
+ * Grupos de saude na porta de gerenciamento: `liveness` e `readiness` refletem so o estado do proprio
  * processo e permanecem 200 com o DynamoDB fora (a instancia nao sai de rotacao); a saude da dependencia vive no grupo
  * `dependencies` e no gauge `balance.dependency.up`.
  */
@@ -28,18 +28,18 @@ class HealthGroupsTest : ManagedApplicationTest() {
     @Autowired
     private lateinit var groups: HealthEndpointGroups
 
-    private fun dynamoIsUp() {
+    private fun stubDynamoDbUp() {
         val table = TableDescription.builder().tableName("AccountBalances").tableStatus(TableStatus.ACTIVE).build()
         doReturn(DescribeTableResponse.builder().table(table).build()).`when`(readClient).describeTable(any(DescribeTableRequest::class.java))
     }
 
-    private fun dynamoIsDown() {
+    private fun stubDynamoDbDown() {
         doThrow(SdkClientException.builder().message("Unable to execute HTTP request: connect to dynamodb:8000 failed").build())
             .`when`(readClient)
             .describeTable(any(DescribeTableRequest::class.java))
     }
 
-    private fun gauge(): Double {
+    private fun dependencyUpGauge(): Double {
         val line = management("/actuator/prometheus").body().lines().single { it.startsWith("balance_dependency_up{") }
         return line.substringAfterLast(' ').toDouble()
     }
@@ -61,7 +61,7 @@ class HealthGroupsTest : ManagedApplicationTest() {
 
     @Test
     fun `with dynamodb down dependencies is 503 while liveness and readiness stay 200 and after it returns everything is up`() {
-        dynamoIsDown()
+        stubDynamoDbDown()
 
         // o resultado do probe fica em cache por 5 s (pode vir de outro teste): espera a janela renovar
         await.atMost(Duration.ofSeconds(8)).untilAsserted { assertEquals(503, management("/actuator/health/dependencies").statusCode()) }
@@ -71,14 +71,14 @@ class HealthGroupsTest : ManagedApplicationTest() {
         assertEquals("""{"status":"UP"}""", management("/actuator/health/liveness").body())
         assertEquals(200, management("/actuator/health/readiness").statusCode())
         assertEquals("""{"status":"UP"}""", management("/actuator/health/readiness").body())
-        assertEquals(0.0, gauge())
+        assertEquals(0.0, dependencyUpGauge())
         assertEquals(503, management("/actuator/health").statusCode(), "a raiz agrega as dependencias e nao serve de sonda")
 
-        dynamoIsUp()
+        stubDynamoDbUp()
 
         await.atMost(Duration.ofSeconds(8)).untilAsserted { assertEquals(200, management("/actuator/health/dependencies").statusCode()) }
         assertEquals("""{"status":"UP"}""", management("/actuator/health/dependencies").body())
-        assertEquals(1.0, gauge())
+        assertEquals(1.0, dependencyUpGauge())
         assertEquals(200, management("/actuator/health/readiness").statusCode())
         assertEquals(200, management("/actuator/health/liveness").statusCode())
         assertEquals(200, management("/actuator/health").statusCode())

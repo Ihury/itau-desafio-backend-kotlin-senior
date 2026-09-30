@@ -9,7 +9,7 @@ import kotlin.reflect.full.memberProperties
 import kotlin.test.assertTrue
 
 class BalanceSnapshotTest {
-    private val t = 1751749453433000L
+    private val baseMicros = 1751749453433000L
     private val lowId = "00000000-0000-4000-8000-000000000001"
     private val highId = "ffffffff-ffff-4fff-8fff-ffffffffff01"
 
@@ -35,39 +35,39 @@ class BalanceSnapshotTest {
 
     @Test
     fun `precedence comes from the transaction timestamp and id`() {
-        val snapshot = BalanceSnapshot.from(transactionEvent(transactionId = highId.uppercase(), timestampMicros = t))
+        val snapshot = BalanceSnapshot.from(transactionEvent(transactionId = highId.uppercase(), timestampMicros = baseMicros))
 
-        assertEquals(Precedence(EventInstant.transactionTimestamp(t), TransactionId.parse(highId)), snapshot.precedence)
+        assertEquals(Precedence(EventInstant.transactionTimestamp(baseMicros), TransactionId.parse(highId)), snapshot.precedence)
     }
 
     @Test
-    fun `supersedes with an absent current snapshot`() {
+    fun `supersedes an absent snapshot`() {
         assertTrue(BalanceSnapshot.from(transactionEvent()).supersedes(null))
     }
 
     @Test
     fun `supersedes compares the precedence key`() {
-        val current = BalanceSnapshot.from(transactionEvent(transactionId = lowId, timestampMicros = t))
+        val current = BalanceSnapshot.from(transactionEvent(transactionId = lowId, timestampMicros = baseMicros))
 
-        assertTrue(BalanceSnapshot.from(transactionEvent(transactionId = lowId, timestampMicros = t + 1)).supersedes(current))
-        assertFalse(BalanceSnapshot.from(transactionEvent(transactionId = highId, timestampMicros = t - 1)).supersedes(current))
-        assertTrue(BalanceSnapshot.from(transactionEvent(transactionId = highId, timestampMicros = t)).supersedes(current))
+        assertTrue(BalanceSnapshot.from(transactionEvent(transactionId = lowId, timestampMicros = baseMicros + 1)).supersedes(current))
+        assertFalse(BalanceSnapshot.from(transactionEvent(transactionId = highId, timestampMicros = baseMicros - 1)).supersedes(current))
+        assertTrue(BalanceSnapshot.from(transactionEvent(transactionId = highId, timestampMicros = baseMicros)).supersedes(current))
         assertFalse(
-            BalanceSnapshot.from(transactionEvent(transactionId = lowId, timestampMicros = t)).supersedes(
-                BalanceSnapshot.from(transactionEvent(transactionId = highId, timestampMicros = t)),
+            BalanceSnapshot.from(transactionEvent(transactionId = lowId, timestampMicros = baseMicros)).supersedes(
+                BalanceSnapshot.from(transactionEvent(transactionId = highId, timestampMicros = baseMicros)),
             ),
         )
-        assertFalse(BalanceSnapshot.from(transactionEvent(transactionId = lowId, timestampMicros = t)).supersedes(current))
+        assertFalse(BalanceSnapshot.from(transactionEvent(transactionId = lowId, timestampMicros = baseMicros)).supersedes(current))
     }
 
     @Test
     fun `declined transactions and disabled accounts supersede like any other event`() {
-        val current = BalanceSnapshot.from(transactionEvent(timestampMicros = t))
+        val current = BalanceSnapshot.from(transactionEvent(timestampMicros = baseMicros))
 
-        val declined = transactionEvent(timestampMicros = t + 1, transactionStatus = TransactionStatus.DECLINED)
+        val declined = transactionEvent(timestampMicros = baseMicros + 1, transactionStatus = TransactionStatus.DECLINED)
         assertTrue(BalanceSnapshot.from(declined).supersedes(current))
 
-        val disabled = transactionEvent(timestampMicros = t + 1, accountStatus = AccountStatus.DISABLED)
+        val disabled = transactionEvent(timestampMicros = baseMicros + 1, accountStatus = AccountStatus.DISABLED)
         assertTrue(BalanceSnapshot.from(disabled).supersedes(current))
     }
 

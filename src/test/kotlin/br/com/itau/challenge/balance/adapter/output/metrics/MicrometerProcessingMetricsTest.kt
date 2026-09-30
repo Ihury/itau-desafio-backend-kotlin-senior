@@ -12,7 +12,7 @@ class MicrometerProcessingMetricsTest {
 
     private fun events(outcome: String): Double = registry.find("balance.events").tags("outcome", outcome, "reason", "none").counter()?.count() ?: 0.0
 
-    private fun anomalies(): Double = registry.find("balance.events.anomalies").tag("type", "conflicting_duplicate").counter()?.count() ?: 0.0
+    private fun conflictingDuplicateAnomalies(): Double = registry.find("balance.events.anomalies").tag("type", "conflicting_duplicate").counter()?.count() ?: 0.0
 
     @Test
     fun `applied increments only the processed outcome`() {
@@ -21,7 +21,7 @@ class MicrometerProcessingMetricsTest {
         assertEquals(1.0, events("processed"))
         assertEquals(0.0, events("obsolete"))
         assertEquals(0.0, events("duplicate"))
-        assertEquals(0.0, anomalies())
+        assertEquals(0.0, conflictingDuplicateAnomalies())
     }
 
     @Test
@@ -37,7 +37,7 @@ class MicrometerProcessingMetricsTest {
         metrics.duplicate(conflicting = false)
 
         assertEquals(1.0, events("duplicate"))
-        assertEquals(0.0, anomalies())
+        assertEquals(0.0, conflictingDuplicateAnomalies())
     }
 
     @Test
@@ -45,7 +45,7 @@ class MicrometerProcessingMetricsTest {
         metrics.duplicate(conflicting = true)
 
         assertEquals(1.0, events("duplicate"))
-        assertEquals(1.0, anomalies())
+        assertEquals(1.0, conflictingDuplicateAnomalies())
         assertEquals(0.0, events("processed"))
         assertEquals(0.0, events("obsolete"))
     }
@@ -60,7 +60,7 @@ class MicrometerProcessingMetricsTest {
         assertEquals(3.0, events("processed"))
         assertEquals(2.0, events("obsolete"))
         assertEquals(2.0, events("duplicate"))
-        assertEquals(1.0, anomalies())
+        assertEquals(1.0, conflictingDuplicateAnomalies())
     }
 
     private fun rejected(reason: String): Double = registry.find("balance.events").tags("outcome", "rejected", "reason", reason).counter()?.count() ?: 0.0

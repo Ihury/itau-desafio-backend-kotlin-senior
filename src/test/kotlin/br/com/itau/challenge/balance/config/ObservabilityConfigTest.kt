@@ -16,16 +16,16 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
-/** Metricas e Actuator na porta de gerenciamento; nada disso na porta da API (contracts/observability.md). */
+/** Metricas e Actuator na porta de gerenciamento; nada disso na porta da API. */
 class ObservabilityConfigTest : ManagedApplicationTest() {
     @Autowired
     private lateinit var listeners: KafkaListenerEndpointRegistry
 
     private val account = "5b19c8b6-0cc4-4c72-a989-0c2ee15fa975"
 
-    private fun scrape(): String {
+    private fun scrapeAfterApiRequest(): String {
         doReturn(GetItemResponse.builder().build()).`when`(readClient).getItem(any(GetItemRequest::class.java))
-        api("/balances/$account") // gera a serie de http.server.requests
+        api("/balances/$account")
         var body = ""
         // o Boot registra o timer HTTP depois de a resposta ser enviada: espera a serie aparecer
         await.atMost(Duration.ofSeconds(10)).untilAsserted {
@@ -38,12 +38,12 @@ class ObservabilityConfigTest : ManagedApplicationTest() {
     }
 
     private fun bucketBoundaries(
-        scrape: String,
+        prometheusText: String,
         metric: String,
     ): Set<Double> =
         // o valor da tag `uri` pode conter chaves (`/balances/{accountId}`): por isso `.*?` e nao `[^}]*`
         Regex("""^${Regex.escape(metric)}_bucket\{.*?le="([^"]+)"}""", RegexOption.MULTILINE)
-            .findAll(scrape)
+            .findAll(prometheusText)
             .map { it.groupValues[1] }
             .filter { it != "+Inf" }
             .map { it.toDouble() }
@@ -57,7 +57,7 @@ class ObservabilityConfigTest : ManagedApplicationTest() {
 
     @Test
     fun `prometheus on the management port exposes the outcome counters`() {
-        val body = scrape()
+        val body = scrapeAfterApiRequest()
 
         assertTrue(body.contains("balance_events_total{"), "balance_events_total ausente")
         assertTrue(body.contains("""outcome="processed""""))
@@ -66,14 +66,14 @@ class ObservabilityConfigTest : ManagedApplicationTest() {
 
     @Test
     fun `http server requests carries the histogram with the 50 ms, 100 ms, 300 ms, 1 s and 2 s objectives`() {
-        val boundaries = bucketBoundaries(scrape(), "http_server_requests_seconds")
+        val boundaries = bucketBoundaries(scrapeAfterApiRequest(), "http_server_requests_seconds")
 
         listOf(0.05, 0.1, 0.3, 1.0, 2.0).forEach { assertTrue(it in boundaries, "bucket $it ausente em $boundaries") }
     }
 
     @Test
     fun `the business timers publish histogram buckets`() {
-        val body = scrape()
+        val body = scrapeAfterApiRequest()
 
         listOf("balance_ingest_duration_seconds", "balance_store_write_duration_seconds", "balance_store_read_duration_seconds").forEach { metric ->
             val boundaries = bucketBoundaries(body, metric)
@@ -84,7 +84,7 @@ class ObservabilityConfigTest : ManagedApplicationTest() {
 
     @Test
     fun `the circuit breaker metrics are exported`() {
-        assertTrue(scrape().contains("resilience4j_circuitbreaker_state"))
+        assertTrue(scrapeAfterApiRequest().contains("resilience4j_circuitbreaker_state"))
     }
 
     @Test

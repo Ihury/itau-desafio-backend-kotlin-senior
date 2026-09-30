@@ -22,6 +22,7 @@ import software.amazon.awssdk.services.dynamodb.model.AttributeValue
 import software.amazon.awssdk.services.dynamodb.model.GetItemRequest
 import software.amazon.awssdk.services.dynamodb.model.GetItemResponse
 import software.amazon.awssdk.services.dynamodb.model.ProvisionedThroughputExceededException
+import java.util.concurrent.TimeUnit
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
@@ -56,7 +57,7 @@ class DynamoDbBalanceSnapshotReaderTest {
         val request = capturedRequest()
         assertEquals("AccountBalances", request.tableName())
         assertEquals(BalanceItemMapper.keyOf(accountId), request.key())
-        assertEquals(true, request.consistentRead())
+        assertTrue(request.consistentRead())
     }
 
     @Test
@@ -65,7 +66,7 @@ class DynamoDbBalanceSnapshotReaderTest {
 
         reader(consistent = false).find(accountId)
 
-        assertEquals(false, capturedRequest().consistentRead())
+        assertFalse(capturedRequest().consistentRead())
     }
 
     @Test
@@ -167,7 +168,7 @@ class DynamoDbBalanceSnapshotReaderTest {
         respondWith(null)
         reader().find(accountId)
 
-        val buckets = readTimer("not_found")!!.takeSnapshot().histogramCounts().map { it.bucket(java.util.concurrent.TimeUnit.MILLISECONDS) }
+        val buckets = readTimer("not_found")!!.takeSnapshot().histogramCounts().map { it.bucket(TimeUnit.MILLISECONDS) }
         assertTrue(buckets.isNotEmpty(), "sem histograma")
         assertTrue(5.0 in buckets && 2000.0 in buckets, "buckets $buckets")
     }

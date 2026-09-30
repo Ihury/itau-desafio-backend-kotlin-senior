@@ -8,6 +8,8 @@ import tools.jackson.databind.json.JsonMapper
 import tools.jackson.module.kotlin.jacksonMapperBuilder
 import java.time.ZoneId
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class BalanceResponseTest {
     /** Mesma configuracao do `application.yaml`: `spring.jackson.write.write-bigdecimal-as-plain=true`. */
@@ -15,7 +17,7 @@ class BalanceResponseTest {
 
     private val saoPaulo = ZoneId.of("America/Sao_Paulo")
 
-    private fun json(
+    private fun responseJson(
         balanceAmount: String = "183.12",
         balanceCurrency: String = "BRL",
         timestampMicros: Long = 1751749453433000L,
@@ -33,14 +35,14 @@ class BalanceResponseTest {
     private fun amountOf(
         balanceAmount: String,
         balanceCurrency: String = "BRL",
-    ): String = Regex("\"amount\":([^,}]+)").find(json(balanceAmount, balanceCurrency))!!.groupValues[1]
+    ): String = Regex("\"amount\":([^,}]+)").find(responseJson(balanceAmount, balanceCurrency))!!.groupValues[1]
 
     @Test
     fun `serializes exactly the contract of the client example`() {
         assertEquals(
             """{"id":"5b19c8b6-0cc4-4c72-a989-0c2ee15fa975","owner":"315e3cfe-f4af-4cd2-b298-a449e614349a",""" +
                 """"balance":{"amount":183.12,"currency":"BRL"},"updated_at":"2025-07-05T18:04:13.433-03:00"}""",
-            json(),
+            responseJson(),
         )
     }
 
@@ -78,18 +80,18 @@ class BalanceResponseTest {
     fun `ids are lowercase and the field is named updated_at`() {
         val text = mapper.writeValueAsString(BalanceResponse.from(BalanceSnapshot.from(transactionEvent(accountId = "5B19C8B6-0CC4-4C72-A989-0C2EE15FA975")), saoPaulo))
 
-        assertEquals(true, text.contains("\"id\":\"5b19c8b6-0cc4-4c72-a989-0c2ee15fa975\""))
-        assertEquals(true, text.contains("\"updated_at\":"))
-        assertEquals(false, text.contains("updatedAt"))
+        assertTrue(text.contains("\"id\":\"5b19c8b6-0cc4-4c72-a989-0c2ee15fa975\""))
+        assertTrue(text.contains("\"updated_at\":"))
+        assertFalse(text.contains("updatedAt"))
     }
 
     @Test
     fun `currency of the balance is exposed as is without conversion`() {
-        assertEquals(true, json(balanceCurrency = "USD").contains("\"currency\":\"USD\""))
+        assertTrue(responseJson(balanceCurrency = "USD").contains("\"currency\":\"USD\""))
     }
 
     private fun updatedAt(
         micros: Long,
         zone: ZoneId = saoPaulo,
-    ): String = Regex("\"updated_at\":\"([^\"]+)\"").find(json(timestampMicros = micros, zone = zone))!!.groupValues[1]
+    ): String = Regex("\"updated_at\":\"([^\"]+)\"").find(responseJson(timestampMicros = micros, zone = zone))!!.groupValues[1]
 }

@@ -60,31 +60,33 @@ object ConvergenceModel {
         }
 
     /**
-     * Um evento gerado: [account] indexa [ACCOUNTS], [tsOffset] desloca o `timestamp` base, [txIndex] escolhe o `transactionId`
-     * e [upperCaseTx] entrega o mesmo id em maiusculas (o dominio normaliza para minusculas).
+     * Um evento gerado: [accountIndex] indexa [ACCOUNTS], [timestampOffsetMicros] desloca o `timestamp` base,
+     * [transactionIdIndex] escolhe o `transactionId` e [uppercaseTransactionId] entrega o mesmo id em maiusculas
+     * (o dominio normaliza para minusculas).
      */
     data class EventSpec(
-        val account: Int,
-        val tsOffset: Int,
-        val txIndex: Int,
-        val upperCaseTx: Boolean,
-        val accountOverride: String? = null,
+        val accountIndex: Int,
+        val timestampOffsetMicros: Int,
+        val transactionIdIndex: Int,
+        val uppercaseTransactionId: Boolean,
+        val accountIdOverride: String? = null,
     ) {
         /** Conta do evento: a de [ACCOUNTS] ou, nos testes de integracao (tabela compartilhada), uma conta aleatoria. */
-        val accountId: String get() = accountOverride ?: ACCOUNTS[account]
+        val accountId: String get() = accountIdOverride ?: ACCOUNTS[accountIndex]
 
         /** Mesmo evento numa outra conta (o conteudo e rederivado da nova chave). */
-        fun withAccount(id: String): EventSpec = copy(accountOverride = id)
-        val timestampMicros: Long get() = BASE_TIMESTAMP_MICROS + tsOffset
-        val transactionId: String get() = TRANSACTION_IDS[txIndex]
+        fun withAccount(id: String): EventSpec = copy(accountIdOverride = id)
+
+        val timestampMicros: Long get() = BASE_TIMESTAMP_MICROS + timestampOffsetMicros
+        val transactionId: String get() = TRANSACTION_IDS[transactionIdIndex]
 
         /** Chave de precedencia textual: `(timestamp, transactionId minusculo)`. */
         val key: Pair<Long, String> get() = timestampMicros to transactionId
 
         fun toEvent(): TransactionEvent {
-            val content = contentOf(this)
+            val content = derivedContentOf(this)
             return transactionEvent(
-                transactionId = if (upperCaseTx) transactionId.uppercase() else transactionId,
+                transactionId = if (uppercaseTransactionId) transactionId.uppercase() else transactionId,
                 timestampMicros = timestampMicros,
                 transactionStatus = content.transactionStatus,
                 accountId = accountId,
@@ -99,8 +101,8 @@ object ConvergenceModel {
         fun toSnapshot(): BalanceSnapshot = BalanceSnapshot.from(toEvent())
     }
 
-    /** Conteudo derivado da chave: nao depende de [EventSpec.upperCaseTx], so de `(conta, timestamp, transactionId)`. */
-    data class Content(
+    /** Conteudo derivado da chave: nao depende de [EventSpec.uppercaseTransactionId], so de `(conta, timestamp, transactionId)`. */
+    data class DerivedContent(
         val ownerId: String,
         val accountStatus: AccountStatus,
         val transactionStatus: TransactionStatus,
@@ -109,20 +111,20 @@ object ConvergenceModel {
         val accountCreatedAtMicros: Long,
     )
 
-    fun contentOf(spec: EventSpec): Content {
-        val mixed = Random("${spec.accountId}|${spec.timestampMicros}|${spec.transactionId}".hashCode().toLong()).nextLong()
-        val bits = Random(mixed)
-        return Content(
-            ownerId = UUID(mixed, mixed.rotateLeft(17) xor 0x5DEECE66DL).toString(),
-            accountStatus = if (bits.nextBoolean()) AccountStatus.ENABLED else AccountStatus.DISABLED,
-            transactionStatus = if (bits.nextBoolean()) TransactionStatus.APPROVED else TransactionStatus.DECLINED,
-            balanceAmount = BigDecimal(BigInteger.valueOf(bits.nextInt(1_000_000_000).toLong()), bits.nextInt(4)).toPlainString(),
-            currency = if (bits.nextBoolean()) "BRL" else "USD",
-            accountCreatedAtMicros = 1_500_000_000_000_000L + bits.nextInt(1_000_000),
+    fun derivedContentOf(spec: EventSpec): DerivedContent {
+        val seed = Random("${spec.accountId}|${spec.timestampMicros}|${spec.transactionId}".hashCode().toLong()).nextLong()
+        val random = Random(seed)
+        return DerivedContent(
+            ownerId = UUID(seed, seed.rotateLeft(17) xor 0x5DEECE66DL).toString(),
+            accountStatus = if (random.nextBoolean()) AccountStatus.ENABLED else AccountStatus.DISABLED,
+            transactionStatus = if (random.nextBoolean()) TransactionStatus.APPROVED else TransactionStatus.DECLINED,
+            balanceAmount = BigDecimal(BigInteger.valueOf(random.nextInt(1_000_000_000).toLong()), random.nextInt(4)).toPlainString(),
+            currency = if (random.nextBoolean()) "BRL" else "USD",
+            accountCreatedAtMicros = 1_500_000_000_000_000L + random.nextInt(1_000_000),
         )
     }
 
-    /** Oraculo: o evento de maior `(timestamp, transactionId minusculo)` por `String.compareTo`, sem `UUID.compareTo`. */
+    /** Oraculo: o evento de maior `(timestamp, transactionId minusculo)`. */
     fun winnerOf(specs: List<EventSpec>): EventSpec? =
         specs.maxWithOrNull(compareBy<EventSpec> { it.timestampMicros }.thenBy { it.transactionId })
 
@@ -133,5 +135,5 @@ object ConvergenceModel {
             Arb.int(0 until TIMESTAMP_SPAN),
             Arb.element(TRANSACTION_IDS.indices.toList()),
             Arb.boolean(),
-        ) { account, tsOffset, txIndex, upper -> EventSpec(account, tsOffset, txIndex, upper) }
+        ) { accountIndex, timestampOffsetMicros, transactionIdIndex, uppercase -> EventSpec(accountIndex, timestampOffsetMicros, transactionIdIndex, uppercase) }
 }

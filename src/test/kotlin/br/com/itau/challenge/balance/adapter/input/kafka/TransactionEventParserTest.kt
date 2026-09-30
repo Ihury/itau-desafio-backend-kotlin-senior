@@ -39,13 +39,13 @@ class TransactionEventParserTest {
         )
 
     /** Monta o JSON; valor `null` (Kotlin) omite a chave; o literal `null` gera JSON null. */
-    private fun json(
+    private fun payloadJson(
         overrides: Map<String, String?> = emptyMap(),
         extras: String = "",
     ): String {
-        val v = validFields.toMutableMap<String, String?>().apply { putAll(overrides) }
+        val fields = validFields.toMutableMap<String, String?>().apply { putAll(overrides) }
 
-        fun field(path: String): String? = v[path]?.let { "\"${path.substringAfterLast('.')}\":$it" }
+        fun field(path: String): String? = fields[path]?.let { "\"${path.substringAfterLast('.')}\":$it" }
 
         fun obj(vararg paths: String): String = paths.mapNotNull { field(it) }.joinToString(",")
         val transaction = obj("transaction.id", "transaction.type", "transaction.amount", "transaction.currency", "transaction.status", "transaction.timestamp")
@@ -71,11 +71,9 @@ class TransactionEventParserTest {
         assertEquals(detail, failure.fieldPath, "detail de $label")
     }
 
-    // ---- (a) caminho feliz
-
     @Test
     fun `the example of the schema is parsed exactly`() {
-        val event = parse(json())
+        val event = parse(payloadJson())
 
         assertEquals("8e8ae808-b154-48b5-9f3e-553935cc4543", event.transaction.id.value)
         assertEquals(TransactionType.CREDIT, event.transaction.type)
@@ -93,7 +91,7 @@ class TransactionEventParserTest {
 
     @Test
     fun `decimals never go through double`() {
-        val event = parse(json(mapOf("transaction.amount" to "0.1", "account.balance.amount" to "12345678901234567890.123456789012345678")))
+        val event = parse(payloadJson(mapOf("transaction.amount" to "0.1", "account.balance.amount" to "12345678901234567890.123456789012345678")))
 
         assertEquals(BigDecimal("0.1"), event.transaction.amount)
         assertEquals(BigDecimal("12345678901234567890.123456789012345678"), event.account.balance.amount)
@@ -103,7 +101,7 @@ class TransactionEventParserTest {
     fun `uppercase identifiers are normalized to lower case`() {
         val event =
             parse(
-                json(
+                payloadJson(
                     mapOf(
                         "transaction.id" to "\"8E8AE808-B154-48B5-9F3E-553935CC4543\"",
                         "account.id" to "\"5B19C8B6-0CC4-4C72-A989-0C2EE15FA975\"",
@@ -119,14 +117,14 @@ class TransactionEventParserTest {
 
     @Test
     fun `unknown extra fields are ignored at every level`() {
-        val withExtras = json(extras = ",\"note\":{\"a\":[1,2,3]}").replace("{\"transaction\"", "{\"trace\":\"x\",\"transaction\"")
+        val withExtras = payloadJson(extras = ",\"note\":{\"a\":[1,2,3]}").replace("{\"transaction\"", "{\"trace\":\"x\",\"transaction\"")
 
-        assertEquals(parse(json()), parse(withExtras))
+        assertEquals(parse(payloadJson()), parse(withExtras))
     }
 
     @Test
     fun `a positive exponent is expanded to scale zero`() {
-        val event = parse(json(mapOf("account.balance.amount" to "1E+3", "transaction.amount" to "2E+2")))
+        val event = parse(payloadJson(mapOf("account.balance.amount" to "1E+3", "transaction.amount" to "2E+2")))
 
         assertEquals(BigDecimal("1000"), event.account.balance.amount)
         assertEquals(0, event.account.balance.amount.scale())
@@ -135,27 +133,25 @@ class TransactionEventParserTest {
 
     @Test
     fun `zero and negative balances are valid and a zero transaction amount is valid`() {
-        assertEquals(BigDecimal("-42.50"), parse(json(mapOf("account.balance.amount" to "-42.50"))).account.balance.amount)
-        assertEquals(0, parse(json(mapOf("account.balance.amount" to "0", "transaction.amount" to "0"))).account.balance.amount.signum())
+        assertEquals(BigDecimal("-42.50"), parse(payloadJson(mapOf("account.balance.amount" to "-42.50"))).account.balance.amount)
+        assertEquals(0, parse(payloadJson(mapOf("account.balance.amount" to "0", "transaction.amount" to "0"))).account.balance.amount.signum())
     }
 
     @Test
     fun `an account created before 2000 is valid`() {
         val micros = Instant.parse("1998-06-01T00:00:00Z").let { it.epochSecond * 1_000_000 }
 
-        assertEquals(micros, parse(json(mapOf("account.created_at" to micros.toString()))).account.createdAt.micros)
+        assertEquals(micros, parse(payloadJson(mapOf("account.created_at" to micros.toString()))).account.createdAt.micros)
     }
 
     @Test
     fun `a payload of exactly 64 KiB is accepted`() {
-        val base = json()
+        val base = payloadJson()
         val padded = base + " ".repeat(64 * 1024 - base.length)
 
         assertEquals(64 * 1024, padded.length)
         assertEquals(parse(base), parse(padded))
     }
-
-    // ---- (b) malformed_payload
 
     @Test
     fun `null and empty payloads are malformed`() {
@@ -166,7 +162,7 @@ class TransactionEventParserTest {
 
     @Test
     fun `a payload one byte over 64 KiB is malformed`() {
-        val base = json()
+        val base = payloadJson()
         val padded = base + " ".repeat(64 * 1024 + 1 - base.length)
 
         assertEquals(64 * 1024 + 1, padded.length)
@@ -191,22 +187,22 @@ class TransactionEventParserTest {
             mapOf(
                 "not json" to "{not json",
                 "duplicate key" to dup,
-                "duplicate key deep" to json().replace("\"currency\":\"BRL\"", "\"currency\":\"BRL\",\"currency\":\"USD\""),
-                "tokens after the document" to json() + "{}",
-                "trailing garbage" to json() + "x",
-                "NaN" to json(mapOf("transaction.amount" to "NaN")),
+                "duplicate key deep" to payloadJson().replace("\"currency\":\"BRL\"", "\"currency\":\"BRL\",\"currency\":\"USD\""),
+                "tokens after the document" to payloadJson() + "{}",
+                "trailing garbage" to payloadJson() + "x",
+                "NaN" to payloadJson(mapOf("transaction.amount" to "NaN")),
                 "depth 501" to deep,
-                "number with 1001 chars" to json(mapOf("transaction.amount" to "1".repeat(1001))),
+                "number with 1001 chars" to payloadJson(mapOf("transaction.amount" to "1".repeat(1001))),
                 "root array" to "[]",
                 "root string" to "\"x\"",
                 "root null" to "null",
                 "root number" to "42",
-                "transaction array" to json().replace(Regex("\"transaction\":\\{[^}]*}"), "\"transaction\":[]"),
-                "transaction string" to json().replace(Regex("\"transaction\":\\{[^}]*}"), "\"transaction\":\"x\""),
-                "transaction number" to json().replace(Regex("\"transaction\":\\{[^}]*}"), "\"transaction\":1"),
+                "transaction array" to payloadJson().replace(Regex("\"transaction\":\\{[^}]*}"), "\"transaction\":[]"),
+                "transaction string" to payloadJson().replace(Regex("\"transaction\":\\{[^}]*}"), "\"transaction\":\"x\""),
+                "transaction number" to payloadJson().replace(Regex("\"transaction\":\\{[^}]*}"), "\"transaction\":1"),
                 "account string" to "{\"transaction\":{},\"account\":\"x\"}",
-                "balance string" to json().replace(Regex("\"balance\":\\{[^}]*}"), "\"balance\":\"x\""),
-                "balance array" to json().replace(Regex("\"balance\":\\{[^}]*}"), "\"balance\":[1]"),
+                "balance string" to payloadJson().replace(Regex("\"balance\":\\{[^}]*}"), "\"balance\":\"x\""),
+                "balance array" to payloadJson().replace(Regex("\"balance\":\\{[^}]*}"), "\"balance\":[1]"),
             )
         shapes.forEach { (label, text) -> assertRejected(RejectionReason.MALFORMED_PAYLOAD, text, detail = null, label = label) }
     }
@@ -221,22 +217,20 @@ class TransactionEventParserTest {
 
     @Test
     fun `a one thousand digit number is accepted by the syntax and rejected as a value`() {
-        assertRejected(RejectionReason.INVALID_VALUE, json(mapOf("transaction.amount" to "1".repeat(1000))), "transaction.amount")
+        assertRejected(RejectionReason.INVALID_VALUE, payloadJson(mapOf("transaction.amount" to "1".repeat(1000))), "transaction.amount")
     }
 
     @Test
     fun `a structure that is not an object beats a missing field`() {
-        assertRejected(RejectionReason.MALFORMED_PAYLOAD, json(mapOf("account.owner" to null)).replace(Regex("\"balance\":\\{[^}]*}"), "\"balance\":\"x\""))
+        assertRejected(RejectionReason.MALFORMED_PAYLOAD, payloadJson(mapOf("account.owner" to null)).replace(Regex("\"balance\":\\{[^}]*}"), "\"balance\":\"x\""))
     }
-
-    // ---- (c) missing_field
 
     @Test
     fun `each of the 12 fields absent or null is a missing field carrying its path`() {
         assertEquals(12, validFields.size)
         validFields.keys.forEach { path ->
-            assertRejected(RejectionReason.MISSING_FIELD, json(mapOf(path to null)), path, "$path ausente")
-            assertRejected(RejectionReason.MISSING_FIELD, json(mapOf(path to "null")), path, "$path null")
+            assertRejected(RejectionReason.MISSING_FIELD, payloadJson(mapOf(path to null)), path, "$path ausente")
+            assertRejected(RejectionReason.MISSING_FIELD, payloadJson(mapOf(path to "null")), path, "$path null")
         }
     }
 
@@ -244,18 +238,16 @@ class TransactionEventParserTest {
     fun `absent or null parent objects are missing fields at the parent path`() {
         assertRejected(RejectionReason.MISSING_FIELD, "{\"account\":{}}", "transaction")
         assertRejected(RejectionReason.MISSING_FIELD, "{\"transaction\":null,\"account\":null}", "transaction")
-        assertRejected(RejectionReason.MISSING_FIELD, json().replace(Regex(",\"balance\":\\{[^}]*}"), ""), "account.balance")
-        assertRejected(RejectionReason.MISSING_FIELD, json().replace(Regex("\"balance\":\\{[^}]*}"), "\"balance\":null"), "account.balance")
+        assertRejected(RejectionReason.MISSING_FIELD, payloadJson().replace(Regex(",\"balance\":\\{[^}]*}"), ""), "account.balance")
+        assertRejected(RejectionReason.MISSING_FIELD, payloadJson().replace(Regex("\"balance\":\\{[^}]*}"), "\"balance\":null"), "account.balance")
         assertRejected(RejectionReason.MISSING_FIELD, "{\"transaction\":{}}", "transaction.id")
     }
-
-    // ---- (d) valores
 
     @Test
     fun `identifiers that are not canonical uuids are invalid identifiers`() {
         listOf("transaction.id", "account.id", "account.owner").forEach { path ->
             listOf("\"1-1-1-1-1\"", "123", "\"\"", "\"not-a-uuid\"", "true", "{}", "[]", "\" 8e8ae808-b154-48b5-9f3e-553935cc4543\"").forEach { bad ->
-                assertRejected(RejectionReason.INVALID_IDENTIFIER, json(mapOf(path to bad)), path, "$path=$bad")
+                assertRejected(RejectionReason.INVALID_IDENTIFIER, payloadJson(mapOf(path to bad)), path, "$path=$bad")
             }
         }
     }
@@ -266,7 +258,7 @@ class TransactionEventParserTest {
         listOf("transaction.amount", "account.balance.amount").forEach { path ->
             bad.forEach { value ->
                 if (path == "account.balance.amount" && value.startsWith("-")) return@forEach // saldo negativo e valido
-                assertRejected(RejectionReason.INVALID_VALUE, json(mapOf(path to value)), path, "$path=$value")
+                assertRejected(RejectionReason.INVALID_VALUE, payloadJson(mapOf(path to value)), path, "$path=$value")
             }
         }
     }
@@ -275,23 +267,23 @@ class TransactionEventParserTest {
     fun `a huge exponent is rejected without being expanded`() {
         val started = System.nanoTime()
 
-        assertRejected(RejectionReason.INVALID_VALUE, json(mapOf("account.balance.amount" to "1E999999999")), "account.balance.amount")
+        assertRejected(RejectionReason.INVALID_VALUE, payloadJson(mapOf("account.balance.amount" to "1E999999999")), "account.balance.amount")
 
         assertTrue((System.nanoTime() - started) < 2_000_000_000L, "a rejeicao nao pode materializar o expoente")
     }
 
     @Test
     fun `thirty eight digits are accepted and thirty nine are not`() {
-        parse(json(mapOf("account.balance.amount" to "12345678901234567890123456789012345678")))
+        parse(payloadJson(mapOf("account.balance.amount" to "12345678901234567890123456789012345678")))
 
-        assertRejected(RejectionReason.INVALID_VALUE, json(mapOf("account.balance.amount" to "123456789012345678901234567890123456789")), "account.balance.amount")
+        assertRejected(RejectionReason.INVALID_VALUE, payloadJson(mapOf("account.balance.amount" to "123456789012345678901234567890123456789")), "account.balance.amount")
     }
 
     @Test
     fun `currencies that are not iso 4217 in upper case are invalid currencies`() {
         listOf("transaction.currency", "account.balance.currency").forEach { path ->
             listOf("\"brl\"", "\"BR\"", "\"BRLL\"", "\"ZZZ\"", "5", "true", "\"\"").forEach { bad ->
-                assertRejected(RejectionReason.INVALID_CURRENCY, json(mapOf(path to bad)), path, "$path=$bad")
+                assertRejected(RejectionReason.INVALID_CURRENCY, payloadJson(mapOf(path to bad)), path, "$path=$bad")
             }
         }
     }
@@ -303,7 +295,7 @@ class TransactionEventParserTest {
             "transaction.status" to listOf("\"PENDING\"", "\"approved\"", "\"\""),
             "account.status" to listOf("\"SUSPENDED\"", "\"enabled\"", "\"Enabled\""),
         ).forEach { (path, values) ->
-            values.forEach { bad -> assertRejected(RejectionReason.UNKNOWN_DOMAIN_VALUE, json(mapOf(path to bad)), path, "$path=$bad") }
+            values.forEach { bad -> assertRejected(RejectionReason.UNKNOWN_DOMAIN_VALUE, payloadJson(mapOf(path to bad)), path, "$path=$bad") }
         }
     }
 
@@ -324,55 +316,53 @@ class TransactionEventParserTest {
                 "-1",
             )
         transactionCases.forEach { bad ->
-            assertRejected(RejectionReason.INVALID_TIMESTAMP, json(mapOf("transaction.timestamp" to bad)), "transaction.timestamp", "transaction.timestamp=$bad")
+            assertRejected(RejectionReason.INVALID_TIMESTAMP, payloadJson(mapOf("transaction.timestamp" to bad)), "transaction.timestamp", "transaction.timestamp=$bad")
         }
         listOf("1634874339000000.0", "\"1634874339000000\"", "99999999999999999999", year1850.toString()).forEach { bad ->
-            assertRejected(RejectionReason.INVALID_TIMESTAMP, json(mapOf("account.created_at" to bad)), "account.created_at", "account.created_at=$bad")
+            assertRejected(RejectionReason.INVALID_TIMESTAMP, payloadJson(mapOf("account.created_at" to bad)), "account.created_at", "account.created_at=$bad")
         }
     }
 
     @Test
     fun `the minimum timestamps come from the injected configuration`() {
         val strict = TransactionEventParser(Instant.parse("2025-01-01T00:00:00Z"), Instant.parse("2020-01-01T00:00:00Z"))
-        val bytes = json().toByteArray()
+        val bytes = payloadJson().toByteArray()
 
-        assertEquals(RejectionReason.INVALID_TIMESTAMP, assertFailsWith<InvalidEventException> { strict.parse(json(mapOf("transaction.timestamp" to "1700000000000000")).toByteArray()) }.reason)
-        assertEquals(RejectionReason.INVALID_TIMESTAMP, assertFailsWith<InvalidEventException> { strict.parse(json(mapOf("account.created_at" to "1500000000000000")).toByteArray()) }.reason)
+        assertEquals(RejectionReason.INVALID_TIMESTAMP, assertFailsWith<InvalidEventException> { strict.parse(payloadJson(mapOf("transaction.timestamp" to "1700000000000000")).toByteArray()) }.reason)
+        assertEquals(RejectionReason.INVALID_TIMESTAMP, assertFailsWith<InvalidEventException> { strict.parse(payloadJson(mapOf("account.created_at" to "1500000000000000")).toByteArray()) }.reason)
         strict.parse(bytes)
     }
-
-    // ---- (e) ordem fixa dos motivos
 
     @Test
     fun `the first invalid field in the documented order decides the reason`() {
         assertRejected(
             RejectionReason.INVALID_IDENTIFIER,
-            json(mapOf("transaction.id" to "\"1-1-1-1-1\"", "transaction.currency" to "\"brl\"")),
+            payloadJson(mapOf("transaction.id" to "\"1-1-1-1-1\"", "transaction.currency" to "\"brl\"")),
             "transaction.id",
         )
         assertRejected(
             RejectionReason.INVALID_VALUE,
-            json(mapOf("transaction.amount" to "-1", "transaction.currency" to "\"brl\"", "transaction.status" to "\"PENDING\"")),
+            payloadJson(mapOf("transaction.amount" to "-1", "transaction.currency" to "\"brl\"", "transaction.status" to "\"PENDING\"")),
             "transaction.amount",
         )
         assertRejected(
             RejectionReason.INVALID_CURRENCY,
-            json(mapOf("transaction.currency" to "\"brl\"", "transaction.status" to "\"PENDING\"", "transaction.timestamp" to "1")),
+            payloadJson(mapOf("transaction.currency" to "\"brl\"", "transaction.status" to "\"PENDING\"", "transaction.timestamp" to "1")),
             "transaction.currency",
         )
         assertRejected(
             RejectionReason.UNKNOWN_DOMAIN_VALUE,
-            json(mapOf("transaction.type" to "\"TRANSFER\"", "transaction.amount" to "-1")),
+            payloadJson(mapOf("transaction.type" to "\"TRANSFER\"", "transaction.amount" to "-1")),
             "transaction.type",
         )
         assertRejected(
             RejectionReason.INVALID_TIMESTAMP,
-            json(mapOf("transaction.timestamp" to "1", "account.id" to "\"x\"")),
+            payloadJson(mapOf("transaction.timestamp" to "1", "account.id" to "\"x\"")),
             "transaction.timestamp",
         )
         assertRejected(
             RejectionReason.INVALID_VALUE,
-            json(mapOf("account.balance.amount" to "\"1\"", "account.balance.currency" to "\"brl\"")),
+            payloadJson(mapOf("account.balance.amount" to "\"1\"", "account.balance.currency" to "\"brl\"")),
             "account.balance.amount",
         )
     }
@@ -381,23 +371,21 @@ class TransactionEventParserTest {
     fun `a missing field beats an invalid one`() {
         assertRejected(
             RejectionReason.MISSING_FIELD,
-            json(mapOf("transaction.id" to "\"1-1-1-1-1\"", "account.balance.currency" to null)),
+            payloadJson(mapOf("transaction.id" to "\"1-1-1-1-1\"", "account.balance.currency" to null)),
             "account.balance.currency",
         )
     }
-
-    // ---- (f) privacidade
 
     @Test
     fun `neither the message nor the detail nor the cause carry values of the payload`() {
         val secret = "SEGREDO-123"
         val payloads =
             listOf(
-                json(mapOf("transaction.currency" to "\"$secret\"")),
-                json(mapOf("transaction.id" to "\"$secret\"")),
-                json(mapOf("transaction.type" to "\"$secret\"")),
-                json(mapOf("transaction.amount" to "\"$secret\"")),
-                json(mapOf("transaction.timestamp" to "\"$secret\"")),
+                payloadJson(mapOf("transaction.currency" to "\"$secret\"")),
+                payloadJson(mapOf("transaction.id" to "\"$secret\"")),
+                payloadJson(mapOf("transaction.type" to "\"$secret\"")),
+                payloadJson(mapOf("transaction.amount" to "\"$secret\"")),
+                payloadJson(mapOf("transaction.timestamp" to "\"$secret\"")),
                 "{not json $secret",
                 "{\"a\":\"$secret\",\"a\":1}",
                 "[\"$secret\"]",
@@ -415,6 +403,6 @@ class TransactionEventParserTest {
 
     @Test
     fun `a valid payload with a secret in an ignored field does not fail`() {
-        parse(json(extras = ",\"note\":\"SEGREDO-123\""))
+        parse(payloadJson(extras = ",\"note\":\"SEGREDO-123\""))
     }
 }

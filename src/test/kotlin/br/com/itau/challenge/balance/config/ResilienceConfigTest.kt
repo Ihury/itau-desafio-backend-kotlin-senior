@@ -67,11 +67,11 @@ class ResilienceConfigTest {
     }
 
     @Test
-    fun `breaker state is exposed as a micrometer gauge compatible with the current micrometer`() {
-        val simple = SimpleMeterRegistry()
-        TaggedCircuitBreakerMetrics.ofCircuitBreakerRegistry(registry).bindTo(simple)
+    fun `the breaker state gauge is registered with closed as 1 in a micrometer registry`() {
+        val simpleRegistry = SimpleMeterRegistry()
+        TaggedCircuitBreakerMetrics.ofCircuitBreakerRegistry(registry).bindTo(simpleRegistry)
 
-        val closed = simple.find("resilience4j.circuitbreaker.state").tag("name", "dynamodb-read").tag("state", "closed").gauge()
+        val closed = simpleRegistry.find("resilience4j.circuitbreaker.state").tag("name", "dynamodb-read").tag("state", "closed").gauge()
         assertNotNull(closed)
         assertEquals(1.0, closed.value())
     }

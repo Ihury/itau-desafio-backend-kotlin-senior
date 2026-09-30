@@ -129,7 +129,7 @@ class DynamoDbClientsConfigTest {
     }
 
     @Test
-    fun `no endpoint override object is left when the property is blank`() {
+    fun `a blank endpoint property resolves to no endpoint override`() {
         assertNull(config.endpointOf(properties(null)))
         assertNull(config.endpointOf(properties("")))
         assertEquals(URI.create("http://localhost:8000"), config.endpointOf(properties()))

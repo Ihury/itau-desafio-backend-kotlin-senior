@@ -102,8 +102,7 @@ class BalanceItemMapperTest {
 
     @Test
     fun `a persisted snapshot is trusted and read back even with timestamps below the default plausibility minimums`() {
-        // 1995-06-15 (< 2000, minimo padrao do timestamp da transacao) e 1850-01-01 (< 1900, minimo padrao de created_at): os limites sao
-        // configuraveis (BALANCE_MIN_*) e ja foram aplicados na ESCRITA; a leitura nao os reaplica (nem vira 500).
+        // os minimos (BALANCE_MIN_*) sao configuraveis e so se aplicam na ESCRITA; a leitura nao os reaplica (nem vira 500)
         val transaction1995 = 803_174_400_000_000L
         val created1850 = -3_155_760_000_000_000L
         val item =

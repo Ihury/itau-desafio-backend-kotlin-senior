@@ -64,7 +64,7 @@ class TransactionEventModelTest {
     }
 
     @Test
-    fun `event aggregates the transaction and the account state`() {
+    fun `the fixture event exposes the default transaction and account state`() {
         val event = transactionEvent()
 
         assertEquals(TransactionId.parse(TransactionEventFixtures.DEFAULT_TRANSACTION_ID), event.transaction.id)
@@ -79,7 +79,7 @@ class TransactionEventModelTest {
     }
 
     @Test
-    fun `ApplyResult has applied, obsolete and duplicate outcomes`() {
+    fun `ApplyResult exposes applied, obsolete and duplicate outcomes`() {
         val outcomes: List<ApplyResult> = listOf(ApplyResult.Applied, ApplyResult.Obsolete, ApplyResult.Duplicate(conflicting = false))
 
         assertEquals(ApplyResult.Duplicate(false), outcomes[2])

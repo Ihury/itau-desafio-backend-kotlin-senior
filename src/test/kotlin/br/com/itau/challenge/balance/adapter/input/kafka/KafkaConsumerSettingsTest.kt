@@ -61,7 +61,7 @@ class KafkaConsumerSettingsTest {
 
     private val consumerProperties: Map<String, Any> get() = consumerFactory.configurationProperties
 
-    private fun container(): ConcurrentMessageListenerContainer<*, *> {
+    private fun listenerContainer(): ConcurrentMessageListenerContainer<*, *> {
         val container = registry.getListenerContainer("transaction-event-listener")
         assertNotNull(container, "listener 'transaction-event-listener' nao registrado")
         return container as ConcurrentMessageListenerContainer<*, *>
@@ -70,7 +70,7 @@ class KafkaConsumerSettingsTest {
     @Test
     fun `offsets are committed by the container after persisting and never automatically`() {
         assertEquals("false", consumerProperties["enable.auto.commit"].toString())
-        assertEquals(ContainerProperties.AckMode.BATCH, container().containerProperties.ackMode)
+        assertEquals(ContainerProperties.AckMode.BATCH, listenerContainer().containerProperties.ackMode)
     }
 
     @Test
@@ -96,8 +96,8 @@ class KafkaConsumerSettingsTest {
 
     @Test
     fun `the container uses four consumer threads and stops right after the current record`() {
-        assertEquals(4, container().concurrency)
-        assertTrue(container().containerProperties.isStopImmediate)
+        assertEquals(4, listenerContainer().concurrency)
+        assertTrue(listenerContainer().containerProperties.isStopImmediate)
     }
 
     @Test
@@ -134,7 +134,7 @@ class KafkaConsumerSettingsTest {
 
     @Test
     fun `the container runs the dead letter error handler and never the spring default`() {
-        val handler = container().commonErrorHandler
+        val handler = listenerContainer().commonErrorHandler
 
         assertSame(errorHandler, handler, "o container deve usar o CommonErrorHandler do contexto")
         assertTrue(handler is DefaultErrorHandler)
@@ -178,7 +178,7 @@ class KafkaConsumerSettingsTest {
 
     @Test
     fun `topics come from the configuration`() {
-        val topics = container().containerProperties.topics
+        val topics = listenerContainer().containerProperties.topics
         assertEquals(listOf("transacoes-financeiras-processadas"), topics?.toList())
     }
 }

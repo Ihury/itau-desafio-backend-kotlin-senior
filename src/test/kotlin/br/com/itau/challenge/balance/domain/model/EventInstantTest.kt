@@ -8,8 +8,8 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class EventInstantTest {
-    private val year2000 = 946684800000000L
-    private val year1900 = -2208988800000000L
+    private val epoch2000Micros = 946684800000000L
+    private val epoch1900Micros = -2208988800000000L
 
     private fun assertInvalidTimestamp(block: () -> Unit) {
         val error = assertFailsWith<InvalidEventException> { block() }
@@ -18,8 +18,8 @@ class EventInstantTest {
 
     @Test
     fun `transaction timestamp accepts exactly 2000-01-01 and rejects anything before`() {
-        assertEquals(year2000, EventInstant.transactionTimestamp(year2000).micros)
-        assertInvalidTimestamp { EventInstant.transactionTimestamp(year2000 - 1) }
+        assertEquals(epoch2000Micros, EventInstant.transactionTimestamp(epoch2000Micros).micros)
+        assertInvalidTimestamp { EventInstant.transactionTimestamp(epoch2000Micros - 1) }
         assertInvalidTimestamp { EventInstant.transactionTimestamp(-1) }
         assertInvalidTimestamp { EventInstant.transactionTimestamp(0) }
     }
@@ -27,8 +27,8 @@ class EventInstantTest {
     @Test
     fun `a persisted instant is rebuilt as is, without the plausibility minimums`() {
         assertEquals(1751749453433123L, EventInstant.fromPersisted(1751749453433123L).micros)
-        assertEquals(year2000 - 1, EventInstant.fromPersisted(year2000 - 1).micros)
-        assertEquals(year1900 - 1, EventInstant.fromPersisted(year1900 - 1).micros)
+        assertEquals(epoch2000Micros - 1, EventInstant.fromPersisted(epoch2000Micros - 1).micros)
+        assertEquals(epoch1900Micros - 1, EventInstant.fromPersisted(epoch1900Micros - 1).micros)
     }
 
     @Test
@@ -39,11 +39,11 @@ class EventInstantTest {
 
     @Test
     fun `account created_at accepts 1900-01-01 as minimum, including accounts before 1970 and before 2000`() {
-        assertEquals(year1900, EventInstant.accountCreatedAt(year1900).micros)
+        assertEquals(epoch1900Micros, EventInstant.accountCreatedAt(epoch1900Micros).micros)
         assertEquals(899251200000000, EventInstant.accountCreatedAt(899251200000000).micros)
         assertEquals(-1_000_000_000_000_000, EventInstant.accountCreatedAt(-1_000_000_000_000_000).micros)
         assertEquals(0, EventInstant.accountCreatedAt(0).micros)
-        assertInvalidTimestamp { EventInstant.accountCreatedAt(year1900 - 1) }
+        assertInvalidTimestamp { EventInstant.accountCreatedAt(epoch1900Micros - 1) }
     }
 
     @Test
@@ -73,24 +73,24 @@ class EventInstantTest {
         assertEquals(Instant.parse("1969-12-31T23:59:59.999999Z"), EventInstant.accountCreatedAt(-1).toInstant())
         assertEquals(Instant.parse("1969-12-31T23:59:59Z"), EventInstant.accountCreatedAt(-1_000_000).toInstant())
         assertEquals(Instant.parse("1969-12-31T23:59:58.999999Z"), EventInstant.accountCreatedAt(-1_000_001).toInstant())
-        assertEquals(Instant.parse("1900-01-01T00:00:00Z"), EventInstant.accountCreatedAt(year1900).toInstant())
+        assertEquals(Instant.parse("1900-01-01T00:00:00Z"), EventInstant.accountCreatedAt(epoch1900Micros).toInstant())
         assertEquals(Instant.parse("1970-01-01T00:00:00Z"), EventInstant.accountCreatedAt(0).toInstant())
     }
 
     @Test
     fun `orders by microseconds`() {
-        val early = EventInstant.transactionTimestamp(year2000)
-        val late = EventInstant.transactionTimestamp(year2000 + 1)
+        val early = EventInstant.transactionTimestamp(epoch2000Micros)
+        val late = EventInstant.transactionTimestamp(epoch2000Micros + 1)
 
         assertTrue(early < late)
         assertTrue(late > early)
-        assertEquals(early, EventInstant.transactionTimestamp(year2000))
+        assertEquals(early, EventInstant.transactionTimestamp(epoch2000Micros))
         assertEquals(listOf(early, late), listOf(late, early).sorted())
         assertEquals(late, maxOf(early, late))
     }
 
     @Test
     fun `toString prints the microseconds`() {
-        assertEquals(year2000.toString(), EventInstant.transactionTimestamp(year2000).toString())
+        assertEquals(epoch2000Micros.toString(), EventInstant.transactionTimestamp(epoch2000Micros).toString())
     }
 }

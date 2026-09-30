@@ -44,7 +44,7 @@ class ResilienceLoggingTest {
         logger.level = originalLevel
     }
 
-    private fun newBreaker(): CircuitBreaker {
+    private fun newReadBreaker(): CircuitBreaker {
         val registry =
             CircuitBreakerRegistry.of(
                 readCircuitBreakerConfig(
@@ -64,7 +64,7 @@ class ResilienceLoggingTest {
 
     @Test
     fun `an open circuit transition logs exactly one warn with the states and fifty rejections add none`() {
-        val breaker = newBreaker()
+        val breaker = newReadBreaker()
         val failing =
             CircuitBreakingBalanceSnapshotReader(
                 object : BalanceSnapshotReader {
@@ -87,7 +87,7 @@ class ResilienceLoggingTest {
 
     @Test
     fun `each state transition is one warn`() {
-        val breaker = newBreaker()
+        val breaker = newReadBreaker()
 
         breaker.transitionToOpenState()
         breaker.transitionToHalfOpenState()

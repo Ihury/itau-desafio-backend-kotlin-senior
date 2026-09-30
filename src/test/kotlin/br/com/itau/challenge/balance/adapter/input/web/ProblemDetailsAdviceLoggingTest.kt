@@ -21,7 +21,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
-/** Logs do `503` da consulta (FR-032): diagnostico do SDK sem texto livre, sem pilha e no nivel certo. */
+/** Logs do `503` da consulta: diagnostico do SDK sem texto livre, sem pilha e no nivel certo. */
 class ProblemDetailsAdviceLoggingTest {
     private val advice = ProblemDetailsAdvice(Duration.ofSeconds(10))
     private val request = MockHttpServletRequest("GET", "/balances/5b19c8b6-0cc4-4c72-a989-0c2ee15fa975")
@@ -44,14 +44,14 @@ class ProblemDetailsAdviceLoggingTest {
         logger.level = originalLevel
     }
 
-    private fun unavailable(
+    private fun storeUnavailable(
         cause: StoreFailureCause,
         details: StoreFailureDetails?,
     ) = BalanceStoreUnavailableException(cause, SdkClientException.builder().message("segredo do sdk").build(), details)
 
     @Test
     fun `an unavailable store answers 503 and logs one warn with the cause and the sdk diagnostics, without free text or stack`() {
-        val response = advice.storeUnavailable(unavailable(StoreFailureCause.UNAVAILABLE, StoreFailureDetails("software.amazon.awssdk.core.exception.SdkClientException", null, null)), request)
+        val response = advice.storeUnavailable(storeUnavailable(StoreFailureCause.UNAVAILABLE, StoreFailureDetails("software.amazon.awssdk.core.exception.SdkClientException", null, null)), request)
 
         assertEquals(HttpStatus.SERVICE_UNAVAILABLE, response.statusCode)
         val line = appender.list.single()
@@ -78,7 +78,7 @@ class ProblemDetailsAdviceLoggingTest {
 
     @Test
     fun `fifty real failures still log fifty warns because each one is a real read failure`() {
-        repeat(50) { advice.storeUnavailable(unavailable(StoreFailureCause.TIMEOUT, StoreFailureDetails("software.amazon.awssdk.core.exception.ApiCallTimeoutException")), request) }
+        repeat(50) { advice.storeUnavailable(storeUnavailable(StoreFailureCause.TIMEOUT, StoreFailureDetails("software.amazon.awssdk.core.exception.ApiCallTimeoutException")), request) }
 
         assertEquals(50, appender.list.count { it.level == Level.WARN })
     }
@@ -86,7 +86,7 @@ class ProblemDetailsAdviceLoggingTest {
     @Test
     fun `a misconfigured store logs at error with the error code and the status code`() {
         advice.storeUnavailable(
-            unavailable(StoreFailureCause.MISCONFIGURED, StoreFailureDetails("software.amazon.awssdk.services.dynamodb.model.DynamoDbException", "UnrecognizedClientException", 400)),
+            storeUnavailable(StoreFailureCause.MISCONFIGURED, StoreFailureDetails("software.amazon.awssdk.services.dynamodb.model.DynamoDbException", "UnrecognizedClientException", 400)),
             request,
         )
 
