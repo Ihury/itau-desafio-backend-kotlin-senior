@@ -171,7 +171,9 @@ class TopicSet(
                     .flatMap { it.assignedPartitions.orEmpty() }
                     .filter { it.topic() == topic }
                     .toSet()
-            check(assigned.size == IntegrationInfra.MAIN_PARTITIONS) { "particoes atribuidas: ${assigned.size} de ${IntegrationInfra.MAIN_PARTITIONS}" }
+            if (assigned.size != IntegrationInfra.MAIN_PARTITIONS) {
+                throw AssertionError("particoes atribuidas: ${assigned.size} de ${IntegrationInfra.MAIN_PARTITIONS}")
+            }
         }
     }
 
@@ -227,6 +229,10 @@ class TopicSet(
 
     /** Espera o grupo confirmar TODAS as mensagens publicadas (o commit e em lote, depois de processar o poll). */
     fun awaitLagZero(atMost: Duration = Duration.ofSeconds(30)) {
-        await.atMost(atMost).untilAsserted { check(groupLag() == 0L) { "lag do grupo: ${groupLag()}" } }
+        // `AssertionError` (nao `IllegalStateException`): o Awaitility so repete a condicao quando ela lanca `AssertionError`
+        await.atMost(atMost).untilAsserted {
+            val lag = groupLag()
+            if (lag != 0L) throw AssertionError("lag do grupo: $lag")
+        }
     }
 }
