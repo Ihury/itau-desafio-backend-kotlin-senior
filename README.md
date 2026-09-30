@@ -77,6 +77,7 @@ Alvos úteis:
 | `make kafka-consume TOPIC=<t>` | Lê um tópico (ex.: `transacoes-financeiras-processadas.DLT`) |
 | `make db-scan` | Lista os itens da tabela `AccountBalances` |
 | `make chaos-dynamodb-pause` / `chaos-dynamodb-unpause` | Congela e retoma o DynamoDB Local |
+| `make load-test` | Teste de carga k6 da consulta (500 req/s por 60 s; ver "Teste de carga" em [Como testar](#como-testar)); exige `make up` |
 | `make http` | Executa `http/*.http` contra o app (via Docker) |
 | `make clean-containers` | Remove todos os containers deste projeto, inclusive órfãos |
 
@@ -107,6 +108,34 @@ Pontos que sustentam a confiança na corretude (detalhes no [ADR-0014](docs/adr/
   ninguém depende de `config`, nenhum `catch` engole exceção sem log, métrica ou `throw`.
 - **Teste anti-drift do OpenAPI** contra as respostas reais e **teste de privacidade de logs** com valores sentinela.
 - O caos usa `docker compose pause dynamodb` (o teste sempre desfaz o `pause`).
+
+### Teste de carga (SC-001)
+
+`make load-test` roda o k6 (`grafana/k6:2.3.0`, via Docker) contra `GET /balances/{accountId}` com o script
+[`perf/k6-balance-read.js`](perf/k6-balance-read.js): publica 200 eventos (uma conta nova por evento), coleta os ids no DynamoDB e
+mede **500 req/s por 60 s** (mais 10 s de aquecimento fora dos limiares) sobre a conta de exemplo e essas contas. Os limiares
+são os do SC-001 e não foram afrouxados: `p(50) < 50 ms` e `p(99) < 300 ms`, além de taxa de erro < 0,1% e nenhuma iteração
+descartada (a taxa pedida foi de fato oferecida). Variáveis: `LOAD_RATE`, `LOAD_DURATION`, `LOAD_ACCOUNTS`.
+
+Resultado medido (4 execuções em 2026-09-29, fase `steady`, ~30.000 requisições cada, 201 contas, todas as respostas 200 com o
+`id` conferido no corpo):
+
+| Execução | req/s | p50 | p95 | p99 | máximo | Erros |
+|-|-|-|-|-|-|-|
+| 1 | 500 | 0,94 ms | 1,20 ms | 2,02 ms | 20,7 ms | 0 |
+| 2 | 500 | 0,99 ms | 1,21 ms | 1,85 ms | 8,5 ms | 18 de 30.001 (0,06%): `dial: i/o timeout` no gerador; não chegaram ao app |
+| 3 | 500 | 1,03 ms | 1,24 ms | 2,28 ms | 6,9 ms | 0 |
+| 4 | 500 | 1,00 ms | 1,19 ms | 2,07 ms | 46,8 ms | 0 |
+
+Todos os limiares passaram, com margem de ~50x no p50 e de ~130x no p99. A medição do lado do servidor concorda: o histograma
+`http_server_requests` deu média de ~0,5 ms e `balance_store_read_duration_seconds` ~0,4 ms por leitura, e o total de requisições do
+app fechou igual ao do k6 (menos as 18 falhas de conexão da execução 2).
+
+**Ressalva: é ambiente local e não representa a AWS.** Docker Desktop (VM com 10 CPUs e 8 GB) com o app, o DynamoDB Local (em
+memória), o Redpanda e o k6 na mesma máquina, tráfego pelo `host.docker.internal`, uma única instância do app e sem ingestão
+concorrente. O DynamoDB real tem latência de rede e de armazenamento maiores, throttling e particionamento que o DynamoDB Local
+não reproduz. O resultado prova que o caminho da consulta (Tomcat, serviço, mapeamento, cliente do SDK e circuit breaker) não
+introduz custo relevante e que a taxa de 500 req/s é sustentada por uma instância; não prova o SLO na AWS.
 
 ## API
 
@@ -364,14 +393,16 @@ Cada item foi uma decisão consciente (escopo, custo, ausência de requisito), c
 | IaC (Terraform/CDK), PITR e deletion protection | Fora do escopo de um repositório de avaliação | Descritos em `data-model.md` 4.1 |
 | Autenticação/autorização e rate limiting | Tratados no gateway/rede | Gateway na frente; a porta 8082 nunca pública |
 | Schema Registry / Avro | O contrato JSON é imposto pelo produtor | n/a |
-| Teste de mutação (PIT) e carga sustentada multi-instância | Tempo; sem gate no starter | k6 (opcional, abaixo) |
+| Teste de mutação (PIT) e carga sustentada multi-instância | Tempo; sem gate no starter | O k6 já cobre a leitura em uma instância ([Teste de carga](#teste-de-carga-sc-001)); falta multi-instância, ingestão sob carga e AWS |
 | Multi-região / global tables | Fora da carga de referência | A chave de precedência é determinística, então converge sem coordenação |
 
 ## Riscos conhecidos e o que não foi verificado
 
-- **SC-001 NÃO VERIFICADO.** A meta de latência da consulta (p50 <= 50 ms e p99 <= 300 ms sob 500 req/s) só seria comprovada pelo teste
-  de carga k6 **opcional** (tarefas T178-T179), que **não foi executado**. O que existe é a medição de que o 503 sai em milissegundos
-  com o circuito aberto e a de ingestão <= 5 s (SC-002) nos testes de integração; latência sustentada sob carga não foi medida.
+- **SC-001 verificado só em ambiente local.** O k6 (`make load-test`) sustentou 500 req/s por 60 s com p50 de ~1 ms e p99 de ~2 ms
+  (limiares de 50 ms e 300 ms), mas contra DynamoDB Local, com o gerador na mesma máquina, uma instância e sem ingestão
+  concorrente (ver [Teste de carga](#teste-de-carga-sc-001)). Não foram medidos a latência sobre a AWS real, a ingestão sustentada
+  (~1.000 eventos/s) nem a leitura durante a ingestão; a ingestão só foi medida em pequena escala (<= 5 s por evento, SC-002, nos
+  testes de integração).
 - **DLT fora do ar**: a nova tentativa de publicar não tem backoff exponencial próprio (limitada por `max.block.ms` + timeout de
   envio, ~3-5 s). Nada se perde; o sinal é `balance_dlt_publish_failures_total`.
 - **Falha permanente do armazenamento tratada como transitória** (por exemplo tabela removida): a ingestão fica retida indefinidamente,

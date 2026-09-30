@@ -99,7 +99,7 @@ antes de seguir. Exemplos:
 | Que as mensagens são ASCII | `git log --format=%B \| LC_ALL=C grep -n '[^ -~]'` (sem resultado) |
 | Que o código funciona | `./gradlew check` (testes unitários, Konsist, JaCoCo), `make test` (o mesmo em container) e `make integration-test` (infraestrutura real, incluindo caos com `docker compose pause`) |
 | O comportamento ponta a ponta | `make up`, `make kafka-produce-scenario` e o roteiro de `specs/001-consulta-saldo/quickstart.md` |
-| Que cada commit compila e passa | `git rebase --exec "./gradlew check" <commit-base>` em uma cópia descartável do repositório |
+| Que cada commit compila e passa | Método não destrutivo, sem reescrever a história: um `git worktree` descartável fora do repositório, em que se faz `git checkout --detach <sha>` e `./gradlew check --no-daemon` para cada commit desde `0f35020` (exclusive). Resultado da validação final (T171): os 39 commits das fases 1 a 9 passaram no `check` (JaCoCo de 96,6% a 100%, Konsist verde) e os commits da fase 10 foram verificados do mesmo modo; depois o worktree é removido (`git worktree remove --force` e `git worktree prune`) |
 
 ## Limites
 
@@ -109,9 +109,13 @@ antes de seguir. Exemplos:
   é ferramenta, não autora.
 - **A IA erra**, e os exemplos acima mostram isso. Por isso nada foi aceito sem gate automático e revisão; ainda assim, testes só
   provam o que foram escritos para provar.
-- **O que não foi verificado consta como tal**: por exemplo, a meta de latência sob carga (SC-001) depende de um teste de carga
-  opcional que não foi executado, e o DynamoDB Local não reproduz throttling nem latência reais da AWS. Ver a seção de riscos do
-  README.
+- **O que não foi verificado consta como tal**: a meta de latência da consulta (SC-001) foi medida com o teste de carga k6
+  (`make load-test`, 500 req/s por 60 s) e passou com folga (p50 de ~1 ms e p99 de ~2 ms), mas **só em ambiente local**: DynamoDB
+  Local em memória, gerador de carga na mesma máquina, uma instância e sem ingestão concorrente. O número não representa a AWS
+  (rede, throttling e latência reais do DynamoDB não foram exercitados). Ver a seção de riscos do README.
+- **Um teste de integração instável foi encontrado na validação final** e corrigido, não escondido: o p99 do SC-006 com 200
+  amostras por rodada falhou em 2 de 7 execuções por ruído de medição; com 1.000 amostras por rodada o critério de 1,10x foi
+  mantido e as execuções seguintes passaram.
 - **A confirmação dos workflows do GitHub Actions** depende do push autorizado pelo autor; até lá valem os equivalentes locais
   registrados no `tasks.md`.
 - A qualidade do resultado depende de quem revisa: este processo reduz o risco, mas não o elimina.
