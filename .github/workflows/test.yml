@@ -17,6 +17,7 @@ jobs:
   unit-test:
     name: Unit tests & coverage gate
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -52,6 +53,7 @@ jobs:
   integration-test:
     name: Integration tests (DynamoDB Local + Redpanda)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: unit-test
     steps:
       - name: Checkout
@@ -69,16 +71,25 @@ jobs:
       - name: Start DynamoDB Local + Redpanda and seed them
         run: docker compose up -d dynamodb dynamodb-seed redpanda redpanda-seed
 
+      # `docker compose wait` falha se os seeds ja terminaram; o script consulta o estado e o codigo de saida dos containers.
       - name: Wait for seed jobs to finish
-        run: |
-          timeout 60 docker compose wait dynamodb-seed redpanda-seed
+        run: ./infra/wait-seeds.sh 120
 
+      # Inclui os testes de caos (`docker compose pause dynamodb`): o runner tem Docker e o projeto compose e o mesmo diretorio.
       - name: Run integration tests (./gradlew integrationTest)
         run: ./gradlew integrationTest --no-daemon
 
       - name: Dump container logs on failure
         if: failure()
         run: docker compose logs
+
+      - name: Upload integration test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: integration-test-results
+          path: build/test-results/integrationTest
+          retention-days: 7
 
       - name: Tear down containers
         if: always()

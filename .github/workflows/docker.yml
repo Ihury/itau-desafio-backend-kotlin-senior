@@ -17,9 +17,15 @@ jobs:
   docker-build:
     name: Docker image build
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
       - name: Build runtime image
-        run: docker build --target runtime -t itau-hello-world .
+        run: docker build --target runtime -t consulta-saldo .
+
+      - name: Check the image runs as a non-root user and declares a healthcheck
+        run: |
+          test "$(docker run --rm --entrypoint id consulta-saldo -u)" = "10001"
+          docker inspect --format '{{json .Config.Healthcheck.Test}}' consulta-saldo | grep -q 'actuator/health/liveness'
