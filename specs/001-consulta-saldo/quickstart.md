@@ -149,8 +149,9 @@ NOW=$(date +%s)
 } | produce
 sleep 5
 dlt_total                                                                        # 9 (se o DLT estava vazio)
-docker compose run --rm --entrypoint rpk redpanda-seed topic consume $TOPIC.DLT --brokers redpanda:9092 -o start -f '%h{%k=%v;} | %v\n' \
-  | grep -o 'x-rejection-reason=[a-z_]*' | sort | uniq -c
+# -n limita a leitura ao total do DLT (sem -n o consume nunca termina); -a porque a saida tem bytes binarios
+docker compose run --rm -T --entrypoint rpk redpanda-seed topic consume $TOPIC.DLT --brokers redpanda:9092 -o start -n "$(dlt_total)" -f '%h{%k=%v;} | %v\n' \
+  | grep -ao 'x-rejection-reason=[a-z_]*' | sort | uniq -c
 curl -s -o /dev/null -w '%{http_code}\n' localhost:8080/balances/eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee1    # 200 (a válida)
 curl -s -o /dev/null -w '%{http_code}\n' localhost:8080/balances/ffffffff-ffff-4fff-8fff-fffffffffff1    # 200 (dentro da tolerância)
 ```
@@ -158,6 +159,12 @@ curl -s -o /dev/null -w '%{http_code}\n' localhost:8080/balances/ffffffff-ffff-4
 Esperado: 9 mensagens no DLT (`malformed_payload`=1, `missing_field`=1, `invalid_identifier`=1, `invalid_currency`=1, `invalid_value`=1,
 `invalid_timestamp`=2, `unknown_domain_value`=2), **valor original preservado** (`-f '%v'`), nenhum saldo alterado por elas, as duas válidas
 processadas e `balance_events_total{outcome="rejected",reason=...}` batendo com as contagens.
+
+Notas sobre a leitura do DLT: (a) o `rpk topic consume` acompanha o topico e nao termina sozinho, por isso o `-n` (aqui o total do DLT, via `dlt_total`);
+sem ele o comando fica preso, e `make kafka-consume TOPIC=$TOPIC.DLT` e a alternativa com timeout de 5 s (mas imprime so o valor, sem cabecalhos);
+(b) a saida contem bytes binarios (cabecalhos `kafka_dlt-original-partition/offset/timestamp` em big-endian e mensagens-veneno com bytes invalidos em UTF-8,
+que tambem vao ao DLT como `malformed_payload`), e o `grep` trata esse fluxo como binario e nao imprime as linhas: use `grep -a` (ou `grep -ao`).
+Se o DLT tiver mensagens de execucoes anteriores, as contagens por motivo refletem tudo o que ele acumulou.
 
 ### 6.1 Conta criada antes de 2000 (`account.created_at` legítimo) — conta `G`
 
@@ -187,20 +194,31 @@ Esperado: todos os erros em `application/problem+json` com `type` estável e dis
 docker compose pause dynamodb                                                # armazenamento "fora do ar" (chaos)
 DLT_ANTES=$(dlt_total)
 ev $(tx 50) $(t 9) $A ENABLED 999.00 | produce
-time curl -si localhost:8080/balances/$A | sed -n '1p;/^Retry-After/Ip'      # 503 + Retry-After em <= 2 s
+time curl -si localhost:8080/balances/$A | sed -n '1p;/^Retry-After/Ip'      # 503 + Retry-After em <= 2 s (~1,3 s, timeout)
 curl -s -o /dev/null -w '%{http_code}\n' localhost:8082/actuator/health/dependencies # 503 (após <= 5 s de cache do probe)
 curl -s -o /dev/null -w '%{http_code}\n' localhost:8082/actuator/health/readiness   # 200 (a instância continua em rotação)
 curl -s -o /dev/null -w '%{http_code}\n' localhost:8082/actuator/health/liveness    # 200 (liveness independe do banco)
-metric balance_consumer_backpressure_total ; metric 'resilience4j_circuitbreaker_state.*open'
+metric balance_consumer_backpressure_total ; metric 'resilience4j_circuitbreaker_state.*state="open"'   # ainda 0.0: poucas chamadas
+# rajada concorrente (>= 20 chamadas na janela de 10 s) para abrir o circuit breaker
+seq 40 | xargs -P 40 -I{} curl -s -o /dev/null -w '%{http_code} %{time_total}s\n' localhost:8080/balances/$A | sort | uniq -c   # 40 x 503, cada um ~1,3 s
+metric 'resilience4j_circuitbreaker_state.*state="open"'                       # 1.0: circuito aberto
+time curl -si localhost:8080/balances/$A | sed -n '1p;/^Retry-After/Ip'      # 503 imediato (fail-fast, ~ms)
 echo "DLT antes=$DLT_ANTES depois=$(dlt_total)"                                     # iguais: nada foi isolado
 docker compose run --rm --entrypoint rpk redpanda-seed group describe consulta-saldo --brokers redpanda:9092 | grep -E 'TOTAL-LAG'   # lag > 0: evento segue no broker
 docker compose unpause dynamodb
 sleep 45; curl -s localhost:8080/balances/$A                                 # 200 com 999.00 (evento consumido após a recuperação)
+for i in 1 2 3 4 5 6; do curl -s -o /dev/null -w '%{http_code} ' localhost:8080/balances/$A; sleep 0.5; done; echo   # consultas fecham o circuito
+metric 'resilience4j_circuitbreaker_state.*state="closed"'                     # 1.0
 ```
+
+O circuit breaker so abre com **pelo menos 20 chamadas** na janela de 10 s (minimo configurado). Com poucas consultas sequenciais, cada uma recebe 503 por timeout
+(~1,3 s, dentro do SC-008) e o circuito continua `closed`; por isso a rajada concorrente acima (30 a 40 consultas em paralelo) e o que o abre, e so entao a consulta
+seguinte falha em ~ms (`resilience4j_circuitbreaker_not_permitted_calls_total` > 0, o fail-fast). Com o circuito aberto, ele passa a `half_open` cerca de 10 s
+apos o `unpause` e volta a `closed` com as primeiras consultas bem-sucedidas.
 
 Esperado durante a falha: 503 com `Retry-After: 10` e corpo `servico-indisponivel` (**nunca** saldo antigo nem 404), grupo `dependencies` 503 (e `balance_dependency_up{dependency="dynamodb"}` = 0), readiness 200, liveness 200, o evento
 **permanece no broker** (`TOTAL-LAG` > 0), `balance_consumer_backpressure_total` cresce, **0 mensagens novas no DLT** (`DLT antes` = `depois`). Após `unpause`: o consumer retoma sozinho
-(<= ~30 s de backoff máximo), o saldo passa a 999.00, `dependencies` volta a 200 (readiness nunca deixou de ser 200) e o circuit breaker fecha (HALF_OPEN -> CLOSED).
+(<= ~30 s de backoff máximo), o saldo passa a 999.00, `dependencies` volta a 200 (readiness nunca deixou de ser 200) e o circuit breaker fecha (HALF_OPEN -> CLOSED, se a rajada o tiver aberto).
 
 ## 9. Reinício/encerramento gracioso (SC/US6.4, at-least-once)
 
@@ -212,7 +230,18 @@ docker compose run --rm --entrypoint aws dynamodb-seed dynamodb scan --table-nam
   --endpoint-url http://dynamodb:8000 --region us-east-1
 ```
 
-Esperado: a contagem de itens cresce exatamente em 2000 (nenhum evento perdido); reentregas viram `duplicate`; nada confirmado sem persistir.
+Esperado: a contagem de itens cresce **exatamente** em 2000 (nenhum evento perdido) e o lag do grupo volta a 0 (`rpk group describe consulta-saldo`). No reinicio
+gracioso o offset e confirmado **por registro**, entao normalmente **nao** ha reentrega e **nao** aparece `duplicate`; alem disso os contadores de
+`balance_events_total` sao do processo e **zeram no restart** (so refletem o que a nova instancia processou). Nada e confirmado sem persistir.
+
+Opcional, para ver `duplicate` de fato: pare o app, rebobine o grupo de consumo e suba o app de novo; tudo o que ja estava persistido e reentregue e contado como `duplicate`
+(a contagem de itens nao muda).
+
+```bash
+docker compose stop app
+docker compose run --rm -T --entrypoint rpk redpanda-seed group seek consulta-saldo --to start --topics $TOPIC --brokers redpanda:9092
+docker compose start app; sleep 30; metric 'balance_events_total.*duplicate'                       # > 0
+```
 
 ## 10. Concorrência real e propriedade contra infraestrutura real
 
