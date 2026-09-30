@@ -2,7 +2,7 @@ package br.com.itau.challenge.balance.domain.model
 
 import br.com.itau.challenge.balance.domain.exception.InvalidEventException
 
-/** Situacao da conta. Comparacao exata e sensivel a maiusculas (`unknown_domain_value` para qualquer outro valor). */
+/** Comparacao exata e sensivel a maiusculas; qualquer outro valor e `unknown_domain_value`. */
 enum class AccountStatus {
     ENABLED,
     DISABLED,

@@ -4,10 +4,6 @@ import org.springframework.boot.context.properties.ConfigurationProperties
 import java.time.Duration
 import kotlin.math.ceil
 
-/**
- * Propriedades `balance.circuit-breaker.*` do circuit breaker da leitura (contracts/configuration.md; os defaults
- * vivem no `application.yaml`).
- */
 @ConfigurationProperties("balance.circuit-breaker")
 class CircuitBreakerProperties(
     val window: Duration,

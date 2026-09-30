@@ -2,6 +2,7 @@ package br.com.itau.challenge.balance.application
 
 import br.com.itau.challenge.balance.domain.exception.AccountDisabledException
 import br.com.itau.challenge.balance.domain.exception.AccountNotFoundException
+import br.com.itau.challenge.balance.domain.exception.BalanceStoreUnavailableException
 import br.com.itau.challenge.balance.domain.model.AccountId
 import br.com.itau.challenge.balance.domain.model.AccountStatus
 import br.com.itau.challenge.balance.domain.model.BalanceSnapshot
@@ -11,9 +12,8 @@ import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 
 /**
- * Consulta de saldo: a decisao e funcao exclusiva do snapshot vigente (FR-011). Falhas do armazenamento
- * ([br.com.itau.challenge.balance.domain.exception.BalanceStoreUnavailableException]) propagam intactas e jamais viram
- * "conta nao encontrada". Nunca registra saldo nem titular.
+ * A decisao depende so do snapshot vigente. Falhas do armazenamento ([BalanceStoreUnavailableException]) propagam intactas e
+ * jamais viram "conta nao encontrada". Nunca registra saldo nem titular.
  */
 @Service
 class GetBalanceService(

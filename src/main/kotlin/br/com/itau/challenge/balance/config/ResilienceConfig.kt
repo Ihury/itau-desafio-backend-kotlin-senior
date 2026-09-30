@@ -11,8 +11,8 @@ import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 
 /**
- * Circuit breaker programatico da leitura (Resilience4j core, sem starter Spring): registry, breaker `dynamodb-read` e
- * binding das metricas `resilience4j.circuitbreaker.*` no Micrometer (todo `MeterBinder` e ligado pelo Spring Boot).
+ * Circuit breaker programatico da leitura (Resilience4j core, sem starter Spring): registry, breaker e binding das metricas no
+ * Micrometer (todo `MeterBinder` e ligado pelo Spring Boot).
  */
 @Configuration
 @EnableConfigurationProperties(CircuitBreakerProperties::class)
@@ -34,7 +34,7 @@ class ResilienceConfig {
     @Bean
     fun dynamoDbReadCircuitBreaker(registry: CircuitBreakerRegistry): CircuitBreaker =
         registry.circuitBreaker(DYNAMODB_READ_BREAKER_NAME).also { breaker ->
-            // WARN so nas transicoes de estado (uma linha por transicao): com o circuito aberto as rejeicoes por requisicao nao logam.
+            // WARN so nas transicoes de estado: com o circuito aberto as rejeicoes por requisicao nao logam.
             breaker.eventPublisher.onStateTransition { event ->
                 log.warn("circuit breaker {} changed state {} -> {}", event.circuitBreakerName, event.stateTransition.fromState, event.stateTransition.toState)
             }

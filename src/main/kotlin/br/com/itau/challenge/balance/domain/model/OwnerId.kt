@@ -1,6 +1,6 @@
 package br.com.itau.challenge.balance.domain.model
 
-/** Identificador UUID em forma canonica (minusculas). Construido somente por [parse]. */
+/** UUID em forma canonica (minusculas). */
 @JvmInline
 value class OwnerId private constructor(
     private val canonical: String,

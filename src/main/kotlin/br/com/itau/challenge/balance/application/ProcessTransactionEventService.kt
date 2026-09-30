@@ -13,13 +13,13 @@ import org.springframework.stereotype.Service
 import java.time.Clock
 
 /**
- * Ingestao de um evento: o snapshot e a projecao do evento de maior precedencia (nunca uma soma de transacoes) e a
- * arbitragem e feita atomicamente pelo armazenamento. Contabiliza exatamente um desfecho por evento aplicado; falhas do
- * armazenamento propagam intactas, sem desfecho contabilizado. Nunca registra saldo nem titular.
+ * O snapshot e a projecao do evento de maior precedencia (nunca uma soma de transacoes) e a arbitragem e feita atomicamente
+ * pelo armazenamento. Contabiliza exatamente um desfecho por evento aplicado; falhas do armazenamento propagam intactas, sem
+ * desfecho contabilizado. Nunca registra saldo nem titular.
  *
- * Antes de escrever, valida que `transaction.timestamp` e `account.created_at` nao passam de `agora + tolerancia` (FR-012,
- * passo 4 de contracts/kafka-events.md): o relogio so valida e nunca participa da precedencia (FR-003). A rejeicao lanca
- * [InvalidEventException] (`invalid_timestamp`, com o caminho do campo) sem tocar o armazenamento.
+ * Antes de escrever, valida que `transaction.timestamp` e `account.created_at` nao passam de `agora + tolerancia`: o relogio
+ * so valida e nunca participa da precedencia. A rejeicao lanca [InvalidEventException] (`invalid_timestamp`, com o caminho do
+ * campo) sem tocar o armazenamento.
  */
 @Service
 class ProcessTransactionEventService(
@@ -55,7 +55,7 @@ class ProcessTransactionEventService(
         return result
     }
 
-    /** Ordem fixa dos campos (kafka-events.md secao 3): `transaction.timestamp` antes de `account.created_at`. */
+    /** `transaction.timestamp` e verificado antes de `account.created_at`: a ordem define o caminho quando ambos falham. */
     private fun rejectFutureTimestamps(event: TransactionEvent) {
         val limit = latestAcceptableMicros()
         if (event.transaction.timestamp.micros > limit) throw futureTimestampRejection("transaction.timestamp")

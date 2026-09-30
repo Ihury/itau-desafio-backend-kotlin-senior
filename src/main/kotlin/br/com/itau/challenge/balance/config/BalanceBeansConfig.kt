@@ -44,9 +44,8 @@ class BalanceBeansConfig {
         )
 
     /**
-     * Escrita condicional atomica do snapshot, sobre o cliente de ESCRITA (uma tentativa; o retry e do consumer). Nao ha
-     * circuit breaker na escrita: o backpressure do consumer cumpre esse papel. As metricas de desfecho
-     * (`MicrometerProcessingMetrics`) entram como `@Component` do adapter.
+     * Usa o cliente de ESCRITA (uma tentativa; o retry e do consumer). Nao ha circuit breaker na escrita: o backpressure do
+     * consumer cumpre esse papel.
      */
     @Bean
     fun balanceSnapshotWriter(
@@ -56,8 +55,8 @@ class BalanceBeansConfig {
     ): BalanceSnapshotWriter = DynamoDbBalanceSnapshotWriter(client, properties.tableName, meterRegistry)
 
     /**
-     * Saude do DynamoDB para o grupo `dependencies` (nome do contribuidor: `dynamoDb`) e o gauge `balance.dependency.up`. Usa o cliente
-     * de LEITURA (timeouts curtos, pool proprio); nao pertence a `liveness` nem a `readiness` (application.yaml).
+     * Contribuidor `dynamoDb` do grupo `dependencies` e gauge `balance.dependency.up`. Usa o cliente de leitura (timeouts
+     * curtos, pool proprio); nao pertence a `liveness` nem a `readiness` (application.yaml).
      */
     @Bean
     fun dynamoDbHealthIndicator(
@@ -67,27 +66,22 @@ class BalanceBeansConfig {
         clock: Clock,
     ): DynamoDbHealthIndicator = DynamoDbHealthIndicator(client, properties.tableName, meterRegistry, clock)
 
-    /**
-     * Parser estrito do evento, com os limites inferiores de timestamp da configuracao (`balance.min-event-timestamp` e
-     * `balance.min-account-created-at`).
-     */
     @Bean
     fun transactionEventParser(
         @Value($$"${balance.min-event-timestamp}") minEventTimestamp: String,
         @Value($$"${balance.min-account-created-at}") minAccountCreatedAt: String,
     ): TransactionEventParser = TransactionEventParser(Instant.parse(minEventTimestamp), Instant.parse(minAccountCreatedAt))
 
-    /** Tolerancia de timestamp futuro (`balance.future-tolerance`, ISO-8601, padrao `PT5M`; FR-012). */
     @Bean
     fun futureTolerance(
         @Value($$"${balance.future-tolerance}") tolerance: String,
     ): FutureTolerance = FutureTolerance(Duration.parse(tolerance))
 
-    /** Relogio do processamento (usado so para a tolerancia de timestamp futuro; nunca decide precedencia). */
+    /** So valida a tolerancia de timestamp futuro; nunca decide precedencia. */
     @Bean
     fun clock(): Clock = Clock.systemUTC()
 
-    /** Fuso de exibicao do offset de `updated_at`. O instante (UTC) e a verdade; o offset e apresentacao. */
+    /** O instante (UTC) e a verdade; o offset de `updated_at` e apresentacao. */
     @Bean
     fun displayZone(
         @Value($$"${balance.display-zone}") zone: String,

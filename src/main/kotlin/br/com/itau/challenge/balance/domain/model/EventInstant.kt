@@ -4,10 +4,10 @@ import br.com.itau.challenge.balance.domain.exception.InvalidEventException
 import java.time.Instant
 
 /**
- * Instante de um evento em microssegundos desde a epoca (`Long`), sem perda de precisao. O minimo aceito depende do
- * papel do campo: [transactionTimestamp] (entra na precedencia; detecta segundos/milissegundos) e [accountCreatedAt]
- * (contas anteriores a 2000 sao legitimas, e valores anteriores a 1970 sao negativos). O maximo (agora + tolerancia)
- * precisa de relogio e e verificado na camada `application`. Um valor ja persistido volta por [fromPersisted], sem checagem.
+ * Instante de um evento em microssegundos desde a epoca (`Long`), sem perda de precisao. O minimo aceito depende do papel do
+ * campo: [transactionTimestamp] (entra na precedencia; detecta segundos/milissegundos) e [accountCreatedAt] (contas
+ * anteriores a 2000 sao legitimas, e valores anteriores a 1970 sao negativos). O maximo (agora + tolerancia) precisa de
+ * relogio e e verificado na camada `application`.
  */
 @JvmInline
 value class EventInstant private constructor(
@@ -15,7 +15,7 @@ value class EventInstant private constructor(
 ) : Comparable<EventInstant> {
     val micros: Long get() = epochMicros
 
-    /** Converte sem perda; `floorDiv/floorMod` sao obrigatorios para microssegundos negativos. */
+    /** `floorDiv/floorMod` sao obrigatorios para microssegundos negativos. */
     fun toInstant(): Instant =
         Instant.ofEpochSecond(
             Math.floorDiv(epochMicros, MICROS_PER_SECOND),
@@ -30,10 +30,8 @@ value class EventInstant private constructor(
         private const val MICROS_PER_SECOND = 1_000_000L
         private const val NANOS_PER_MICRO = 1_000L
 
-        /** `transaction.timestamp` >= 2000-01-01T00:00:00Z. */
         val DEFAULT_TRANSACTION_MINIMUM: Instant = Instant.parse("2000-01-01T00:00:00Z")
 
-        /** `account.created_at` >= 1900-01-01T00:00:00Z. */
         val DEFAULT_ACCOUNT_CREATED_AT_MINIMUM: Instant = Instant.parse("1900-01-01T00:00:00Z")
 
         fun transactionTimestamp(
@@ -47,9 +45,9 @@ value class EventInstant private constructor(
         ): EventInstant = of(micros, minimum)
 
         /**
-         * Reconstroi um instante que JA foi validado na escrita, sem checar faixa. Os minimos de plausibilidade sao configuraveis
-         * (`BALANCE_MIN_*`) e valem para o evento que ENTRA; um snapshot persistido e confiavel e nao pode virar erro de leitura por
-         * uma configuracao diferente da vigente quando foi gravado. Uso exclusivo de adapters de saida ao reidratar dado proprio.
+         * Reidrata um instante que ja foi validado na escrita, sem checar faixa. Os minimos de plausibilidade sao configuraveis
+         * e valem para o evento que ENTRA: um snapshot persistido e confiavel e nao pode virar erro de leitura por uma
+         * configuracao diferente da vigente quando foi gravado. Uso exclusivo de adapters de saida ao reidratar dado proprio.
          */
         fun fromPersisted(micros: Long): EventInstant = EventInstant(micros)
 

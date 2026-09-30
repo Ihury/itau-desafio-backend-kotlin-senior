@@ -1,6 +1,6 @@
 package br.com.itau.challenge.balance.domain.model
 
-/** Estado da conta informado pelo evento: titular, criacao, situacao e saldo. */
+/** Estado da conta informado pelo evento. */
 data class AccountState(
     val id: AccountId,
     val owner: OwnerId,

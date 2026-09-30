@@ -1,6 +1,6 @@
 server:
   port: ${SERVER_PORT:8080}
-  # Encerramento gracioso (FR-034): a API termina as requisicoes em andamento e cada fase de encerramento espera ate 30 s (docker
+  # Encerramento gracioso: a API termina as requisicoes em andamento e cada fase de encerramento espera ate 30 s (docker
   # compose usa `stop_grace_period: 40s`). O consumer para logo apos o registro corrente (`immediate-stop`) e o que nao foi
   # persistido nao e confirmado (commit so pelo container, sem auto-commit): e reentregue e reconciliado pela idempotencia.
   shutdown: graceful
@@ -15,8 +15,6 @@ spring:
     banner-mode: "off"
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:19092}
-    # Consumer at-least-once (contracts/kafka-events.md secao 2): bytes verbatim, commit so pelo container apos o listener
-    # retornar para todos os registros do poll, sem auto-commit.
     consumer:
       group-id: ${KAFKA_CONSUMER_GROUP_ID:consulta-saldo}
       enable-auto-commit: false
@@ -28,9 +26,9 @@ spring:
         # Invariante verificada por teste: max.poll.records x DYNAMODB_WRITE_CALL_TIMEOUT < max.poll.interval.ms.
         max.poll.interval.ms: ${KAFKA_MAX_POLL_INTERVAL_MS:300000}
         partition.assignment.strategy: org.apache.kafka.clients.consumer.CooperativeStickyAssignor
-    # Produtor do DLT (contracts/kafka-events.md secao 5): bytes verbatim, `acks=all`, idempotencia e `max.block.ms` finito.
-    # `delivery.timeout.ms`/`request.timeout.ms` curtos fazem a espera de `balance.dlt.wait-for-send-result-timeout` valer de fato
-    # (o Spring usaria `delivery.timeout.ms` de 120 s + 5 s); com o DLT ausente a publicacao falha em `max.block.ms`.
+    # Produtor do DLT: `delivery.timeout.ms`/`request.timeout.ms` curtos fazem a espera de
+    # `balance.dlt.wait-for-send-result-timeout` valer de fato (o Spring usaria `delivery.timeout.ms` de 120 s + 5 s); com o DLT
+    # ausente a publicacao falha em `max.block.ms`.
     producer:
       key-serializer: org.apache.kafka.common.serialization.ByteArraySerializer
       value-serializer: org.apache.kafka.common.serialization.ByteArraySerializer
@@ -44,9 +42,8 @@ spring:
       ack-mode: batch
       concurrency: ${KAFKA_LISTENER_CONCURRENCY:4}
       immediate-stop: true
-      # Lag e tempos do consumer como observacoes Micrometer (contracts/observability.md).
+      # Lag e tempos do consumer como observacoes Micrometer.
       observation-enabled: true
-  # Erros do framework (404 de rota, 405...) tambem em Problem Details (RFC 9457).
   mvc:
     problemdetails:
       enabled: true
@@ -56,15 +53,15 @@ spring:
       write-bigdecimal-as-plain: true
 
 # Logs JSON nativos do Spring Boot (format `logstash`): o MDC vai como chaves de topo (`correlationId`, `accountId`, `transactionId`).
-# Nunca sao logados saldo, titular, payload nem mensagem de parser (FR-032); ver LoggingPrivacyTest.
+# Nunca sao logados saldo, titular, payload nem mensagem de parser; ver LoggingPrivacyTest.
 logging:
   structured:
     format:
       console: ${LOGGING_STRUCTURED_FORMAT_CONSOLE:logstash}
 
-# Actuator em porta PROPRIA (contracts/observability.md): health, info e prometheus nunca respondem na porta da API. Em producao a porta de
-# gerenciamento nao deve ser roteada pelo balanceador publico. Histograma de `http.server.requests` com SLO de 50 ms a 2 s; os timers de
-# negocio (`balance.*.duration`) declaram os proprios objetivos no codigo, junto de cada adapter.
+# Actuator em porta propria: health, info e prometheus nunca respondem na porta da API. Em producao a porta de gerenciamento nao
+# deve ser roteada pelo balanceador publico. Os timers de negocio (`balance.*.duration`) declaram os proprios objetivos no codigo,
+# junto de cada adapter.
 management:
   server:
     port: ${MANAGEMENT_SERVER_PORT:8082}
@@ -72,10 +69,10 @@ management:
     web:
       exposure:
         include: health,info,prometheus
-  # Saude (FR-033, Constitution VII): `liveness` e `readiness` refletem SO o estado do proprio processo e nunca saem de rotacao por
-  # causa do DynamoDB; a dependencia fica no grupo `dependencies` (+ gauge `balance.dependency.up`). Use as sondas
-  # /actuator/health/liveness e /actuator/health/readiness em balanceador/orquestrador; NAO use /actuator/health (raiz), que
-  # agrega as dependencias e fica 503 com o DynamoDB fora.
+  # `liveness` e `readiness` refletem so o estado do proprio processo e nunca saem de rotacao por causa do DynamoDB; a
+  # dependencia fica no grupo `dependencies` (+ gauge `balance.dependency.up`). Use as sondas /actuator/health/liveness e
+  # /actuator/health/readiness em balanceador/orquestrador; nao use /actuator/health (raiz), que agrega as dependencias e fica
+  # 503 com o DynamoDB fora.
   endpoint:
     health:
       show-details: never
@@ -93,7 +90,7 @@ management:
       slo:
         http.server.requests: 50ms,100ms,300ms,1s,2s
 
-# Cliente DynamoDB (contracts/configuration.md). `endpoint` em branco = producao (endpoint AWS e cadeia padrao de credenciais).
+# Cliente DynamoDB. `endpoint` em branco = producao (endpoint AWS e cadeia padrao de credenciais).
 dynamodb:
   endpoint: ${DYNAMODB_ENDPOINT:http://localhost:8000}
   region: ${DYNAMODB_REGION:us-east-1}
@@ -112,7 +109,6 @@ dynamodb:
     call-timeout: ${DYNAMODB_WRITE_CALL_TIMEOUT:PT2S}
     max-connections: ${DYNAMODB_WRITE_MAX_CONNECTIONS:50}
 
-# Circuit breaker da leitura (contracts/configuration.md). `open-wait` tambem e o valor de `Retry-After` do 503.
 balance:
   events:
     topic: ${BALANCE_EVENTS_TOPIC:transacoes-financeiras-processadas}
@@ -125,12 +121,13 @@ balance:
       initial-ms: ${KAFKA_BACKOFF_INITIAL_MS:500}
       max-ms: ${KAFKA_BACKOFF_MAX_MS:30000}
       jitter-ms: ${KAFKA_BACKOFF_JITTER_MS:250}
-  # Limites inferiores de plausibilidade dos timestamps do evento (contracts/kafka-events.md secao 3, passo 3).
+  # Limites inferiores de plausibilidade dos timestamps do evento.
   min-event-timestamp: ${BALANCE_MIN_EVENT_TIMESTAMP:2000-01-01T00:00:00Z}
   min-account-created-at: ${BALANCE_MIN_ACCOUNT_CREATED_AT:1900-01-01T00:00:00Z}
-  # Instante do evento alem de `agora + tolerancia` e `invalid_timestamp` (FR-012); o relogio so valida, nunca decide precedencia.
+  # Instante do evento alem de `agora + tolerancia` e `invalid_timestamp`; o relogio so valida, nunca decide precedencia.
   future-tolerance: ${BALANCE_FUTURE_TOLERANCE:PT5M}
   display-zone: ${BALANCE_DISPLAY_ZONE:America/Sao_Paulo}
+  # Circuit breaker da leitura. `open-wait` tambem e o valor de `Retry-After` do 503.
   circuit-breaker:
     window: ${BALANCE_CB_WINDOW:PT10S}
     min-calls: ${BALANCE_CB_MIN_CALLS:20}
