@@ -130,4 +130,16 @@ class DynamoDbBalanceSnapshotReaderIT {
             assertEquals(StoreFailureCause.UNAVAILABLE, failure.failureCause)
         }
     }
+
+    @Test
+    fun `a missing table is a misconfiguration that stays transitory, with the real error code in the diagnostics`() {
+        val failing = DynamoDbBalanceSnapshotReader(readClient, "TabelaQueNaoExiste", true, SimpleMeterRegistry())
+
+        val failure = assertFailsWith<BalanceStoreUnavailableException> { failing.find(AccountId.parse(accountId)) }
+
+        assertEquals(StoreFailureCause.MISCONFIGURED, failure.failureCause)
+        val details = assertNotNull(failure.details)
+        assertEquals("ResourceNotFoundException", details.errorCode)
+        assertEquals(400, details.statusCode)
+    }
 }

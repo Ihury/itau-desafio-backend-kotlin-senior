@@ -3,6 +3,7 @@ package br.com.itau.challenge.balance.adapter.input.web
 import br.com.itau.challenge.balance.domain.exception.AccountDisabledException
 import br.com.itau.challenge.balance.domain.exception.AccountNotFoundException
 import br.com.itau.challenge.balance.domain.exception.BalanceStoreUnavailableException
+import br.com.itau.challenge.balance.domain.model.StoreFailureCause
 import jakarta.servlet.http.HttpServletRequest
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
@@ -51,7 +52,12 @@ class ProblemDetailsAdvice(
         exception: BalanceStoreUnavailableException,
         request: HttpServletRequest,
     ): ResponseEntity<ProblemDetail> {
-        log.warn("balance store unavailable cause={}", exception.failureCause)
+        // Diagnostico sem a mensagem livre do SDK. Configuracao/credencial (MISCONFIGURED) sobe a ERROR: o 503 e o mesmo, mas exige acao.
+        if (exception.failureCause == StoreFailureCause.MISCONFIGURED) {
+            log.error("balance store misconfigured {}", exception.describe())
+        } else {
+            log.warn("balance store unavailable {}", exception.describe())
+        }
         return problem(
             request,
             HttpStatus.SERVICE_UNAVAILABLE,

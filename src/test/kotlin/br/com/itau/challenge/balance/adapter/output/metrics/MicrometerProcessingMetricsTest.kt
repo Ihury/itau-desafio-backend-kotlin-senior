@@ -103,8 +103,10 @@ class MicrometerProcessingMetricsTest {
         metrics.backpressure(StoreFailureCause.THROTTLED)
         metrics.backpressure(StoreFailureCause.THROTTLED)
         metrics.backpressure(StoreFailureCause.TIMEOUT)
+        metrics.backpressure(StoreFailureCause.MISCONFIGURED)
 
         assertEquals(2.0, backpressure("throttled"))
+        assertEquals(1.0, backpressure("misconfigured"))
         assertEquals(0.0, backpressure("unavailable"))
         assertEquals(1.0, backpressure("timeout"))
         assertEquals(0.0, events("processed"))
@@ -114,7 +116,7 @@ class MicrometerProcessingMetricsTest {
 
     @Test
     fun `every cause has its backpressure counter registered at zero, with the tag values of the observability contract`() {
-        assertEquals(setOf("throttled", "unavailable", "timeout"), registry.find("balance.consumer.backpressure").counters().map { it.id.getTag("cause") }.toSet())
+        assertEquals(setOf("throttled", "unavailable", "timeout", "misconfigured"), registry.find("balance.consumer.backpressure").counters().map { it.id.getTag("cause") }.toSet())
         StoreFailureCause.entries.forEach { assertEquals(0.0, backpressure(it.name.lowercase()), it.name) }
     }
 }

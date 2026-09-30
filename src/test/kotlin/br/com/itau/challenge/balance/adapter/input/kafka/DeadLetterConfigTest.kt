@@ -5,6 +5,7 @@ import br.com.itau.challenge.balance.domain.exception.BalanceStoreUnavailableExc
 import br.com.itau.challenge.balance.domain.exception.InvalidEventException
 import br.com.itau.challenge.balance.domain.model.RejectionReason
 import br.com.itau.challenge.balance.domain.model.StoreFailureCause
+import br.com.itau.challenge.balance.domain.model.StoreFailureDetails
 import br.com.itau.challenge.balance.testing.RecordingProcessingMetrics
 import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.Logger
@@ -33,6 +34,7 @@ import org.springframework.kafka.listener.DefaultErrorHandler
 import org.springframework.kafka.listener.ListenerExecutionFailedException
 import org.springframework.kafka.listener.MessageListenerContainer
 import org.springframework.kafka.support.SendResult
+import software.amazon.awssdk.core.exception.SdkClientException
 import java.time.Clock
 import java.time.Duration
 import java.time.Instant
@@ -386,6 +388,51 @@ class DeadLetterConfigTest {
             val isolated = logs.list.single { it.formattedMessage.startsWith("message isolated in the dlt") }
             assertEquals(Level.WARN, isolated.level)
             assertTrue("reason=invalid_currency" in isolated.formattedMessage && "detail=transaction.currency" in isolated.formattedMessage)
+        }
+    }
+
+    private fun storeFailure(
+        cause: StoreFailureCause,
+        details: StoreFailureDetails?,
+    ) = BalanceStoreUnavailableException(cause, SdkClientException.builder().message("segredo do sdk: 315e3cfe-f4af-4cd2-b298-a449e614349a").build(), details)
+
+    @Test
+    fun `a transient failure logs at warn the cause and the sdk diagnostics, never the free message, the payload or the stack`() {
+        capturingLogs { logs ->
+            deliver(storeFailure(StoreFailureCause.THROTTLED, StoreFailureDetails("software.amazon.awssdk.services.dynamodb.model.DynamoDbException", "ThrottlingException", 400)))
+
+            val line = logs.list.single { it.formattedMessage.startsWith("store unavailable") }
+            assertEquals(Level.WARN, line.level)
+            assertTrue("cause=THROTTLED" in line.formattedMessage, line.formattedMessage)
+            assertTrue("exception=software.amazon.awssdk.services.dynamodb.model.DynamoDbException" in line.formattedMessage, line.formattedMessage)
+            assertTrue("errorCode=ThrottlingException" in line.formattedMessage && "statusCode=400" in line.formattedMessage, line.formattedMessage)
+            assertFalse("segredo" in line.formattedMessage || "315e3cfe" in line.formattedMessage, "sem a mensagem livre do SDK")
+            assertNull(line.throwableProxy, "sem pilha")
+        }
+    }
+
+    @Test
+    fun `a misconfigured store logs at error, still transient and never sent to the dlt`() {
+        capturingLogs { logs ->
+            val recovered = deliver(storeFailure(StoreFailureCause.MISCONFIGURED, StoreFailureDetails("software.amazon.awssdk.services.dynamodb.model.ResourceNotFoundException", "ResourceNotFoundException", 400)))
+
+            assertFalse(recovered, "a falha de configuracao continua sendo retentada")
+            assertTrue(sent.isEmpty(), "nunca vai ao DLT")
+            val line = logs.list.single { it.formattedMessage.startsWith("store unavailable") }
+            assertEquals(Level.ERROR, line.level)
+            assertTrue("cause=MISCONFIGURED" in line.formattedMessage && "errorCode=ResourceNotFoundException" in line.formattedMessage, line.formattedMessage)
+            assertNull(line.throwableProxy, "sem pilha")
+        }
+    }
+
+    @Test
+    fun `a transient failure without sdk diagnostics still logs the cause`() {
+        capturingLogs { logs ->
+            deliver(BalanceStoreUnavailableException(StoreFailureCause.UNAVAILABLE))
+
+            val line = logs.list.single { it.formattedMessage.startsWith("store unavailable") }
+            assertEquals(Level.WARN, line.level)
+            assertTrue("cause=UNAVAILABLE" in line.formattedMessage, line.formattedMessage)
         }
     }
 

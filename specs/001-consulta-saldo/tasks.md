@@ -491,7 +491,7 @@ Os atalhos abaixo são expandidos nos caminhos deste arquivo; todos os caminhos 
 
 ### Commit C42: `feat(dynamodb): diferencia falha de configuracao no diagnostico de indisponibilidade`
 
-- [ ] T186 `DynamoDbExceptionTranslator.kt` + `StoreFailureCause.MISCONFIGURED` (`ResourceNotFoundException`, `AccessDeniedException`, `UnrecognizedClientException`, `ExpiredToken*`, `InvalidSignatureException`, `MissingAuthenticationToken`, falha de credencial do SDK) mantendo o tratamento transitório (retry infinito, nunca DLT); log de cada falha transitória (consumer e WARN de leitura) com classe da exceção do SDK, `errorCode` e `statusCode`, sem mensagem livre e sem payload, `MISCONFIGURED` em ERROR; métrica `balance.consumer.backpressure{cause=misconfigured}`; linha da métrica em `specs/001-consulta-saldo/contracts/observability.md`; testes do tradutor e do log
+- [X] T186 `DynamoDbExceptionTranslator.kt` + `StoreFailureCause.MISCONFIGURED` (`ResourceNotFoundException`, `AccessDeniedException`, `UnrecognizedClientException`, `ExpiredToken*`, `InvalidSignatureException`, `MissingAuthenticationToken`, falha de credencial do SDK) mantendo o tratamento transitório (retry infinito, nunca DLT); log de cada falha transitória (consumer e WARN de leitura) com classe da exceção do SDK, `errorCode` e `statusCode`, sem mensagem livre e sem payload, `MISCONFIGURED` em ERROR; métrica `balance.consumer.backpressure{cause=misconfigured}`; linha da métrica em `specs/001-consulta-saldo/contracts/observability.md`; testes do tradutor e do log
 
 ### Commit C43: `build: renomeia o projeto para consulta-saldo`
 

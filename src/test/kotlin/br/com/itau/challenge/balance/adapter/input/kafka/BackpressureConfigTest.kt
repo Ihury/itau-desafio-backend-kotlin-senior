@@ -240,7 +240,7 @@ class BackpressureConfigTest {
         handler.handleOne(transientFailure(StoreFailureCause.THROTTLED), record, consumer, container)
 
         assertEquals(
-            listOf(StoreFailureCause.THROTTLED, StoreFailureCause.UNAVAILABLE, StoreFailureCause.TIMEOUT, StoreFailureCause.THROTTLED),
+            listOf(StoreFailureCause.THROTTLED, StoreFailureCause.UNAVAILABLE, StoreFailureCause.TIMEOUT, StoreFailureCause.MISCONFIGURED, StoreFailureCause.THROTTLED),
             metrics.backpressureCauses,
         )
         assertEquals(emptyList(), metrics.outcomes, "backpressure nao e desfecho")

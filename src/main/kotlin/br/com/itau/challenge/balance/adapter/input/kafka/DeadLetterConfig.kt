@@ -2,6 +2,7 @@ package br.com.itau.challenge.balance.adapter.input.kafka
 
 import br.com.itau.challenge.balance.domain.exception.BalanceStoreUnavailableException
 import br.com.itau.challenge.balance.domain.exception.InvalidEventException
+import br.com.itau.challenge.balance.domain.model.StoreFailureCause
 import br.com.itau.challenge.balance.port.output.ProcessingMetrics
 import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.apache.kafka.common.TopicPartition
@@ -164,7 +165,13 @@ class DeadLetterConfig {
                 when (failure) {
                     is BalanceStoreUnavailableException -> {
                         metrics.backpressure(failure.failureCause)
-                        log.warn("store unavailable, container paused for the back off {} attempt={} cause={}", coordinates(record), deliveryAttempt, failure.failureCause)
+                        // Diagnostico sem a mensagem livre do SDK nem payload. Configuracao/credencial (MISCONFIGURED) sobe a ERROR: continua
+                        // transitoria (retentada sem limite, nunca DLT), mas exige acao de quem opera.
+                        if (failure.failureCause == StoreFailureCause.MISCONFIGURED) {
+                            log.error("store unavailable, container paused for the back off {} attempt={} {}", coordinates(record), deliveryAttempt, failure.describe())
+                        } else {
+                            log.warn("store unavailable, container paused for the back off {} attempt={} {}", coordinates(record), deliveryAttempt, failure.describe())
+                        }
                     }
                     // Evento invalido e um desfecho esperado (permanente, sem reentrega): o isolamento e logado em `recovered`.
                     is InvalidEventException -> log.debug("invalid event {} reason={}", coordinates(record), failure.reason.code)

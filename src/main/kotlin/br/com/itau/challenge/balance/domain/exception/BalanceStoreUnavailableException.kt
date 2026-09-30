@@ -1,11 +1,17 @@
 package br.com.itau.challenge.balance.domain.exception
 
 import br.com.itau.challenge.balance.domain.model.StoreFailureCause
+import br.com.itau.challenge.balance.domain.model.StoreFailureDetails
 
 /**
- * Armazenamento indisponivel (falha transitoria). [failureCause] e a classificacao; `cause` e a excecao original do SDK.
+ * Armazenamento indisponivel (falha transitoria). [failureCause] e a classificacao; `cause` e a excecao original do SDK e
+ * [details] o diagnostico seguro para log (sem a mensagem livre do SDK).
  */
-class BalanceStoreUnavailableException(
+open class BalanceStoreUnavailableException(
     val failureCause: StoreFailureCause,
     cause: Throwable? = null,
-) : RuntimeException("balance store unavailable: $failureCause", cause)
+    val details: StoreFailureDetails? = null,
+) : RuntimeException("balance store unavailable: $failureCause", cause) {
+    /** `cause=<causa>` seguido do diagnostico do SDK, quando ha; o texto de log das falhas transitorias. */
+    fun describe(): String = details?.let { "cause=$failureCause $it" } ?: "cause=$failureCause"
+}

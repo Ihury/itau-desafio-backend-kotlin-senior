@@ -3,12 +3,16 @@ package br.com.itau.challenge.balance.adapter.output.dynamodb
 import br.com.itau.challenge.balance.domain.exception.BalanceStoreRejectedException
 import br.com.itau.challenge.balance.domain.exception.BalanceStoreUnavailableException
 import br.com.itau.challenge.balance.domain.model.StoreFailureCause
+import br.com.itau.challenge.balance.domain.model.StoreFailureDetails
 import software.amazon.awssdk.awscore.exception.AwsServiceException
 import software.amazon.awssdk.core.exception.ApiCallAttemptTimeoutException
 import software.amazon.awssdk.core.exception.ApiCallTimeoutException
+import software.amazon.awssdk.core.exception.SdkClientException
 import software.amazon.awssdk.core.exception.SdkException
+import software.amazon.awssdk.core.exception.SdkServiceException
 import software.amazon.awssdk.services.dynamodb.model.ProvisionedThroughputExceededException
 import software.amazon.awssdk.services.dynamodb.model.RequestLimitExceededException
+import software.amazon.awssdk.services.dynamodb.model.ResourceNotFoundException
 import software.amazon.awssdk.services.dynamodb.model.ThrottlingException
 
 /**
@@ -16,19 +20,49 @@ import software.amazon.awssdk.services.dynamodb.model.ThrottlingException
  * (jamais "nao encontrada" nem isolamento de mensagem valida: FR-017/FR-025); a unica excecao e a
  * `ValidationException` na ESCRITA, que e uma rejeicao do armazenamento. A excecao original vai em `cause`.
  * Excecoes que nao sao do SDK nao sao traduzidas (`null`).
+ *
+ * Tabela inexistente, acesso negado e problemas de credencial ([StoreFailureCause.MISCONFIGURED]) tambem sao transitorios (a
+ * correcao e operacional e a mensagem nunca vai ao DLT); so o diagnostico muda. [StoreFailureDetails] leva ao log a classe da
+ * excecao, o codigo de erro e o status HTTP, jamais a mensagem livre do SDK.
  */
 internal object DynamoDbExceptionTranslator {
     private val throttlingCodes = setOf("ThrottlingException", "ProvisionedThroughputExceededException", "RequestLimitExceeded")
 
-    fun forRead(failure: Throwable): BalanceStoreUnavailableException? =
-        if (failure is SdkException) BalanceStoreUnavailableException(causeOf(failure), failure) else null
+    /** Codigos do servico que indicam configuracao/credencial (`ExpiredToken*` e tratado a parte, por prefixo). */
+    private val misconfigurationCodes =
+        setOf(
+            "ResourceNotFoundException",
+            "AccessDeniedException",
+            "UnrecognizedClientException",
+            "InvalidSignatureException",
+            "MissingAuthenticationToken",
+            "MissingAuthenticationTokenException",
+        )
+
+    /** Prefixo das mensagens do SDK quando a cadeia de provedores nao resolve nenhuma credencial (`SdkClientException`). */
+    private const val CREDENTIALS_MESSAGE_PREFIX = "Unable to load credentials"
+
+    private const val MAX_CAUSE_DEPTH = 5
+    private val safeErrorCode = Regex("[A-Za-z0-9_.#:-]{1,100}")
+
+    fun forRead(failure: Throwable): BalanceStoreUnavailableException? = if (failure is SdkException) unavailable(failure) else null
 
     fun forWrite(failure: Throwable): RuntimeException? =
         when {
             failure !is SdkException -> null
             isValidationError(failure) -> BalanceStoreRejectedException(failure)
-            else -> BalanceStoreUnavailableException(causeOf(failure), failure)
+            else -> unavailable(failure)
         }
+
+    private fun unavailable(failure: SdkException) = BalanceStoreUnavailableException(causeOf(failure), failure, detailsOf(failure))
+
+    private fun detailsOf(failure: SdkException): StoreFailureDetails =
+        StoreFailureDetails(
+            exceptionClass = failure.javaClass.name,
+            // vem do servidor: so um token curto e seguro vai ao log (sem quebra de linha nem texto livre)
+            errorCode = errorCode(failure)?.takeIf { safeErrorCode.matches(it) },
+            statusCode = (failure as? SdkServiceException)?.statusCode()?.takeIf { it > 0 },
+        )
 
     private fun causeOf(failure: SdkException): StoreFailureCause =
         when {
@@ -36,9 +70,25 @@ internal object DynamoDbExceptionTranslator {
                 failure is RequestLimitExceededException ||
                 failure is ThrottlingException ||
                 errorCode(failure) in throttlingCodes -> StoreFailureCause.THROTTLED
+            isMisconfiguration(failure) -> StoreFailureCause.MISCONFIGURED
             failure is ApiCallTimeoutException || failure is ApiCallAttemptTimeoutException -> StoreFailureCause.TIMEOUT
             else -> StoreFailureCause.UNAVAILABLE
         }
+
+    private fun isMisconfiguration(failure: SdkException): Boolean {
+        val code = errorCode(failure)
+        return failure is ResourceNotFoundException ||
+            code in misconfigurationCodes ||
+            code?.startsWith("ExpiredToken") == true ||
+            isCredentialsFailure(failure)
+    }
+
+    /** Falha de credencial do SDK: `SdkClientException` (ou uma causa dela) cuja mensagem e a da cadeia de provedores. So o inicio da mensagem e comparado. */
+    private fun isCredentialsFailure(failure: Throwable): Boolean =
+        failure is SdkClientException &&
+            generateSequence<Throwable>(failure) { it.cause }
+                .take(MAX_CAUSE_DEPTH)
+                .any { it.message?.startsWith(CREDENTIALS_MESSAGE_PREFIX) == true }
 
     private fun isValidationError(failure: SdkException): Boolean = errorCode(failure) == "ValidationException"
 
