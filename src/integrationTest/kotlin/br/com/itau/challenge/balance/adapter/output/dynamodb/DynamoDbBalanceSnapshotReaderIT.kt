@@ -103,6 +103,17 @@ class DynamoDbBalanceSnapshotReaderIT {
     }
 
     @Test
+    fun `an item with timestamps below the default plausibility minimums is read normally`() {
+        // gravado sob outros BALANCE_MIN_*: 1995-06-15 (< 2000) na transacao e 1850-01-01 (< 1900) na criacao da conta
+        put(item(accountId, lastTxTsMicros = 803_174_400_000_000L, accountCreatedAtMicros = -3_155_760_000_000_000L))
+
+        val snapshot = assertNotNull(reader.find(AccountId.parse(accountId)))
+
+        assertEquals(803_174_400_000_000L, snapshot.precedence.timestamp.micros)
+        assertEquals(-3_155_760_000_000_000L, snapshot.accountCreatedAt.micros)
+    }
+
+    @Test
     fun `microseconds of the last transaction are preserved`() {
         put(item(accountId, lastTxTsMicros = 1751749453433123L))
 

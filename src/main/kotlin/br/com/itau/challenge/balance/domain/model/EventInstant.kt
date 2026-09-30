@@ -7,7 +7,7 @@ import java.time.Instant
  * Instante de um evento em microssegundos desde a epoca (`Long`), sem perda de precisao. O minimo aceito depende do
  * papel do campo: [transactionTimestamp] (entra na precedencia; detecta segundos/milissegundos) e [accountCreatedAt]
  * (contas anteriores a 2000 sao legitimas, e valores anteriores a 1970 sao negativos). O maximo (agora + tolerancia)
- * precisa de relogio e e verificado na camada `application`.
+ * precisa de relogio e e verificado na camada `application`. Um valor ja persistido volta por [fromPersisted], sem checagem.
  */
 @JvmInline
 value class EventInstant private constructor(
@@ -45,6 +45,13 @@ value class EventInstant private constructor(
             micros: Long,
             minimum: Instant = ACCOUNT_CREATED_AT_MINIMUM,
         ): EventInstant = of(micros, minimum)
+
+        /**
+         * Reconstroi um instante que JA foi validado na escrita, sem checar faixa. Os minimos de plausibilidade sao configuraveis
+         * (`BALANCE_MIN_*`) e valem para o evento que ENTRA; um snapshot persistido e confiavel e nao pode virar erro de leitura por
+         * uma configuracao diferente da vigente quando foi gravado. Uso exclusivo de adapters de saida ao reidratar dado proprio.
+         */
+        fun fromPersisted(micros: Long): EventInstant = EventInstant(micros)
 
         private fun of(
             micros: Long,

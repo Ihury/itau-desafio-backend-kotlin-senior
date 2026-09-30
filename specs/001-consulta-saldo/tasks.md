@@ -487,7 +487,7 @@ Os atalhos abaixo são expandidos nos caminhos deste arquivo; todos os caminhos 
 
 ### Commit C41: `fix(dynamodb): leitura do snapshot nao reaplica limites de plausibilidade de timestamp`
 
-- [ ] T185 Teste vermelho em `BalanceItemMapperTest.kt`/`DynamoDbBalanceSnapshotReaderIT.kt` (item com `lastTxTsMicros` de 1995 e `accountCreatedAtMicros` de 1850 é lido normalmente, não vira 500); `adapter/output/dynamodb/BalanceItemMapper.kt` deixa de reconstruir `EventInstant` com os mínimos padrão do código e passa a usar uma fábrica de domínio para valores persistidos (sem checagem de faixa; domínio puro, regra Konsist preservada)
+- [X] T185 Teste vermelho em `BalanceItemMapperTest.kt`/`DynamoDbBalanceSnapshotReaderIT.kt` (item com `lastTxTsMicros` de 1995 e `accountCreatedAtMicros` de 1850 é lido normalmente, não vira 500); `adapter/output/dynamodb/BalanceItemMapper.kt` deixa de reconstruir `EventInstant` com os mínimos padrão do código e passa a usar uma fábrica de domínio para valores persistidos (sem checagem de faixa; domínio puro, regra Konsist preservada)
 
 ### Commit C42: `feat(dynamodb): diferencia falha de configuracao no diagnostico de indisponibilidade`
 

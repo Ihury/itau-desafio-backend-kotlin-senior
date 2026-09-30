@@ -101,6 +101,24 @@ class BalanceItemMapperTest {
     }
 
     @Test
+    fun `a persisted snapshot is trusted and read back even with timestamps below the default plausibility minimums`() {
+        // 1995-06-15 (< 2000, minimo padrao do timestamp da transacao) e 1850-01-01 (< 1900, minimo padrao de created_at): os limites sao
+        // configuraveis (BALANCE_MIN_*) e ja foram aplicados na ESCRITA; a leitura nao os reaplica (nem vira 500).
+        val transaction1995 = 803_174_400_000_000L
+        val created1850 = -3_155_760_000_000_000L
+        val item =
+            validItem().apply {
+                put("lastTxTsMicros", n(transaction1995.toString()))
+                put("accountCreatedAtMicros", n(created1850.toString()))
+            }
+
+        val restored = BalanceItemMapper.fromItem(item)
+
+        assertEquals(transaction1995, restored.precedence.timestamp.micros)
+        assertEquals(created1850, restored.accountCreatedAt.micros)
+    }
+
+    @Test
     fun `fromItem rebuilds every field of the snapshot`() {
         val original = snapshot(accountStatus = AccountStatus.DISABLED, balanceCurrency = "USD")
 
@@ -150,8 +168,8 @@ class BalanceItemMapperTest {
                 validItem().apply { put("balanceCurrency", s("brl")) },
                 validItem().apply { put("ownerId", s("1-1-1-1-1")) },
                 validItem().apply { put("lastTxId", s("not-a-uuid")) },
-                validItem().apply { put("lastTxTsMicros", n("1751749453433")) },
-                validItem().apply { put("accountCreatedAtMicros", n("-2208988800000001")) },
+                validItem().apply { put("lastTxTsMicros", n("not-a-number")) },
+                validItem().apply { put("accountCreatedAtMicros", n("1.5")) },
                 validItem().apply { put("balanceAmount", n("123456789012345678901234567890123456789")) },
                 validItem().apply { put("pk", s("ACCOUNT#xyz")) },
             )

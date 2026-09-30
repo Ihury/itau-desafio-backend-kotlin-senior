@@ -36,7 +36,11 @@ internal object BalanceAttributes {
  * notacao cientifica) e lido com `BigDecimal(String)`: o banco normaliza zeros a direita (`183.10` -> `183.1`) sem
  * alterar o valor.
  *
- * Um item que nao respeita o layout ou os limites do dominio (corrompido ou legado) e SEMPRE uma
+ * Os instantes sao reidratados SEM checagem de faixa ([EventInstant.fromPersisted]): os minimos configuraveis de plausibilidade
+ * (`BALANCE_MIN_*`) foram aplicados na escrita e a leitura confia no dado persistido (uma configuracao diferente da vigente na
+ * gravacao nao pode transformar um snapshot valido em erro 500).
+ *
+ * Um item que nao respeita o layout ou os tipos do dominio (corrompido ou legado) e SEMPRE uma
  * [IllegalStateException] (falha interna), nunca `InvalidEventException` (que a API leria como requisicao invalida)
  * nem dado errado. A mensagem cita apenas o nome do atributo; jamais o valor.
  */
@@ -81,13 +85,13 @@ internal object BalanceItemMapper {
                 },
             accountCreatedAt =
                 parsed(BalanceAttributes.ACCOUNT_CREATED_AT_MICROS) {
-                    EventInstant.accountCreatedAt(item.number(BalanceAttributes.ACCOUNT_CREATED_AT_MICROS).toLong())
+                    EventInstant.fromPersisted(item.number(BalanceAttributes.ACCOUNT_CREATED_AT_MICROS).toLong())
                 },
             precedence =
                 Precedence(
                     timestamp =
                         parsed(BalanceAttributes.LAST_TX_TS_MICROS) {
-                            EventInstant.transactionTimestamp(item.number(BalanceAttributes.LAST_TX_TS_MICROS).toLong())
+                            EventInstant.fromPersisted(item.number(BalanceAttributes.LAST_TX_TS_MICROS).toLong())
                         },
                     transactionId = parsed(BalanceAttributes.LAST_TX_ID) { TransactionId.parse(item.text(BalanceAttributes.LAST_TX_ID)) },
                 ),

@@ -25,6 +25,13 @@ class EventInstantTest {
     }
 
     @Test
+    fun `a persisted instant is rebuilt as is, without the plausibility minimums`() {
+        assertEquals(1751749453433123L, EventInstant.fromPersisted(1751749453433123L).micros)
+        assertEquals(year2000 - 1, EventInstant.fromPersisted(year2000 - 1).micros)
+        assertEquals(year1900 - 1, EventInstant.fromPersisted(year1900 - 1).micros)
+    }
+
+    @Test
     fun `transaction timestamp detects seconds and milliseconds as the wrong unit`() {
         assertInvalidTimestamp { EventInstant.transactionTimestamp(1751749453433) }
         assertInvalidTimestamp { EventInstant.transactionTimestamp(1751749453) }
