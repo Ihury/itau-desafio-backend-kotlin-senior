@@ -171,19 +171,29 @@ class TopicSet(
     ) = publishKeyed(key, payload.toByteArray(Charsets.UTF_8))
 
     /**
-     * Espera todas as particoes do topico estarem atribuidas aos containers do listener. Sem isso o primeiro teste mediria o
-     * tempo de entrada no grupo (rebalance inicial), e nao a latencia de processamento.
+     * Espera o grupo ESTABILIZAR: todas as particoes do topico atribuidas E cada consumidor do container concorrente com ao menos
+     * uma delas. So as particoes atribuidas nao bastam: os consumidores entram no grupo em momentos diferentes (num runner
+     * lento, alguns segundos depois), o primeiro rebalance ja atribui as 12 particoes a dois deles e o seguinte, cooperativo,
+     * as move para os demais. Um rebalance no meio de um teste zera a contagem de entregas de um registro em retry (o
+     * `DefaultErrorHandler` guarda a contagem por consumidor) e reentrega o que estava em voo, o que o at-least-once permite
+     * mas que estes testes nao querem medir. Sem isso o primeiro teste tambem mediria o tempo de entrada no grupo, e nao a
+     * latencia de processamento.
      */
     fun awaitAssignment(registry: KafkaListenerEndpointRegistry) {
         await.untilAsserted {
+            val containers = registry.listenerContainers.filterIsInstance<ConcurrentMessageListenerContainer<*, *>>()
             val assigned =
-                registry.listenerContainers
-                    .filterIsInstance<ConcurrentMessageListenerContainer<*, *>>()
+                containers
                     .flatMap { it.assignedPartitions.orEmpty() }
                     .filter { it.topic() == topic }
                     .toSet()
             if (assigned.size != IntegrationInfra.MAIN_PARTITIONS) {
                 throw AssertionError("particoes atribuidas: ${assigned.size} de ${IntegrationInfra.MAIN_PARTITIONS}")
+            }
+            val consumers = containers.flatMap { it.containers }
+            val idle = consumers.count { child -> child.assignedPartitions.orEmpty().none { it.topic() == topic } }
+            if (consumers.size <= IntegrationInfra.MAIN_PARTITIONS && idle > 0) {
+                throw AssertionError("consumidores ainda sem particao: $idle de ${consumers.size}")
             }
         }
     }

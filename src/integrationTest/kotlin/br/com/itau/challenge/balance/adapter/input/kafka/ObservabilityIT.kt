@@ -130,9 +130,18 @@ class ObservabilityIT : KafkaITBase() {
         assertEquals(8.0 / published, rejectedRatio, 1e-9)
         assertEquals(1.0 / published, obsoleteRatio, 1e-9)
 
-        // o timer de ingestao registra cada ENTREGA por desfecho: o defeito interno (nao classificado) tem 3 entregas, todas `error`
+        // o timer de ingestao registra cada ENTREGA por desfecho. Os desfechos com entrega unica (processado, obsoleto, duplicado e os
+        // 7 rejeitados por evento invalido) tem contagem exata. O defeito interno (nao classificado) tem NO MINIMO 3 entregas, todas
+        // `error`: se o dono da particao sai do grupo no meio delas (rebalance quando os consumidores entram com atraso, como no
+        // runner de 2 vCPUs do CI, que viu 5), o novo dono recomeca a contagem e reentrega, o que o at-least-once permite
+        // (`UnclassifiedFailureIT` reproduz isso de forma deterministica). O que continua exato e o DESFECHO: `rejected{unprocessable_event}`
+        // e contado UMA vez, pois so o `recovered` (a confirmacao do DLT) o conta, verificado acima com `delta(...) == 1.0`.
         fun ingested(outcome: String) = after.sum("balance_ingest_duration_seconds_count", "outcome" to outcome) - before.sum("balance_ingest_duration_seconds_count", "outcome" to outcome)
-        assertEquals(mapOf("processed" to 3.0, "obsolete" to 1.0, "duplicate" to 1.0, "rejected" to 7.0, "error" to 3.0), listOf("processed", "obsolete", "duplicate", "rejected", "error").associateWith(::ingested))
+        assertEquals(
+            mapOf("processed" to 3.0, "obsolete" to 1.0, "duplicate" to 1.0, "rejected" to 7.0),
+            listOf("processed", "obsolete", "duplicate", "rejected").associateWith(::ingested),
+        )
+        assertTrue(ingested("error") >= 3.0, "o defeito interno tem no minimo 3 entregas (podem ser mais se houver rebalance): ${ingested("error")}")
 
         // privacidade dos logs do container real: JSON, sem valores do payload, com a mensagem do Spring Kafka para o retry
         val emitted = output.all.substring(from).lines().filter { it.isNotBlank() }
