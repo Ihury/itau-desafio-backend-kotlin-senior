@@ -149,7 +149,7 @@ NOW=$(date +%s)
 } | produce
 sleep 5
 dlt_total                                                                        # 9 (se o DLT estava vazio)
-# -n limita a leitura ao total do DLT (sem -n o consume nunca termina); -a porque a saida tem bytes binarios
+# -n limita a leitura ao total do DLT (sem -n o consume nunca termina); -a porque a saída tem bytes binários
 docker compose run --rm -T --entrypoint rpk redpanda-seed topic consume $TOPIC.DLT --brokers redpanda:9092 -o start -n "$(dlt_total)" -f '%h{%k=%v;} | %v\n' \
   | grep -ao 'x-rejection-reason=[a-z_]*' | sort | uniq -c
 curl -s -o /dev/null -w '%{http_code}\n' localhost:8080/balances/eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee1    # 200 (a válida)
@@ -160,11 +160,11 @@ Esperado: 9 mensagens no DLT (`malformed_payload`=1, `missing_field`=1, `invalid
 `invalid_timestamp`=2, `unknown_domain_value`=2), **valor original preservado** (`-f '%v'`), nenhum saldo alterado por elas, as duas válidas
 processadas e `balance_events_total{outcome="rejected",reason=...}` batendo com as contagens.
 
-Notas sobre a leitura do DLT: (a) o `rpk topic consume` acompanha o topico e nao termina sozinho, por isso o `-n` (aqui o total do DLT, via `dlt_total`);
-sem ele o comando fica preso, e `make kafka-consume TOPIC=$TOPIC.DLT` e a alternativa com timeout de 5 s (mas imprime so o valor, sem cabecalhos);
-(b) a saida contem bytes binarios (cabecalhos `kafka_dlt-original-partition/offset/timestamp` em big-endian e mensagens-veneno com bytes invalidos em UTF-8,
-que tambem vao ao DLT como `malformed_payload`), e o `grep` trata esse fluxo como binario e nao imprime as linhas: use `grep -a` (ou `grep -ao`).
-Se o DLT tiver mensagens de execucoes anteriores, as contagens por motivo refletem tudo o que ele acumulou.
+Notas sobre a leitura do DLT: (a) o `rpk topic consume` acompanha o tópico e não termina sozinho, por isso o `-n` (aqui o total do DLT, via `dlt_total`);
+sem ele o comando fica preso, e `make kafka-consume TOPIC=$TOPIC.DLT` é a alternativa com timeout de 5 s (mas imprime só o valor, sem cabeçalhos);
+(b) a saída contém bytes binários (cabeçalhos `kafka_dlt-original-partition/offset/timestamp` em big-endian e mensagens-veneno com bytes inválidos em UTF-8,
+que também vão ao DLT como `malformed_payload`), e o `grep` trata esse fluxo como binário e não imprime as linhas: use `grep -a` (ou `grep -ao`).
+Se o DLT tiver mensagens de execuções anteriores, as contagens por motivo refletem tudo o que ele acumulou.
 
 ### 6.1 Conta criada antes de 2000 (`account.created_at` legítimo) — conta `G`
 
@@ -211,10 +211,10 @@ for i in 1 2 3 4 5 6; do curl -s -o /dev/null -w '%{http_code} ' localhost:8080/
 metric 'resilience4j_circuitbreaker_state.*state="closed"'                     # 1.0
 ```
 
-O circuit breaker so abre com **pelo menos 20 chamadas** na janela de 10 s (minimo configurado). Com poucas consultas sequenciais, cada uma recebe 503 por timeout
-(~1,3 s, dentro do SC-008) e o circuito continua `closed`; por isso a rajada concorrente acima (30 a 40 consultas em paralelo) e o que o abre, e so entao a consulta
+O circuit breaker só abre com **pelo menos 20 chamadas** na janela de 10 s (mínimo configurado). Com poucas consultas sequenciais, cada uma recebe 503 por timeout
+(~1,3 s, dentro do SC-008) e o circuito continua `closed`; por isso a rajada concorrente acima (30 a 40 consultas em paralelo) é o que o abre, e só então a consulta
 seguinte falha em ~ms (`resilience4j_circuitbreaker_not_permitted_calls_total` > 0, o fail-fast). Com o circuito aberto, ele passa a `half_open` cerca de 10 s
-apos o `unpause` e volta a `closed` com as primeiras consultas bem-sucedidas.
+após o `unpause` e volta a `closed` com as primeiras consultas bem-sucedidas.
 
 Esperado durante a falha: 503 com `Retry-After: 10` e corpo `servico-indisponivel` (**nunca** saldo antigo nem 404), grupo `dependencies` 503 (e `balance_dependency_up{dependency="dynamodb"}` = 0), readiness 200, liveness 200, o evento
 **permanece no broker** (`TOTAL-LAG` > 0), `balance_consumer_backpressure_total` cresce, **0 mensagens novas no DLT** (`DLT antes` = `depois`). Após `unpause`: o consumer retoma sozinho
@@ -230,12 +230,12 @@ docker compose run --rm --entrypoint aws dynamodb-seed dynamodb scan --table-nam
   --endpoint-url http://dynamodb:8000 --region us-east-1
 ```
 
-Esperado: a contagem de itens cresce **exatamente** em 2000 (nenhum evento perdido) e o lag do grupo volta a 0 (`rpk group describe consulta-saldo`). No reinicio
-gracioso o offset e confirmado **por registro**, entao normalmente **nao** ha reentrega e **nao** aparece `duplicate`; alem disso os contadores de
-`balance_events_total` sao do processo e **zeram no restart** (so refletem o que a nova instancia processou). Nada e confirmado sem persistir.
+Esperado: a contagem de itens cresce **exatamente** em 2000 (nenhum evento perdido) e o lag do grupo volta a 0 (`rpk group describe consulta-saldo`). No reinício
+gracioso o offset é confirmado **por registro**, então normalmente **não** há reentrega e **não** aparece `duplicate`; além disso os contadores de
+`balance_events_total` são do processo e **zeram no restart** (só refletem o que a nova instância processou). Nada é confirmado sem persistir.
 
-Opcional, para ver `duplicate` de fato: pare o app, rebobine o grupo de consumo e suba o app de novo; tudo o que ja estava persistido e reentregue e contado como `duplicate`
-(a contagem de itens nao muda).
+Opcional, para ver `duplicate` de fato: pare o app, rebobine o grupo de consumo e suba o app de novo; tudo o que já estava persistido é reentregue e contado como `duplicate`
+(a contagem de itens não muda).
 
 ```bash
 docker compose stop app
