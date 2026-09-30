@@ -1,9 +1,15 @@
 server:
   port: ${SERVER_PORT:8080}
+  # Encerramento gracioso (FR-034): a API termina as requisicoes em andamento e cada fase de encerramento espera ate 30 s (docker
+  # compose usa `stop_grace_period: 40s`). O consumer para logo apos o registro corrente (`immediate-stop`) e o que nao foi
+  # persistido nao e confirmado (commit so pelo container, sem auto-commit): e reentregue e reconciliado pela idempotencia.
+  shutdown: graceful
 
 spring:
   application:
     name: consulta-saldo
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
   # Sem banner: com logs JSON (uma linha = um objeto) o banner ASCII em varias linhas quebraria o parse do coletor de logs.
   main:
     banner-mode: "off"

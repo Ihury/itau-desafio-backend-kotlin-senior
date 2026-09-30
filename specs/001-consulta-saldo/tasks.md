@@ -397,8 +397,8 @@ Os atalhos abaixo são expandidos nos caminhos deste arquivo; todos os caminhos 
 
 ### Commit C31: `chore(ops): configura encerramento gracioso e verifica a configuracao`
 
-- [ ] T148 [P] [US6] Teste vermelho `src/test/kotlin/br/com/itau/challenge/balance/config/GracefulShutdownConfigTest.kt` (`@SpringBootTest`): `server.shutdown=graceful`, `spring.lifecycle.timeout-per-shutdown-phase=30s`, `spring.kafka.listener.immediate-stop=true`, `ack-mode=BATCH`, `enable.auto.commit=false` (o que não foi persistido não é confirmado e é reentregue).
-- [ ] T149 [US6] `application.yaml`: `server.shutdown: graceful` e `spring.lifecycle.timeout-per-shutdown-phase: 30s`.
+- [X] T148 [P] [US6] Teste vermelho `src/test/kotlin/br/com/itau/challenge/balance/config/GracefulShutdownConfigTest.kt` (`@SpringBootTest`): `server.shutdown=graceful`, `spring.lifecycle.timeout-per-shutdown-phase=30s`, `spring.kafka.listener.immediate-stop=true`, `ack-mode=BATCH`, `enable.auto.commit=false` (o que não foi persistido não é confirmado e é reentregue). *Nota de execucao*: usa a base `ManagedApplicationTest` (nao abre outro contexto). O Boot 4 ja e gracioso por padrao; o teste exige a declaracao EXPLICITA (`server.shutdown`, ligada com `Binder`) para nao depender do padrao, alem de `immediate-stop`, `ack-mode=BATCH`, `enable.auto.commit=false` e do periodo de 30 s caber nos 40 s do `stop_grace_period` do compose (Phase 9).
+- [X] T149 [US6] `application.yaml`: `server.shutdown: graceful` e `spring.lifecycle.timeout-per-shutdown-phase: 30s`. *Nota de execucao*: `server.shutdown: graceful` e `spring.lifecycle.timeout-per-shutdown-phase: 30s` no `application.yaml`.
 
 ### Commit C32: `test(integracao): observabilidade ponta a ponta com saude sob indisponibilidade e reinicio sem perda`
 
