@@ -122,4 +122,62 @@ class DynamoDbBalanceSnapshotReaderTest {
         assertEquals(1.0, registry.get("balance.store.read.corrupted").counter().count())
         assertTrue(registry.find("balance.store.read.corrupted").counter()?.id?.tags.orEmpty().isEmpty())
     }
+
+    private fun readTimer(result: String) = registry.find("balance.store.read.duration").tag("result", result).timer()
+
+    @Test
+    fun `read duration is timed per result and never tagged with account data`() {
+        respondWith(BalanceItemMapper.toItem(snapshot))
+        reader().find(accountId)
+        respondWith(null)
+        reader().find(accountId)
+        respondWith(null)
+        reader().find(accountId)
+
+        assertEquals(1L, readTimer("found")?.count())
+        assertEquals(2L, readTimer("not_found")?.count())
+        assertEquals(0L, readTimer("error")?.count(), "a serie de erro existe em zero antes da primeira falha")
+        val tagKeys = registry.find("balance.store.read.duration").timers().flatMap { timer -> timer.id.tags.map { it.key } }.toSet()
+        assertEquals(setOf("result"), tagKeys)
+    }
+
+    @Test
+    fun `read duration is recorded even when the sdk throws`() {
+        doThrow(SdkClientException.builder().message("x").build()).`when`(client).getItem(any(GetItemRequest::class.java))
+
+        assertFailsWith<BalanceStoreUnavailableException> { reader().find(accountId) }
+
+        assertEquals(1L, readTimer("error")?.count())
+        assertEquals(0L, readTimer("found")?.count())
+    }
+
+    @Test
+    fun `a corrupted item still counts as found because the database answered`() {
+        val corrupted = BalanceItemMapper.toItem(snapshot).toMutableMap()
+        corrupted.remove("balanceAmount")
+        respondWith(corrupted)
+
+        assertFailsWith<IllegalStateException> { reader().find(accountId) }
+
+        assertEquals(1L, readTimer("found")?.count())
+    }
+
+    @Test
+    fun `read duration publishes a histogram with the documented service level objectives`() {
+        respondWith(null)
+        reader().find(accountId)
+
+        val buckets = readTimer("not_found")!!.takeSnapshot().histogramCounts().map { it.bucket(java.util.concurrent.TimeUnit.MILLISECONDS) }
+        assertTrue(buckets.isNotEmpty(), "sem histograma")
+        assertTrue(5.0 in buckets && 2000.0 in buckets, "buckets $buckets")
+    }
+
+    @Test
+    fun `the corrupted item counter is described like the other outcome counters`() {
+        reader()
+
+        val counter = registry.get("balance.store.read.corrupted").counter()
+        assertTrue(!counter.id.description.isNullOrBlank())
+        assertEquals(0.0, counter.count())
+    }
 }

@@ -35,6 +35,8 @@ spring:
       ack-mode: batch
       concurrency: ${KAFKA_LISTENER_CONCURRENCY:4}
       immediate-stop: true
+      # Lag e tempos do consumer como observacoes Micrometer (contracts/observability.md).
+      observation-enabled: true
   # Erros do framework (404 de rota, 405...) tambem em Problem Details (RFC 9457).
   mvc:
     problemdetails:
@@ -43,6 +45,21 @@ spring:
   jackson:
     write:
       write-bigdecimal-as-plain: true
+
+# Actuator em porta PROPRIA (contracts/observability.md): health, info e prometheus nunca respondem na porta da API. Em producao a porta de
+# gerenciamento nao deve ser roteada pelo balanceador publico. Histograma de `http.server.requests` com SLO de 50 ms a 2 s; os timers de
+# negocio (`balance.*.duration`) declaram os proprios objetivos no codigo, junto de cada adapter.
+management:
+  server:
+    port: ${MANAGEMENT_SERVER_PORT:8082}
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  metrics:
+    distribution:
+      slo:
+        http.server.requests: 50ms,100ms,300ms,1s,2s
 
 # Cliente DynamoDB (contracts/configuration.md). `endpoint` em branco = producao (endpoint AWS e cadeia padrao de credenciais).
 dynamodb:

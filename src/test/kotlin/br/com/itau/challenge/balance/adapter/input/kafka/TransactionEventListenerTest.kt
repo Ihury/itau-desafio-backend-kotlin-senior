@@ -11,6 +11,7 @@ import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.Logger
 import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.read.ListAppender
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry
 import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
@@ -47,6 +48,12 @@ class TransactionEventListenerTest {
         }
     }
 
+    private val meters = SimpleMeterRegistry()
+
+    private fun listener(useCase: ProcessTransactionEventUseCase) = TransactionEventListener(parser, useCase, meters)
+
+    private fun ingestTimer(outcome: String) = meters.find("balance.ingest.duration").tag("outcome", outcome).timer()
+
     private lateinit var appender: ListAppender<ILoggingEvent>
     private val rootLogger = LoggerFactory.getLogger(Logger.ROOT_LOGGER_NAME) as Logger
 
@@ -77,7 +84,7 @@ class TransactionEventListenerTest {
     fun `valid bytes are parsed and the use case is invoked once with the event`() {
         val useCase = RecordingUseCase()
 
-        TransactionEventListener(parser, useCase).onMessage(record(validPayload.toByteArray()))
+        listener(useCase).onMessage(record(validPayload.toByteArray()))
 
         assertEquals(1, useCase.events.size)
         assertEquals(parser.parse(validPayload.toByteArray()), useCase.events.single())
@@ -87,7 +94,7 @@ class TransactionEventListenerTest {
     fun `the mdc carries account, transaction and the topic partition offset correlation during the call and is cleared after`() {
         val useCase = RecordingUseCase()
 
-        TransactionEventListener(parser, useCase).onMessage(record(validPayload.toByteArray(), topic = "t", partition = 3, offset = 99))
+        listener(useCase).onMessage(record(validPayload.toByteArray(), topic = "t", partition = 3, offset = 99))
 
         assertEquals(
             mapOf(
@@ -105,7 +112,7 @@ class TransactionEventListenerTest {
         val failure = BalanceStoreUnavailableException(StoreFailureCause.TIMEOUT)
         val useCase = RecordingUseCase { throw failure }
 
-        val thrown = assertFailsWith<BalanceStoreUnavailableException> { TransactionEventListener(parser, useCase).onMessage(record(validPayload.toByteArray())) }
+        val thrown = assertFailsWith<BalanceStoreUnavailableException> { listener(useCase).onMessage(record(validPayload.toByteArray())) }
 
         assertSame(failure, thrown, "a excecao do caso de uso propaga intacta (nao e engolida)")
         assertEquals(mapOf("accountId" to null, "transactionId" to null, "correlationId" to null), allMdc())
@@ -116,7 +123,7 @@ class TransactionEventListenerTest {
         val useCase = RecordingUseCase()
         val bad = validPayload.replace("\"BRL\"", "\"brl\"")
 
-        val thrown = assertFailsWith<InvalidEventException> { TransactionEventListener(parser, useCase).onMessage(record(bad.toByteArray())) }
+        val thrown = assertFailsWith<InvalidEventException> { listener(useCase).onMessage(record(bad.toByteArray())) }
 
         assertEquals(RejectionReason.INVALID_CURRENCY, thrown.reason)
         assertTrue(useCase.events.isEmpty())
@@ -127,7 +134,7 @@ class TransactionEventListenerTest {
     fun `a null value is a malformed payload`() {
         val useCase = RecordingUseCase()
 
-        val thrown = assertFailsWith<InvalidEventException> { TransactionEventListener(parser, useCase).onMessage(record(null)) }
+        val thrown = assertFailsWith<InvalidEventException> { listener(useCase).onMessage(record(null)) }
 
         assertEquals(RejectionReason.MALFORMED_PAYLOAD, thrown.reason)
         assertNull(thrown.detail)
@@ -149,7 +156,7 @@ class TransactionEventListenerTest {
     fun `nothing of the payload is logged`() {
         val secret = "SEGREDO-123"
         val withSecret = validPayload.replace("\"BRL\"", "\"$secret\"")
-        val listener = TransactionEventListener(parser, RecordingUseCase())
+        val listener = listener(RecordingUseCase())
 
         runCatching { listener.onMessage(record(withSecret.toByteArray())) }
         runCatching { listener.onMessage(record("{\"x\":\"$secret\"".toByteArray())) }
@@ -158,5 +165,47 @@ class TransactionEventListenerTest {
         val logged = appender.list.joinToString("\n") { it.formattedMessage + it.throwableProxy?.message.orEmpty() }
         assertTrue(secret !in logged, "payload vazou para o log: $logged")
         assertTrue("183.12" !in logged && "315e3cfe" !in logged, "saldo/titular vazaram para o log")
+    }
+
+    @Test
+    fun `the ingest duration is timed by the outcome of the use case`() {
+        listOf(ApplyResult.Applied, ApplyResult.Obsolete, ApplyResult.Duplicate(conflicting = false), ApplyResult.Duplicate(conflicting = true), ApplyResult.Applied)
+            .forEach { result -> listener(RecordingUseCase { result }).onMessage(record(validPayload.toByteArray())) }
+
+        assertEquals(2L, ingestTimer("processed")?.count())
+        assertEquals(1L, ingestTimer("obsolete")?.count())
+        assertEquals(2L, ingestTimer("duplicate")?.count())
+        assertEquals(0L, ingestTimer("rejected")?.count())
+        assertEquals(0L, ingestTimer("error")?.count())
+    }
+
+    @Test
+    fun `an invalid event is timed as rejected, from the parser or from the use case`() {
+        val bad = validPayload.replace("\"BRL\"", "\"brl\"")
+        assertFailsWith<InvalidEventException> { listener(RecordingUseCase()).onMessage(record(bad.toByteArray())) }
+        assertFailsWith<InvalidEventException> { listener(RecordingUseCase()).onMessage(record(null)) }
+        assertFailsWith<InvalidEventException> { listener(RecordingUseCase { throw InvalidEventException(RejectionReason.INVALID_TIMESTAMP) }).onMessage(record(validPayload.toByteArray())) }
+
+        assertEquals(3L, ingestTimer("rejected")?.count())
+        assertEquals(0L, ingestTimer("error")?.count())
+    }
+
+    @Test
+    fun `any other failure is timed as error and still propagates`() {
+        assertFailsWith<BalanceStoreUnavailableException> { listener(RecordingUseCase { throw BalanceStoreUnavailableException(StoreFailureCause.THROTTLED) }).onMessage(record(validPayload.toByteArray())) }
+        assertFailsWith<IllegalStateException> { listener(RecordingUseCase { error("falha interna") }).onMessage(record(validPayload.toByteArray())) }
+
+        assertEquals(2L, ingestTimer("error")?.count())
+        assertEquals(0L, ingestTimer("processed")?.count())
+    }
+
+    @Test
+    fun `the ingest timer has a histogram with the documented objectives and only the outcome tag`() {
+        listener(RecordingUseCase()).onMessage(record(validPayload.toByteArray()))
+
+        val timer = ingestTimer("processed")!!
+        val buckets = timer.takeSnapshot().histogramCounts().map { it.bucket(java.util.concurrent.TimeUnit.MILLISECONDS) }
+        assertTrue(5.0 in buckets && 2500.0 in buckets, "buckets $buckets")
+        assertEquals(setOf("outcome"), meters.find("balance.ingest.duration").timers().flatMap { t -> t.id.tags.map { it.key } }.toSet())
     }
 }

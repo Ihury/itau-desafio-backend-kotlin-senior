@@ -148,6 +148,13 @@ val jacocoCoverageExclusions =
 
 val coverageMinimum = 0.90
 
+// Testes unitarios: nenhum contexto Spring cacheado e pausado/religado ao trocar de contexto (Spring Framework 7). A religacao
+// inicia os `Lifecycle` beans, inclusive os containers Kafka com auto-startup desligado, e derrubaria de forma intermitente as
+// assercoes "nenhum listener em execucao" nos testes que rodam sem broker. Nos ITs o comportamento padrao continua valendo.
+tasks.test {
+	systemProperty("spring.test.context.cache.pause", "never")
+}
+
 tasks.jacocoTestReport {
 	dependsOn(tasks.test)
 

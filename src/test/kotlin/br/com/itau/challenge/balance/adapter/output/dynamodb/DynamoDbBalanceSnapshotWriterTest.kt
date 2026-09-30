@@ -8,6 +8,7 @@ import br.com.itau.challenge.balance.domain.model.BalanceSnapshot
 import br.com.itau.challenge.balance.domain.model.StoreFailureCause
 import br.com.itau.challenge.balance.domain.model.TransactionEvent
 import br.com.itau.challenge.balance.domain.model.TransactionEventFixtures.transactionEvent
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry
 import org.junit.jupiter.api.Test
 import org.mockito.ArgumentCaptor
 import org.mockito.ArgumentMatchers.any
@@ -41,7 +42,8 @@ import kotlin.test.assertTrue
 
 class DynamoDbBalanceSnapshotWriterTest {
     private val client = mock(DynamoDbClient::class.java)
-    private val writer = DynamoDbBalanceSnapshotWriter(client, "AccountBalances")
+    private val registry = SimpleMeterRegistry()
+    private val writer = DynamoDbBalanceSnapshotWriter(client, "AccountBalances", registry)
     private val snapshot = BalanceSnapshot.from(transactionEvent())
 
     private fun succeed() {
@@ -336,5 +338,50 @@ class DynamoDbBalanceSnapshotWriterTest {
 
         assertTrue("183.12" !in thrown.message.orEmpty() && "315e3cfe" !in thrown.message.orEmpty())
         assertNull(thrown.cause?.cause)
+    }
+
+    private fun writeTimer(result: String) = registry.find("balance.store.write.duration").tag("result", result).timer()
+
+    @Test
+    fun `write duration is timed as applied when the condition holds`() {
+        succeed()
+
+        writer.applyIfNewer(snapshot)
+
+        assertEquals(1L, writeTimer("applied")?.count())
+        assertEquals(0L, writeTimer("condition_failed")?.count())
+        assertEquals(0L, writeTimer("error")?.count())
+    }
+
+    @Test
+    fun `write duration is timed as condition failed for duplicates and obsolete events, which are not errors`() {
+        failConditionWith(itemOf(transactionEvent()))
+        writer.applyIfNewer(snapshot)
+        failConditionWith(itemOf(transactionEvent(timestampMicros = 1751749453433999L)))
+        writer.applyIfNewer(snapshot)
+
+        assertEquals(2L, writeTimer("condition_failed")?.count())
+        assertEquals(0L, writeTimer("error")?.count())
+    }
+
+    @Test
+    fun `write duration is recorded as error when the sdk throws and is never tagged with account data`() {
+        failWith(ApiCallTimeoutException.builder().message("x").build())
+
+        assertFailsWith<BalanceStoreUnavailableException> { writer.applyIfNewer(snapshot) }
+
+        assertEquals(1L, writeTimer("error")?.count())
+        val tagKeys = registry.find("balance.store.write.duration").timers().flatMap { timer -> timer.id.tags.map { it.key } }.toSet()
+        assertEquals(setOf("result"), tagKeys)
+    }
+
+    @Test
+    fun `write duration publishes a histogram with the documented service level objectives`() {
+        succeed()
+        writer.applyIfNewer(snapshot)
+
+        val buckets = writeTimer("applied")!!.takeSnapshot().histogramCounts().map { it.bucket(java.util.concurrent.TimeUnit.MILLISECONDS) }
+        assertTrue(buckets.isNotEmpty(), "sem histograma")
+        assertTrue(5.0 in buckets && 2000.0 in buckets, "buckets $buckets")
     }
 }

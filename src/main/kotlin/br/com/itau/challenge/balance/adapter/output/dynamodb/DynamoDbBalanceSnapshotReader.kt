@@ -3,10 +3,13 @@ package br.com.itau.challenge.balance.adapter.output.dynamodb
 import br.com.itau.challenge.balance.domain.model.AccountId
 import br.com.itau.challenge.balance.domain.model.BalanceSnapshot
 import br.com.itau.challenge.balance.port.output.BalanceSnapshotReader
+import io.micrometer.core.instrument.Counter
 import io.micrometer.core.instrument.MeterRegistry
+import io.micrometer.core.instrument.Timer
 import org.slf4j.LoggerFactory
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient
 import software.amazon.awssdk.services.dynamodb.model.GetItemRequest
+import java.util.concurrent.TimeUnit
 
 /**
  * Leitura do snapshot por `GetItem` na chave primaria (AP1), fortemente consistente por padrao (FR-027).
@@ -15,6 +18,9 @@ import software.amazon.awssdk.services.dynamodb.model.GetItemRequest
  * - QUALQUER falha do SDK -> `BalanceStoreUnavailableException` (jamais `null`: nunca um falso "nao encontrada").
  * - Item corrompido/legado (fora do layout ou dos limites do dominio) -> `IllegalStateException` (falha interna), com
  *   log e metrica `balance.store.read.corrupted`; nunca vira `InvalidEventException`, 404 ou dado errado.
+ *
+ * A latencia do `GetItem` vai para o timer `balance.store.read.duration{result=found|not_found|error}` (com histograma), inclusive
+ * quando o SDK lanca; item corrompido conta como `found` (o banco respondeu). Nenhuma tag carrega dado da conta.
  */
 class DynamoDbBalanceSnapshotReader(
     private val client: DynamoDbClient,
@@ -22,7 +28,12 @@ class DynamoDbBalanceSnapshotReader(
     private val consistentRead: Boolean,
     meterRegistry: MeterRegistry,
 ) : BalanceSnapshotReader {
-    private val corrupted = meterRegistry.counter("balance.store.read.corrupted")
+    private val corrupted =
+        Counter
+            .builder("balance.store.read.corrupted")
+            .description("Itens do snapshot ilegiveis ou fora dos limites do dominio (falha interna; alertar)")
+            .register(meterRegistry)
+    private val durations: Map<String, Timer> = RESULTS.associateWith { result -> readTimer(meterRegistry, result) }
 
     override fun find(accountId: AccountId): BalanceSnapshot? {
         val request =
@@ -32,12 +43,15 @@ class DynamoDbBalanceSnapshotReader(
                 .key(BalanceItemMapper.keyOf(accountId))
                 .consistentRead(consistentRead)
                 .build()
+        val started = System.nanoTime()
         val response =
             try {
                 client.getItem(request)
             } catch (failure: RuntimeException) {
+                record(ERROR, started)
                 throw DynamoDbExceptionTranslator.forRead(failure) ?: failure
             }
+        record(if (response.hasItem()) FOUND else NOT_FOUND, started)
         if (!response.hasItem()) return null
         return try {
             BalanceItemMapper.fromItem(response.item())
@@ -48,7 +62,28 @@ class DynamoDbBalanceSnapshotReader(
         }
     }
 
+    private fun record(
+        result: String,
+        startedNanos: Long,
+    ) = durations.getValue(result).record(System.nanoTime() - startedNanos, TimeUnit.NANOSECONDS)
+
     private companion object {
         private val log = LoggerFactory.getLogger(DynamoDbBalanceSnapshotReader::class.java)
+        const val FOUND = "found"
+        const val NOT_FOUND = "not_found"
+        const val ERROR = "error"
+        val RESULTS = listOf(FOUND, NOT_FOUND, ERROR)
+
+        /** Timer com histograma (SLO de 5 ms a 2 s); as tres series nascem em zero para as consultas enxergarem a serie. */
+        fun readTimer(
+            registry: MeterRegistry,
+            result: String,
+        ): Timer =
+            Timer
+                .builder("balance.store.read.duration")
+                .description("Latencia do GetItem do snapshot")
+                .tag("result", result)
+                .serviceLevelObjectives(*StoreLatencyObjectives.DURATIONS)
+                .register(registry)
     }
 }

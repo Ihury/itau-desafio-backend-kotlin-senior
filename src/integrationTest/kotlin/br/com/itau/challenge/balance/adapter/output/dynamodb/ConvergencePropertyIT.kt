@@ -30,7 +30,7 @@ class ConvergencePropertyIT {
 
     private val writeClient: DynamoDbClient = DynamoDbTestSupport.writeClient()
     private val readerClient: DynamoDbClient = DynamoDbTestSupport.rawClient()
-    private val writer = DynamoDbBalanceSnapshotWriter(writeClient, DynamoDbTestSupport.tableName)
+    private val writer = DynamoDbBalanceSnapshotWriter(writeClient, DynamoDbTestSupport.tableName, SimpleMeterRegistry())
     private val reader = DynamoDbBalanceSnapshotReader(readerClient, DynamoDbTestSupport.tableName, true, SimpleMeterRegistry())
     private val touched = Collections.synchronizedSet(mutableSetOf<String>())
 

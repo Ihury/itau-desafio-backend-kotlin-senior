@@ -5,6 +5,8 @@ import br.com.itau.challenge.balance.domain.model.ApplyResult
 import br.com.itau.challenge.balance.domain.model.BalanceSnapshot
 import br.com.itau.challenge.balance.domain.model.StoreFailureCause
 import br.com.itau.challenge.balance.port.output.BalanceSnapshotWriter
+import io.micrometer.core.instrument.MeterRegistry
+import io.micrometer.core.instrument.Timer
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient
 import software.amazon.awssdk.services.dynamodb.model.AttributeValue
 import software.amazon.awssdk.services.dynamodb.model.ConditionalCheckFailedException
@@ -12,6 +14,7 @@ import software.amazon.awssdk.services.dynamodb.model.GetItemRequest
 import software.amazon.awssdk.services.dynamodb.model.ReturnValuesOnConditionCheckFailure
 import software.amazon.awssdk.services.dynamodb.model.UpdateItemRequest
 import java.math.BigDecimal
+import java.util.concurrent.TimeUnit
 
 /**
  * Escrita do snapshot por UMA `UpdateItem` condicional (AP2, data-model.md 4.4): o proprio banco arbitra, de forma atomica
@@ -29,13 +32,18 @@ import java.math.BigDecimal
  *   proxima tentativa cria a conta).
  * - Demais falhas do SDK sao traduzidas por [DynamoDbExceptionTranslator.forWrite] e nunca engolidas; excecoes que nao
  *   sao do SDK propagam como estao.
+ * - A latencia da `UpdateItem` vai para `balance.store.write.duration{result=applied|condition_failed|error}` (com histograma),
+ *   inclusive quando o SDK lanca.
  *
  * O `lastTxId` e comparado como string pelo banco (bytes UTF-8): o [BalanceItemMapper] grava o UUID canonico em minusculas.
  */
 class DynamoDbBalanceSnapshotWriter(
     private val client: DynamoDbClient,
     private val tableName: String,
+    meterRegistry: MeterRegistry,
 ) : BalanceSnapshotWriter {
+    private val durations: Map<String, Timer> = RESULTS.associateWith { result -> writeTimer(meterRegistry, result) }
+
     override fun applyIfNewer(snapshot: BalanceSnapshot): ApplyResult {
         val item = BalanceItemMapper.toItem(snapshot)
         val request =
@@ -58,15 +66,25 @@ class DynamoDbBalanceSnapshotWriter(
                     ),
                 ).returnValuesOnConditionCheckFailure(ReturnValuesOnConditionCheckFailure.ALL_OLD)
                 .build()
-        return try {
+        val started = System.nanoTime()
+        try {
             client.updateItem(request)
-            ApplyResult.Applied
         } catch (failure: ConditionalCheckFailedException) {
-            classify(snapshot, failure)
+            // Nao e erro: o vigente tem precedencia maior ou igual. O timer cobre so a chamada ao banco, nao a classificacao.
+            record(CONDITION_FAILED, started)
+            return classify(snapshot, failure)
         } catch (failure: RuntimeException) {
+            record(ERROR, started)
             throw DynamoDbExceptionTranslator.forWrite(failure) ?: failure
         }
+        record(APPLIED, started)
+        return ApplyResult.Applied
     }
+
+    private fun record(
+        result: String,
+        startedNanos: Long,
+    ) = durations.getValue(result).record(System.nanoTime() - startedNanos, TimeUnit.NANOSECONDS)
 
     private fun classify(
         candidate: BalanceSnapshot,
@@ -137,6 +155,23 @@ class DynamoDbBalanceSnapshotWriter(
     private fun unreadable(attribute: String): Nothing = throw IllegalStateException("unreadable current balance item: invalid attribute '$attribute'")
 
     private companion object {
+        const val APPLIED = "applied"
+        const val CONDITION_FAILED = "condition_failed"
+        const val ERROR = "error"
+        val RESULTS = listOf(APPLIED, CONDITION_FAILED, ERROR)
+
+        /** Timer com histograma (SLO de 5 ms a 2 s); as tres series nascem em zero para as consultas enxergarem a serie. */
+        fun writeTimer(
+            registry: MeterRegistry,
+            result: String,
+        ): Timer =
+            Timer
+                .builder("balance.store.write.duration")
+                .description("Latencia da UpdateItem condicional do snapshot")
+                .tag("result", result)
+                .serviceLevelObjectives(*StoreLatencyObjectives.DURATIONS)
+                .register(registry)
+
         const val UPDATE_EXPRESSION =
             "SET schemaVersion = :v, ownerId = :o, accountStatus = :st, balanceAmount = :amt, balanceCurrency = :cur, " +
                 "accountCreatedAtMicros = :cr, lastTxTsMicros = :ts, lastTxId = :tx"

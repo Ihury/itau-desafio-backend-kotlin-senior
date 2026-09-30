@@ -9,6 +9,7 @@ import br.com.itau.challenge.balance.support.EventPayloads
 import br.com.itau.challenge.balance.support.IntegrationInfra
 import br.com.itau.challenge.balance.support.KafkaITBase
 import br.com.itau.challenge.balance.support.TopicSet
+import io.micrometer.core.instrument.MeterRegistry
 import org.awaitility.kotlin.await
 import org.awaitility.kotlin.until
 import org.junit.jupiter.api.Test
@@ -74,6 +75,7 @@ class TransientFailureIngestionIT : KafkaITBase() {
             @Qualifier("dynamoDbWriteClient") real: DynamoDbClient,
             properties: DynamoDbClientProperties,
             script: ScriptedFailures,
+            meterRegistry: MeterRegistry,
         ): BalanceSnapshotWriter {
             val failing =
                 Proxy.newProxyInstance(DynamoDbClient::class.java.classLoader, arrayOf(DynamoDbClient::class.java)) { _, method, args ->
@@ -91,7 +93,7 @@ class TransientFailureIngestionIT : KafkaITBase() {
                         throw failure.targetException
                     }
                 } as DynamoDbClient
-            val writer = DynamoDbBalanceSnapshotWriter(failing, properties.tableName)
+            val writer = DynamoDbBalanceSnapshotWriter(failing, properties.tableName, meterRegistry)
             return object : BalanceSnapshotWriter {
                 override fun applyIfNewer(snapshot: BalanceSnapshot): ApplyResult = writer.applyIfNewer(snapshot)
             }

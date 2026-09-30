@@ -29,7 +29,7 @@ class DynamoDbBalanceSnapshotWriterContractIT : BalanceSnapshotWriterContract() 
     private val raw: DynamoDbClient = DynamoDbTestSupport.rawClient()
     private val reader = DynamoDbBalanceSnapshotReader(raw, DynamoDbTestSupport.tableName, true, SimpleMeterRegistry())
 
-    override val writer: BalanceSnapshotWriter = DynamoDbBalanceSnapshotWriter(writeClient, DynamoDbTestSupport.tableName)
+    override val writer: BalanceSnapshotWriter = DynamoDbBalanceSnapshotWriter(writeClient, DynamoDbTestSupport.tableName, SimpleMeterRegistry())
 
     override fun currentOf(accountId: AccountId): BalanceSnapshot? = reader.find(accountId)
 

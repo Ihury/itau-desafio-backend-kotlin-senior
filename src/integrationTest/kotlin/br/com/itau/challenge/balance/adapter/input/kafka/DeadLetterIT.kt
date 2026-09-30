@@ -3,14 +3,16 @@ package br.com.itau.challenge.balance.adapter.input.kafka
 import br.com.itau.challenge.balance.support.EventPayloads
 import br.com.itau.challenge.balance.support.KafkaITBase
 import br.com.itau.challenge.balance.support.TopicSet
-import org.apache.kafka.clients.consumer.Consumer
+import io.micrometer.core.instrument.Meter
+import io.micrometer.core.instrument.distribution.DistributionStatisticConfig
+import io.micrometer.core.instrument.distribution.HistogramSnapshot
+import io.micrometer.core.instrument.config.MeterFilter
 import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.awaitility.kotlin.await
 import org.awaitility.kotlin.untilAsserted
 import org.junit.jupiter.api.Test
 import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.context.annotation.Bean
-import org.springframework.kafka.listener.RecordInterceptor
 import org.springframework.test.context.DynamicPropertyRegistry
 import org.springframework.test.context.DynamicPropertySource
 import java.math.BigDecimal
@@ -18,7 +20,6 @@ import java.time.Duration
 import java.time.Instant
 import java.util.Base64
 import java.util.UUID
-import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -26,7 +27,7 @@ import kotlin.test.assertTrue
 
 /**
  * Isolamento de mensagens invalidas no DLT pelo caminho real (Kafka -> listener -> error handler -> DLT), `quickstart.md` 6 e
- * 6.1. Contexto e topicos PROPRIOS (o `RecordInterceptor` de medicao e uma `@TestConfiguration`, que cria outro contexto:
+ * 6.1. Contexto e topicos PROPRIOS (o `MeterFilter` de histograma fino e uma `@TestConfiguration`, que cria outro contexto:
  * compartilhar o grupo com os demais ITs dividiria as particoes).
  *
  * As mensagens sem chave se espalham pelas particoes, entao "tudo processado" e provado pelo lag do grupo (o commit e em lote,
@@ -36,41 +37,30 @@ class DeadLetterIT : KafkaITBase() {
     override val topics: TopicSet
         get() = topicSet
 
-    /** Mede a duracao de cada registro processado com sucesso no listener (parse + validacao + escrita). */
-    class LatencyRecorder : RecordInterceptor<Any, Any> {
-        private val started = ThreadLocal<Long>()
-        private val successes = CopyOnWriteArrayList<Long>()
-
-        override fun intercept(
-            record: ConsumerRecord<Any, Any>,
-            consumer: Consumer<Any, Any>,
-        ): ConsumerRecord<Any, Any> {
-            started.set(System.nanoTime())
-            return record
-        }
-
-        override fun success(
-            record: ConsumerRecord<Any, Any>,
-            consumer: Consumer<Any, Any>,
-        ) {
-            started.get()?.let { successes += System.nanoTime() - it }
-        }
-
-        fun reset() = successes.clear()
-
-        fun count(): Int = successes.size
-
-        fun durations(): List<Long> = successes.toList()
-    }
-
+    /**
+     * SC-006 le a metrica REAL `balance.ingest.duration{outcome=processed}` (o mesmo timer de producao). Como o SLO de producao
+     * (5 ms .. 2,5 s) e grosseiro demais para comparar p99 com 10% de folga, so neste contexto de teste um `MeterFilter` troca
+     * os buckets do timer por uma grade geometrica fina (razao 1,04, de 100 us a 5 s); o p99 sai dos buckets, como o
+     * `histogram_quantile` do Prometheus, e nao de um interceptor de teste.
+     */
     @TestConfiguration
     class Config {
         @Bean
-        fun latencyRecorder(): LatencyRecorder = LatencyRecorder()
+        fun fineIngestHistogram(): MeterFilter =
+            object : MeterFilter {
+                override fun configure(
+                    id: Meter.Id,
+                    config: DistributionStatisticConfig,
+                ): DistributionStatisticConfig =
+                    if (id.name == "balance.ingest.duration") {
+                        DistributionStatisticConfig.builder().serviceLevelObjectives(*FINE_BUCKETS_NANOS).build().merge(config)
+                    } else {
+                        config
+                    }
+            }
     }
 
-    @org.springframework.beans.factory.annotation.Autowired
-    private lateinit var recorder: LatencyRecorder
+    private fun ingestTimer() = meterRegistry.get("balance.ingest.duration").tag("outcome", "processed").timer()
 
     // ----- payloads --------------------------------------------------------------------------------------------------
 
@@ -268,9 +258,20 @@ class DeadLetterIT : KafkaITBase() {
 
     // ----- SC-006 -------------------------------------------------------------------------------------------------------
 
-    private fun p99(nanos: List<Long>): Long {
-        val sorted = nanos.sorted()
-        return sorted[maxOf(0, Math.ceil(0.99 * sorted.size).toInt() - 1)]
+    /**
+     * p99 (em ns) das mensagens medidas entre [before] e [after]: o menor limite de bucket cujo acumulado da diferenca cobre 99% das
+     * amostras. Os buckets do Prometheus sao cumulativos; a sanidade abaixo falha alto se deixarem de ser.
+     */
+    private fun p99Nanos(
+        before: HistogramSnapshot,
+        after: HistogramSnapshot,
+    ): Long {
+        val earlier = before.histogramCounts().associate { it.bucket() to it.count() }
+        val deltas = after.histogramCounts().map { it.bucket() to it.count() - (earlier[it.bucket()] ?: 0.0) }
+        val samples = (after.count() - before.count()).toDouble()
+        assertTrue(deltas.zipWithNext().all { (a, b) -> a.second <= b.second }, "buckets nao cumulativos")
+        assertTrue(deltas.last().second <= samples, "bucket acima do total de amostras")
+        return deltas.firstOrNull { (_, count) -> count >= 0.99 * samples }?.first?.toLong() ?: Long.MAX_VALUE
     }
 
     private fun median(values: List<Long>): Long = values.sorted()[values.size / 2]
@@ -290,19 +291,21 @@ class DeadLetterIT : KafkaITBase() {
 
     /** Uma rodada de 200 validas (com ou sem defeitos intercalados); devolve o p99 do tempo de ingestao das validas, em ns. */
     private fun round(withDefects: Boolean): Long {
-        recorder.reset()
+        val before = ingestTimer().takeSnapshot()
         publishValidBatch(VALID_PER_ROUND, if (withDefects) nineDefects() else emptyList())
-        await.atMost(Duration.ofSeconds(60)).untilAsserted { assertEquals(VALID_PER_ROUND, recorder.count(), "validas processadas") }
+        await.atMost(Duration.ofSeconds(60)).untilAsserted {
+            assertEquals(VALID_PER_ROUND.toLong(), ingestTimer().count() - before.count(), "validas processadas")
+        }
         topics.awaitLagZero(Duration.ofSeconds(60))
-        return p99(recorder.durations())
+        return p99Nanos(before, ingestTimer().takeSnapshot())
     }
 
     @Test
     fun `the p99 ingestion time of valid messages with invalid ones interleaved is at most 110 percent of the baseline (SC-006)`() {
         // aquecimento (JIT, pools de conexao) fora da medicao
-        recorder.reset()
+        val warmUpStart = ingestTimer().count()
         publishValidBatch(WARM_UP)
-        await.atMost(Duration.ofSeconds(60)).untilAsserted { assertEquals(WARM_UP, recorder.count()) }
+        await.atMost(Duration.ofSeconds(60)).untilAsserted { assertEquals(WARM_UP.toLong(), ingestTimer().count() - warmUpStart) }
         topics.awaitLagZero(Duration.ofSeconds(60))
 
         val baseline = mutableListOf<Long>()
@@ -320,7 +323,7 @@ class DeadLetterIT : KafkaITBase() {
 
         val baselineP99 = median(baseline)
         val defectsP99 = median(withDefects)
-        println("SC-006 p99 baseline=${baseline.map { it / 1000 }}us mediana=${baselineP99 / 1000}us; com invalidas=${withDefects.map { it / 1000 }}us mediana=${defectsP99 / 1000}us")
+        println("SC-006 p99 (balance.ingest.duration) baseline=${baseline.map { it / 1000 }}us mediana=${baselineP99 / 1000}us; com invalidas=${withDefects.map { it / 1000 }}us mediana=${defectsP99 / 1000}us")
         assertTrue(
             defectsP99 <= baselineP99 * MAX_DEGRADATION,
             "p99 com invalidas (${defectsP99 / 1000} us) > ${MAX_DEGRADATION}x o baseline (${baselineP99 / 1000} us)",
@@ -334,6 +337,10 @@ class DeadLetterIT : KafkaITBase() {
         private const val MAX_DEGRADATION = 1.10
 
         private val topicSet = TopicSet("it-dlt")
+
+        /** Grade geometrica de 100 us a 5 s com razao 1,04 (perto de 280 buckets), em ns (a unidade dos SLOs de `Timer`). */
+        private val FINE_BUCKETS_NANOS: DoubleArray =
+            generateSequence(100_000.0) { it * 1.04 }.takeWhile { it <= 5_000_000_000.0 }.toList().toDoubleArray()
 
         @JvmStatic
         @DynamicPropertySource

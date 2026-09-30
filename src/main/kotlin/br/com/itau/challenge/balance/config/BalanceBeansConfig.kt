@@ -51,7 +51,8 @@ class BalanceBeansConfig {
     fun balanceSnapshotWriter(
         @Qualifier("dynamoDbWriteClient") client: DynamoDbClient,
         properties: DynamoDbClientProperties,
-    ): BalanceSnapshotWriter = DynamoDbBalanceSnapshotWriter(client, properties.tableName)
+        meterRegistry: MeterRegistry,
+    ): BalanceSnapshotWriter = DynamoDbBalanceSnapshotWriter(client, properties.tableName, meterRegistry)
 
     /**
      * Parser estrito do evento, com os limites inferiores de timestamp da configuracao (`balance.min-event-timestamp` e
