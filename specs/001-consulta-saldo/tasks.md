@@ -473,6 +473,54 @@ Os atalhos abaixo são expandidos nos caminhos deste arquivo; todos os caminhos 
 
 ---
 
+## Phase 11: Remediação do code review pré-entrega
+
+**Purpose**: corrigir os achados do code review feito antes da entrega. Etapa 1 = código, testes e build (T180-T188); etapa 2 = documentação (T189-T197). Restrições: NÃO alterar `Makefile`, `docker-compose.yml`, `infra/**` nem a parte do DynamoDB do starter (`DynamoDbClientsConfig` quanto a credencial/endpoint, apenas documentada); NÃO alterar o formato do `updated_at`; o job `unit-test` do CI continua rodando os testes unitários.
+
+### Commit C40: `test: endurece testes de caos, concorrencia e isolamento de metricas`
+
+- [ ] T180 `src/integrationTest/.../input/kafka/StoreOutageIT.kt`: quando a variável de ambiente `CI` estiver definida, a indisponibilidade do Docker/compose FALHA o teste (asserção) em vez de `assumeTrue` pular; localmente continua pulando
+- [ ] T181 `StoreOutageIT.kt`: `await ... .ignoreExceptions()` (exceções do SDK logo após o `unpause`, inclusive o `get` no loop do circuito)
+- [ ] T182 `src/integrationTest/.../output/dynamodb/ConcurrentWritesIT.kt`: afirmar número mínimo de leituras concorrentes e corrigir o `chunked` para gerar exatamente o número de threads declarado
+- [ ] T183 [P] `KafkaIngestionITBase.kt` (e testes que contam deltas exatos de métricas, ex. `ConvergenceIngestionIT.kt`): barreira `awaitLagZero()` antes de ler o baseline, para que eventos em voo de um teste não contaminem as contagens do seguinte
+- [ ] T184 [P] `TransactionEventListenerTest.kt` e `DynamoDbHealthIndicatorTest.kt`: restaurar o nível de log original em `@AfterEach`
+
+### Commit C41: `fix(dynamodb): leitura do snapshot nao reaplica limites de plausibilidade de timestamp`
+
+- [ ] T185 Teste vermelho em `BalanceItemMapperTest.kt`/`DynamoDbBalanceSnapshotReaderIT.kt` (item com `lastTxTsMicros` de 1995 e `accountCreatedAtMicros` de 1850 é lido normalmente, não vira 500); `adapter/output/dynamodb/BalanceItemMapper.kt` deixa de reconstruir `EventInstant` com os mínimos padrão do código e passa a usar uma fábrica de domínio para valores persistidos (sem checagem de faixa; domínio puro, regra Konsist preservada)
+
+### Commit C42: `feat(dynamodb): diferencia falha de configuracao no diagnostico de indisponibilidade`
+
+- [ ] T186 `DynamoDbExceptionTranslator.kt` + `StoreFailureCause.MISCONFIGURED` (`ResourceNotFoundException`, `AccessDeniedException`, `UnrecognizedClientException`, `ExpiredToken*`, `InvalidSignatureException`, `MissingAuthenticationToken`, falha de credencial do SDK) mantendo o tratamento transitório (retry infinito, nunca DLT); log de cada falha transitória (consumer e WARN de leitura) com classe da exceção do SDK, `errorCode` e `statusCode`, sem mensagem livre e sem payload, `MISCONFIGURED` em ERROR; métrica `balance.consumer.backpressure{cause=misconfigured}`; linha da métrica em `specs/001-consulta-saldo/contracts/observability.md`; testes do tradutor e do log
+
+### Commit C43: `build: renomeia o projeto para consulta-saldo`
+
+- [ ] T187 `settings.gradle.kts` (`rootProject.name = "consulta-saldo"`) e `build.gradle.kts` (`description`); conferir `Dockerfile` (cópia do jar), CI e ITs com o novo nome de jar
+
+### Commit C44: `fix(docker): passa flags da jvm no entrypoint para manter os logs em json`
+
+- [ ] T188 `Dockerfile`: remover `JAVA_TOOL_OPTIONS` e passar `-XX:MaxRAMPercentage=75 -XX:+ExitOnOutOfMemoryError` no `ENTRYPOINT` exec form (a linha `Picked up JAVA_TOOL_OPTIONS` não é JSON); ajustar `.github/workflows/docker.yml` se verificar a env; conferir com `docker build --target runtime` e `docker run` que a primeira linha de log é JSON
+
+### Commit C45: `build: evita reexecutar testes unitarios nas tasks de integracao`
+
+- [ ] T189 `build.gradle.kts`: aplicar `finalizedBy(jacocoTestReport)` só à task `test` (o gate `check` com `jacocoTestCoverageVerification` continua igual); confirmar com `./gradlew integrationTest --dry-run` que `:test` não aparece e com `./gradlew check --dry-run` que continua
+
+### Commit C46: `fix(web): reduz ruido de log com o circuit breaker aberto`
+
+- [ ] T190 `ProblemDetailsAdvice.kt`, `CircuitBreakingBalanceSnapshotReader.kt`, `config/ResilienceConfig.kt`: rejeição por circuito aberto em DEBUG sem stack; WARN só nas transições de estado do breaker (`onStateTransition`) e nas falhas reais de leitura; `writableStackTraceEnabled(false)` no `CircuitBreakerConfig`; teste de que N rejeições não geram N linhas WARN e de que a transição gera exatamente uma
+- [ ] T191 `BackpressureConfig.kt` e `DeadLetterConfig.kt` (comentário/KDoc): o `ContainerPausingBackOffHandler` recebe o container PAI (`thisOrParentContainer`) e a pausa vale para TODAS as threads da instância, não só o filho que falhou (verificado no bytecode do Spring Kafka 4.1)
+
+### Etapa 2 (documentação; não executar na etapa 1)
+
+- [ ] T192 [P] `README.md`: nota sobre o `kafka-topic-create` (alvo do starter, intocado) e como ele se relaciona com o `redpanda-seed`
+- [ ] T193 [P] `README.md`: seção "Interpretações do enunciado" (decisões tomadas onde o enunciado é ambíguo)
+- [ ] T194 [P] `README.md`: seção "Rodando na AWS" (credencial, endpoint, região, IAM mínimo, autenticação do Kafka, encerramento gracioso); registrar que `DynamoDbClientsConfig` mantém credencial/endpoint do starter por decisão do usuário
+- [ ] T195 [P] `README.md`: premissas de carga (volumes e taxas assumidos) e JDK 21 como pré-requisito local
+- [ ] T196 [P] Textos desatualizados em README, `docs/adr/*` e `docs/metodologia-ia.md` (nome do projeto, `JAVA_TOOL_OPTIONS`, comentário da pausa por container, causa `misconfigured`) e ADR-0008: escopo da pausa (container pai, todas as threads da instância)
+- [ ] T197 [P] README/ADRs: riscos conhecidos documentados como evolução (ex.: formato do `updated_at`, credencial estática do starter, cardinalidade e limites de carga)
+
+---
+
 ## Dependencies & Execution Order
 
 ### Ordem das fases e das unidades de commit
