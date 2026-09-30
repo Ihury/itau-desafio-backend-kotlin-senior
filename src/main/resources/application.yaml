@@ -56,6 +56,22 @@ management:
     web:
       exposure:
         include: health,info,prometheus
+  # Saude (FR-033, Constitution VII): `liveness` e `readiness` refletem SO o estado do proprio processo e nunca saem de rotacao por
+  # causa do DynamoDB; a dependencia fica no grupo `dependencies` (+ gauge `balance.dependency.up`). Use as sondas
+  # /actuator/health/liveness e /actuator/health/readiness em balanceador/orquestrador; NAO use /actuator/health (raiz), que
+  # agrega as dependencias e fica 503 com o DynamoDB fora.
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: true
+      group:
+        liveness:
+          include: livenessState
+        readiness:
+          include: readinessState
+        dependencies:
+          include: dynamoDb
   metrics:
     distribution:
       slo:

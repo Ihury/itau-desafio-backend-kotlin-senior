@@ -5,6 +5,7 @@ import br.com.itau.challenge.balance.adapter.output.dynamodb.CircuitBreakingBala
 import br.com.itau.challenge.balance.adapter.output.dynamodb.DynamoDbBalanceSnapshotReader
 import br.com.itau.challenge.balance.adapter.output.dynamodb.DynamoDbBalanceSnapshotWriter
 import br.com.itau.challenge.balance.adapter.output.dynamodb.DynamoDbClientProperties
+import br.com.itau.challenge.balance.adapter.output.dynamodb.DynamoDbHealthIndicator
 import br.com.itau.challenge.balance.application.FutureTolerance
 import br.com.itau.challenge.balance.port.output.BalanceSnapshotReader
 import br.com.itau.challenge.balance.port.output.BalanceSnapshotWriter
@@ -53,6 +54,18 @@ class BalanceBeansConfig {
         properties: DynamoDbClientProperties,
         meterRegistry: MeterRegistry,
     ): BalanceSnapshotWriter = DynamoDbBalanceSnapshotWriter(client, properties.tableName, meterRegistry)
+
+    /**
+     * Saude do DynamoDB para o grupo `dependencies` (nome do contribuidor: `dynamoDb`) e o gauge `balance.dependency.up`. Usa o cliente
+     * de LEITURA (timeouts curtos, pool proprio); nao pertence a `liveness` nem a `readiness` (application.yaml).
+     */
+    @Bean
+    fun dynamoDbHealthIndicator(
+        @Qualifier("dynamoDbReadClient") client: DynamoDbClient,
+        properties: DynamoDbClientProperties,
+        meterRegistry: MeterRegistry,
+        clock: Clock,
+    ): DynamoDbHealthIndicator = DynamoDbHealthIndicator(client, properties.tableName, meterRegistry, clock)
 
     /**
      * Parser estrito do evento, com os limites inferiores de timestamp da configuracao (`balance.min-event-timestamp` e
