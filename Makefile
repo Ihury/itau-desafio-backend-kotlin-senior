@@ -7,6 +7,11 @@ COMPOSE_PROJECT := $(notdir $(CURDIR))
 PARTITIONS ?= 1
 COUNT ?= 100
 SCENARIO_TOPIC := $(or $(TOPIC),transacoes-financeiras-processadas)
+K6_IMAGE := grafana/k6:2.3.0
+PERF_DIR := perf
+LOAD_ACCOUNTS ?= 200
+LOAD_RATE ?= 500
+LOAD_DURATION ?= 60s
 
 .PHONY: help
 help: ## Show this help
@@ -132,6 +137,23 @@ wait-seeds: ## Wait for the DynamoDB and Redpanda seed jobs to finish (works whe
 .PHONY: integration-test
 integration-test: db-up kafka-up wait-seeds ## Run all integration tests against live DynamoDB + Redpanda (always re-executed)
 	./gradlew cleanIntegrationTest integrationTest
+
+.PHONY: load-test
+load-test: ## Load test GET /balances/{id} with k6 (SC-001: p50<50ms, p99<300ms at 500 req/s). Needs make up. Vars: LOAD_RATE, LOAD_DURATION, LOAD_ACCOUNTS
+	@echo "Publishing $(LOAD_ACCOUNTS) transaction events (one new account each) and waiting for ingestion..."
+	$(COMPOSE) run --rm -T --entrypoint /bin/bash redpanda-seed \
+		/redpanda-seed/produce-transactions-events.sh $(SCENARIO_TOPIC) $(LOAD_ACCOUNTS)
+	@sleep 10
+	@ids=$$($(COMPOSE) run --rm -T --entrypoint aws dynamodb-seed \
+		dynamodb scan --table-name AccountBalances --endpoint-url http://dynamodb:8000 --region us-east-1 \
+		--max-items $(LOAD_ACCOUNTS) --query 'Items[].pk.S' --output text 2>/dev/null \
+		| tr '\t' '\n' | sed -n 's/^ACCOUNT#//p' | paste -sd, -); \
+	echo "Accounts collected from DynamoDB: $$(echo "$$ids" | tr ',' '\n' | grep -c .)"; \
+	docker run --rm \
+		--add-host=host.docker.internal:host-gateway \
+		-v "$(CURDIR)/$(PERF_DIR)":/perf -w /perf \
+		-e RATE=$(LOAD_RATE) -e DURATION=$(LOAD_DURATION) -e ACCOUNTS="$$ids" \
+		$(K6_IMAGE) run k6-balance-read.js
 
 .PHONY: chaos-dynamodb-pause
 chaos-dynamodb-pause: ## Chaos: freeze DynamoDB Local (queries answer 503, ingestion applies backpressure). Undo with chaos-dynamodb-unpause
