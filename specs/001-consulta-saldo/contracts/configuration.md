@@ -7,7 +7,7 @@ Segredos NÃO existem no código; fora do ambiente local as credenciais AWS vêm
 |----------|---------|-----------|
 | `SERVER_PORT` | `8080` | Porta da API |
 | `MANAGEMENT_SERVER_PORT` | `8082` | Porta do Actuator (health/prometheus), separada da API (publicada no host somente no compose local) |
-| `DYNAMODB_ENDPOINT` | `http://localhost:8000` | Vazio/ausente em produção (usa o endpoint AWS). Se definido, ativa credenciais estáticas locais |
+| `DYNAMODB_ENDPOINT` | `http://localhost:8000` | Em produção definir **vazio** (`DYNAMODB_ENDPOINT=`) para usar o endpoint AWS e a *default credentials provider chain*; variável ausente cai no default local. Com valor, usa `endpointOverride` e credenciais estáticas locais |
 | `DYNAMODB_REGION` | `us-east-1` | Região |
 | `BALANCE_TABLE_NAME` | `AccountBalances` | Tabela do snapshot |
 | `DYNAMODB_READ_CONSISTENT` | `true` | `ConsistentRead` na consulta (trade-off custo x atualidade, R-05) |
