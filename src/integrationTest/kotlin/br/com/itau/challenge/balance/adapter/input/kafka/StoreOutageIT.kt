@@ -48,8 +48,14 @@ class StoreOutageIT : KafkaITBase() {
 
     @BeforeEach
     fun requireDockerAndDynamoDb() {
-        assumeTrue(ComposeControl.isRunning(SERVICE), "Docker CLI e servico $SERVICE do compose deste projeto necessarios")
+        val available = ComposeControl.isRunning(SERVICE)
+        val message = "Docker CLI e servico $SERVICE do compose deste projeto necessarios"
+        // No CI (variavel `CI` definida) a indisponibilidade do Docker/compose FALHA o teste: pular em silencio esconderia a perda
+        // da cobertura de caos. Localmente continua pulando para nao exigir Docker de quem so roda os ITs sem o teste de caos.
+        if (runningOnCi()) assertTrue(available, "CI: $message") else assumeTrue(available, message)
     }
+
+    private fun runningOnCi(): Boolean = !System.getenv("CI").isNullOrBlank()
 
     @AfterEach
     fun alwaysUnpause() {
@@ -159,7 +165,8 @@ class StoreOutageIT : KafkaITBase() {
         val unpausedAt = System.nanoTime()
 
         // retomada sem intervencao: em <= 60 s o saldo reflete o evento (lido direto do DynamoDB, independente do circuito)
-        await.atMost(Duration.ofSeconds(60)).untilAsserted { assertEquals(setOf(eventAccount), items(listOf(eventAccount))) }
+        // `ignoreExceptions`: logo apos o `unpause` o SDK ainda pode lancar (timeout/conexao) ate o DynamoDB Local responder de novo
+        await.atMost(Duration.ofSeconds(60)).ignoreExceptions().untilAsserted { assertEquals(setOf(eventAccount), items(listOf(eventAccount))) }
         val drainMillis = Duration.ofNanos(System.nanoTime() - unpausedAt).toMillis()
         println("OUTAGE-DRAIN-MS=$drainMillis")
         assertEquals(0, topics.dltCountSince(dltBefore), "DLT segue inalterado")
@@ -170,7 +177,7 @@ class StoreOutageIT : KafkaITBase() {
         println("OUTAGE-LAG-ZERO-MS=${Duration.ofNanos(System.nanoTime() - unpausedAt).toMillis()}")
 
         // o circuito fecha sozinho (OPEN -> HALF_OPEN -> CLOSED) e a API volta a responder o saldo novo
-        await.atMost(Duration.ofSeconds(60)).pollInterval(Duration.ofMillis(500)).untilAsserted {
+        await.atMost(Duration.ofSeconds(60)).pollInterval(Duration.ofMillis(500)).ignoreExceptions().untilAsserted {
             get(eventAccount)
             assertEquals(CircuitBreaker.State.CLOSED, circuitBreaker.state)
         }
@@ -210,7 +217,7 @@ class StoreOutageIT : KafkaITBase() {
         }
         val unpausedAt = System.nanoTime()
 
-        await.atMost(Duration.ofSeconds(90)).pollInterval(Duration.ofMillis(500)).untilAsserted { assertEquals(200, items(accounts).size, "itens gravados") }
+        await.atMost(Duration.ofSeconds(90)).pollInterval(Duration.ofMillis(500)).ignoreExceptions().untilAsserted { assertEquals(200, items(accounts).size, "itens gravados") }
         println("BACKLOG-DRAIN-MS=${Duration.ofNanos(System.nanoTime() - unpausedAt).toMillis()}")
         topics.awaitLagZero(Duration.ofSeconds(60))
         println("BACKLOG-LAG-ZERO-MS=${Duration.ofNanos(System.nanoTime() - unpausedAt).toMillis()}")

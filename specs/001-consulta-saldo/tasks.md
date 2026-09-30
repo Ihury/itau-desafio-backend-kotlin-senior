@@ -479,11 +479,11 @@ Os atalhos abaixo são expandidos nos caminhos deste arquivo; todos os caminhos 
 
 ### Commit C40: `test: endurece testes de caos, concorrencia e isolamento de metricas`
 
-- [ ] T180 `src/integrationTest/.../input/kafka/StoreOutageIT.kt`: quando a variável de ambiente `CI` estiver definida, a indisponibilidade do Docker/compose FALHA o teste (asserção) em vez de `assumeTrue` pular; localmente continua pulando
-- [ ] T181 `StoreOutageIT.kt`: `await ... .ignoreExceptions()` (exceções do SDK logo após o `unpause`, inclusive o `get` no loop do circuito)
-- [ ] T182 `src/integrationTest/.../output/dynamodb/ConcurrentWritesIT.kt`: afirmar número mínimo de leituras concorrentes e corrigir o `chunked` para gerar exatamente o número de threads declarado
-- [ ] T183 [P] `KafkaIngestionITBase.kt` (e testes que contam deltas exatos de métricas, ex. `ConvergenceIngestionIT.kt`): barreira `awaitLagZero()` antes de ler o baseline, para que eventos em voo de um teste não contaminem as contagens do seguinte
-- [ ] T184 [P] `TransactionEventListenerTest.kt` e `DynamoDbHealthIndicatorTest.kt`: restaurar o nível de log original em `@AfterEach`
+- [X] T180 `src/integrationTest/.../input/kafka/StoreOutageIT.kt`: quando a variável de ambiente `CI` estiver definida, a indisponibilidade do Docker/compose FALHA o teste (asserção) em vez de `assumeTrue` pular; localmente continua pulando
+- [X] T181 `StoreOutageIT.kt`: `await ... .ignoreExceptions()` (exceções do SDK logo após o `unpause`, inclusive o `get` no loop do circuito)
+- [X] T182 `src/integrationTest/.../output/dynamodb/ConcurrentWritesIT.kt`: afirmar número mínimo de leituras concorrentes e corrigir o `chunked` para gerar exatamente o número de threads declarado
+- [X] T183 [P] `KafkaIngestionITBase.kt` (e testes que contam deltas exatos de métricas, ex. `ConvergenceIngestionIT.kt`): barreira `awaitLagZero()` antes de ler o baseline, para que eventos em voo de um teste não contaminem as contagens do seguinte
+- [X] T184 [P] `TransactionEventListenerTest.kt` e `DynamoDbHealthIndicatorTest.kt`: restaurar o nível de log original em `@AfterEach`
 
 ### Commit C41: `fix(dynamodb): leitura do snapshot nao reaplica limites de plausibilidade de timestamp`
 

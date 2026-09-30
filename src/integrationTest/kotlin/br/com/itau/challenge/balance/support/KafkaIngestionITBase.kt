@@ -66,6 +66,9 @@ abstract class KafkaITBase {
     fun setUp() {
         raw = DynamoDbTestSupport.rawClient()
         topics.awaitAssignment(registry)
+        // Barreira de isolamento: eventos em voo do teste anterior (processados, mas ainda nao confirmados) contaminariam os deltas
+        // exatos de metricas lidos como baseline por este teste. Com o lag zerado, todo desfecho anterior ja foi contabilizado.
+        topics.awaitLagZero()
     }
 
     @AfterEach

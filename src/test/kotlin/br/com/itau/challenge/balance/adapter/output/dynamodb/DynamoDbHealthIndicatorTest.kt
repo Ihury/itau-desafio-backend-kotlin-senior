@@ -55,9 +55,11 @@ class DynamoDbHealthIndicatorTest {
 
     private lateinit var appender: ListAppender<ILoggingEvent>
     private val indicatorLogger = LoggerFactory.getLogger(DynamoDbHealthIndicator::class.java) as Logger
+    private var originalLevel: Level? = null
 
     @BeforeEach
     fun captureLogs() {
+        originalLevel = indicatorLogger.level
         appender = ListAppender<ILoggingEvent>().apply { start() }
         indicatorLogger.addAppender(appender)
         indicatorLogger.level = Level.DEBUG
@@ -66,6 +68,7 @@ class DynamoDbHealthIndicatorTest {
     @AfterEach
     fun releaseLogs() {
         indicatorLogger.detachAppender(appender)
+        indicatorLogger.level = originalLevel
     }
 
     private fun tableIs(status: TableStatus) {

@@ -50,6 +50,9 @@ class ConcurrentWritesIT {
         const val UNIQUE_KEYS = 300
         const val DUPLICATES = 100
         const val TOTAL = UNIQUE_KEYS + DUPLICATES
+
+        /** O leitor concorrente precisa de amostras suficientes para a garantia de integridade (FR-027) ter valor. */
+        const val MIN_CONCURRENT_READS = 50
         val TX_COUNT = ConvergenceModel.TRANSACTION_IDS.size
     }
 
@@ -97,7 +100,8 @@ class ConcurrentWritesIT {
         val readerThread =
             Thread {
                 var last: Pair<Long, String>? = null
-                while (writing.get()) {
+                // Fica ativo ate as escritas terminarem E o minimo de amostras ser atingido (as escritas acabam em poucas centenas de ms).
+                while (writing.get() || (reads.get() < MIN_CONCURRENT_READS && failures.isEmpty())) {
                     try {
                         reader.find(accountId)?.let { seen ->
                             reads.incrementAndGet()
@@ -113,9 +117,15 @@ class ConcurrentWritesIT {
                         failures += failure
                     }
                 }
-            }.also { it.start() }
+            }.also {
+                it.isDaemon = true
+                it.start()
+            }
 
-        events.chunked(TOTAL / THREADS + 1).forEach { batch ->
+        // Exatamente THREADS lotes (distribuicao round-robin preserva a ordem relativa dentro de cada thread); `chunked` geraria 31.
+        val batches = events.withIndex().groupBy({ it.index % THREADS }, { it.value }).values
+        assertEquals(THREADS, batches.size, "uma thread de escrita por lote")
+        batches.forEach { batch ->
             pool.submit {
                 start.await()
                 batch.forEach { spec ->
@@ -139,7 +149,7 @@ class ConcurrentWritesIT {
         start.countDown()
         assertTrue(done.await(120, TimeUnit.SECONDS), "as $TOTAL escritas terminam em 2 minutos")
         writing.set(false)
-        readerThread.join(10_000)
+        readerThread.join(30_000)
         pool.shutdown()
 
         assertEquals(emptyList(), failures, "nenhuma excecao (seed $seed)")
@@ -152,6 +162,7 @@ class ConcurrentWritesIT {
         val loser = events.first { it.key != expectedWinner.key }
         assertEquals(ApplyResult.Obsolete, writer.applyIfNewer(loser.toSnapshot()))
         assertEquals(emptyList(), tornReads, "leituras concorrentes so veem snapshots integros (seed $seed, ${reads.get()} leituras)")
+        assertTrue(reads.get() >= MIN_CONCURRENT_READS, "o leitor concorrente observou ${reads.get()} snapshots (minimo $MIN_CONCURRENT_READS): a verificacao de integridade ficaria vazia")
         println("ConcurrentWritesIT seed=$seed threads=$THREADS escritas=$TOTAL applied=${applied.get()} obsolete=${obsolete.get()} duplicate=${duplicate.get()} leituras=${reads.get()} vencedor=${expectedWinner.key}")
     }
 

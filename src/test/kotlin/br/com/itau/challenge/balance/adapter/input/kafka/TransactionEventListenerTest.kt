@@ -56,10 +56,12 @@ class TransactionEventListenerTest {
 
     private lateinit var appender: ListAppender<ILoggingEvent>
     private val rootLogger = LoggerFactory.getLogger(Logger.ROOT_LOGGER_NAME) as Logger
+    private var originalLevel: Level? = null
 
     @BeforeEach
     fun captureLogs() {
         MDC.clear()
+        originalLevel = rootLogger.level
         appender = ListAppender<ILoggingEvent>().apply { start() }
         rootLogger.addAppender(appender)
         rootLogger.level = Level.DEBUG
@@ -68,6 +70,7 @@ class TransactionEventListenerTest {
     @AfterEach
     fun releaseLogs() {
         rootLogger.detachAppender(appender)
+        rootLogger.level = originalLevel
         MDC.clear()
     }
 

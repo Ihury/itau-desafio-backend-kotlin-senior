@@ -30,6 +30,12 @@ class ConvergenceIngestionIT : KafkaIngestionITBase() {
         return Outcomes(count("processed"), count("obsolete"), count("duplicate"))
     }
 
+    /** Baseline dos desfechos depois de uma barreira de lag zero: nada em voo pode ser contado depois da leitura. */
+    private fun baselineOutcomes(): Outcomes {
+        topics.awaitLagZero()
+        return outcomes()
+    }
+
     private fun tx(n: Int): String = "00000000-0000-4000-8000-%012d".format(n)
 
     /** Instante `n` segundos apos o base, com microssegundos (`...433123`) como no quickstart. */
@@ -71,7 +77,7 @@ class ConvergenceIngestionIT : KafkaIngestionITBase() {
     @Test
     fun `out of order events plus a duplicate converge to the highest instant and are counted exactly (5-1)`() {
         val account = newAccount()
-        val baseline = outcomes()
+        val baseline = baselineOutcomes()
 
         send(account, txNumber = 3, instant = 3, amount = "300.00")
         send(account, txNumber = 1, instant = 1, amount = "100.00")
@@ -87,7 +93,7 @@ class ConvergenceIngestionIT : KafkaIngestionITBase() {
     @Test
     fun `redelivering the same messages changes nothing and only adds obsolete and duplicate outcomes (US3-6)`() {
         val account = newAccount()
-        val baseline = outcomes()
+        val baseline = baselineOutcomes()
         val messages = { send(account, 3, 3, "300.00"); send(account, 1, 1, "100.00"); send(account, 2, 2, "200.00"); send(account, 3, 3, "300.00") }
         messages()
         awaitTotal(baseline, 4)
@@ -105,7 +111,7 @@ class ConvergenceIngestionIT : KafkaIngestionITBase() {
     fun `a timestamp tie is won by the greater transaction id in both arrival orders (5-2)`() {
         val account = newAccount()
         val reversedAccount = newAccount()
-        val baseline = outcomes()
+        val baseline = baselineOutcomes()
 
         send(account, txNumber = 11, instant = 5, amount = "20.00")
         send(account, txNumber = 10, instant = 5, amount = "10.00")
@@ -151,7 +157,7 @@ class ConvergenceIngestionIT : KafkaIngestionITBase() {
         send(account, txNumber = 31, instant = 2, amount = "50.00", accountStatus = "DISABLED")
         await.atMost(SLO).untilAsserted { assertEquals(409, get(account).statusCode()) }
 
-        val baseline = outcomes()
+        val baseline = baselineOutcomes()
         send(account, txNumber = 29, instant = 0, amount = "40.00")
         awaitTotal(baseline, 1)
         assertEquals(Outcomes(processed = 0, obsolete = 1, duplicate = 0), outcomes() - baseline)
