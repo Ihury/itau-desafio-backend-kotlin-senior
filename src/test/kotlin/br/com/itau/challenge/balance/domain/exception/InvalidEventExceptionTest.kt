@@ -10,20 +10,20 @@ class InvalidEventExceptionTest {
     fun `carries the reason and an optional field path`() {
         val withoutDetail = InvalidEventException(RejectionReason.MALFORMED_PAYLOAD)
         assertEquals(RejectionReason.MALFORMED_PAYLOAD, withoutDetail.reason)
-        assertNull(withoutDetail.detail)
+        assertNull(withoutDetail.fieldPath)
 
         val withDetail = InvalidEventException(RejectionReason.INVALID_CURRENCY, "transaction.currency")
-        assertEquals("transaction.currency", withDetail.detail)
+        assertEquals("transaction.currency", withDetail.fieldPath)
     }
 
     @Test
     fun `withDetail returns a copy with the path and keeps the reason`() {
         val original = InvalidEventException(RejectionReason.INVALID_VALUE)
-        val copy = original.withDetail("account.balance.amount")
+        val copy = original.withFieldPath("account.balance.amount")
 
         assertEquals(RejectionReason.INVALID_VALUE, copy.reason)
-        assertEquals("account.balance.amount", copy.detail)
-        assertNull(original.detail)
+        assertEquals("account.balance.amount", copy.fieldPath)
+        assertNull(original.fieldPath)
     }
 
     @Test

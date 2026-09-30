@@ -35,7 +35,7 @@ class Money private constructor(
      * Valor para apresentacao: completa a escala ate as casas decimais padrao da moeda (BRL `183.1` -> `183.10`),
      * sem nunca arredondar. Moedas sem casas padrao definidas (`-1`, ex.: XAU) permanecem inalteradas.
      */
-    fun withCurrencyFractionDigits(): BigDecimal {
+    fun paddedToCurrencyScale(): BigDecimal {
         val fractionDigits = currency.currency.defaultFractionDigits
         return if (fractionDigits < 0) amount else amount.setScale(maxOf(amount.scale(), fractionDigits))
     }

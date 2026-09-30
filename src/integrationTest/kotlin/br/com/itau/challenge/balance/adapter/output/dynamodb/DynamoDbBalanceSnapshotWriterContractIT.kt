@@ -58,6 +58,6 @@ class DynamoDbBalanceSnapshotWriterContractIT : BalanceSnapshotWriterContract() 
         val stored = assertNotNull(currentOf(AccountId.parse(account)))
         assertEquals(0, BigDecimal("183.10").compareTo(stored.balance.amount))
         assertEquals(BalanceSnapshot.from(event), stored, "igualdade de Money por valor numerico")
-        assertEquals(BigDecimal("183.10"), stored.balance.withCurrencyFractionDigits())
+        assertEquals(BigDecimal("183.10"), stored.balance.paddedToCurrencyScale())
     }
 }

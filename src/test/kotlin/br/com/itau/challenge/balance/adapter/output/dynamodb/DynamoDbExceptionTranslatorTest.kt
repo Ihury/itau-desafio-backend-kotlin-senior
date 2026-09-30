@@ -35,7 +35,7 @@ class DynamoDbExceptionTranslatorTest {
             .build() as DynamoDbException
 
     private fun readCause(failure: Throwable): StoreFailureCause {
-        val translated = DynamoDbExceptionTranslator.forRead(failure)
+        val translated = DynamoDbExceptionTranslator.translateReadFailure(failure)
         assertIs<BalanceStoreUnavailableException>(translated)
         assertSame(failure, translated.cause, "a excecao original do SDK e preservada como cause")
         return translated.failureCause
@@ -98,7 +98,7 @@ class DynamoDbExceptionTranslatorTest {
             serviceError(400, "ExpiredTokenException"),
             credentialsFailure(),
         ).forEach { failure ->
-            val translated = DynamoDbExceptionTranslator.forWrite(failure)
+            val translated = DynamoDbExceptionTranslator.translateWriteFailure(failure)
             assertIs<BalanceStoreUnavailableException>(translated)
             assertEquals(StoreFailureCause.MISCONFIGURED, translated.failureCause)
             assertSame(failure, translated.cause)
@@ -106,7 +106,7 @@ class DynamoDbExceptionTranslatorTest {
     }
 
     private fun detailsOf(failure: Throwable): StoreFailureDetails {
-        val translated = DynamoDbExceptionTranslator.forRead(failure)
+        val translated = DynamoDbExceptionTranslator.translateReadFailure(failure)
         assertIs<BalanceStoreUnavailableException>(translated)
         return assertNotNull(translated.details)
     }
@@ -153,30 +153,30 @@ class DynamoDbExceptionTranslatorTest {
     @Test
     fun `validation failure on write is a rejection and other failures stay transitory`() {
         val validation = serviceError(400, "ValidationException")
-        val rejected = DynamoDbExceptionTranslator.forWrite(validation)
+        val rejected = DynamoDbExceptionTranslator.translateWriteFailure(validation)
         assertIs<BalanceStoreRejectedException>(rejected)
         assertSame(validation, rejected.cause)
 
         val namespaced = serviceError(400, "com.amazon.coral.validate#ValidationException")
-        assertIs<BalanceStoreRejectedException>(DynamoDbExceptionTranslator.forWrite(namespaced))
+        assertIs<BalanceStoreRejectedException>(DynamoDbExceptionTranslator.translateWriteFailure(namespaced))
 
-        val throttled = DynamoDbExceptionTranslator.forWrite(ProvisionedThroughputExceededException.builder().message("x").build())
+        val throttled = DynamoDbExceptionTranslator.translateWriteFailure(ProvisionedThroughputExceededException.builder().message("x").build())
         assertIs<BalanceStoreUnavailableException>(throttled)
         assertEquals(StoreFailureCause.THROTTLED, throttled.failureCause)
 
-        val serverError = DynamoDbExceptionTranslator.forWrite(serviceError(500, "InternalFailure"))
+        val serverError = DynamoDbExceptionTranslator.translateWriteFailure(serviceError(500, "InternalFailure"))
         assertIs<BalanceStoreUnavailableException>(serverError)
         assertEquals(StoreFailureCause.UNAVAILABLE, serverError.failureCause)
 
-        val timeout = DynamoDbExceptionTranslator.forWrite(ApiCallTimeoutException.builder().message("x").build())
+        val timeout = DynamoDbExceptionTranslator.translateWriteFailure(ApiCallTimeoutException.builder().message("x").build())
         assertIs<BalanceStoreUnavailableException>(timeout)
         assertEquals(StoreFailureCause.TIMEOUT, timeout.failureCause)
     }
 
     @Test
     fun `an exception that does not come from the sdk is not translated`() {
-        assertNull(DynamoDbExceptionTranslator.forRead(IllegalStateException("x")))
-        assertNull(DynamoDbExceptionTranslator.forWrite(RuntimeException("x")))
+        assertNull(DynamoDbExceptionTranslator.translateReadFailure(IllegalStateException("x")))
+        assertNull(DynamoDbExceptionTranslator.translateWriteFailure(RuntimeException("x")))
     }
 
     @Test

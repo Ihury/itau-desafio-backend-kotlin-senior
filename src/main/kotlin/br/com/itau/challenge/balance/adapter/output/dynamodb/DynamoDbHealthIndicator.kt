@@ -32,36 +32,36 @@ class DynamoDbHealthIndicator(
     private val clock: Clock,
 ) : HealthIndicator {
     private val lock = Any()
-    private var probedAt: Instant? = null
-    private var up: Boolean = false
+    private var lastProbeAt: Instant? = null
+    private var lastProbeUp: Boolean = false
 
     init {
         Gauge
-            .builder("balance.dependency.up") { if (isUp()) 1.0 else 0.0 }
+            .builder("balance.dependency.up") { if (isUpRefreshingIfStale()) 1.0 else 0.0 }
             .description("1 se o ultimo probe da dependencia foi bem sucedido, 0 se falhou (mesmo estado do grupo de saude dependencies)")
             .tag("dependency", "dynamodb")
             .register(meterRegistry)
     }
 
-    override fun health(): Health = if (isUp()) Health.up().build() else Health.down().build()
+    override fun health(): Health = if (isUpRefreshingIfStale()) Health.up().build() else Health.down().build()
 
     /** Estado em cache; um unico thread executa o probe e os demais reaproveitam o resultado. */
-    private fun isUp(): Boolean =
+    private fun isUpRefreshingIfStale(): Boolean =
         synchronized(lock) {
             val now = clock.instant()
-            val last = probedAt
-            if (last == null || !now.isBefore(last.plus(CACHE_TTL))) {
-                val previous = if (last == null) null else up
-                val failure = probe()
-                up = failure == null
-                probedAt = now
-                logTransition(previous, failure)
+            val previousProbeAt = lastProbeAt
+            if (previousProbeAt == null || !now.isBefore(previousProbeAt.plus(CACHE_TTL))) {
+                val previousUp = if (previousProbeAt == null) null else lastProbeUp
+                val failureReason = probeFailureReason()
+                lastProbeUp = failureReason == null
+                lastProbeAt = now
+                logTransition(previousUp, failureReason)
             }
-            up
+            lastProbeUp
         }
 
     /** `null` quando a tabela esta utilizavel; caso contrario o motivo (classe da excecao ou estado da tabela) para o log. */
-    private fun probe(): String? =
+    private fun probeFailureReason(): String? =
         try {
             val request =
                 DescribeTableRequest
@@ -78,12 +78,12 @@ class DynamoDbHealthIndicator(
         }
 
     private fun logTransition(
-        previous: Boolean?,
-        failure: String?,
+        previousUp: Boolean?,
+        failureReason: String?,
     ) {
         when {
-            failure != null && previous != false -> log.warn("dynamodb dependency is down reason={}", failure)
-            failure == null && previous == false -> log.info("dynamodb dependency is up again")
+            failureReason != null && previousUp != false -> log.warn("dynamodb dependency is down reason={}", failureReason)
+            failureReason == null && previousUp == false -> log.info("dynamodb dependency is up again")
         }
     }
 

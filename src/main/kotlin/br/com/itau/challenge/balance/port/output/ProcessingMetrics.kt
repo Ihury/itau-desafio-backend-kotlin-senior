@@ -6,7 +6,7 @@ import br.com.itau.challenge.balance.domain.model.StoreFailureCause
 /** Contadores de desfecho do processamento: exatamente um desfecho por evento aplicado (FR-031). */
 interface ProcessingMetrics {
     /** O evento superou o snapshot vigente (`processed`). */
-    fun applied()
+    fun processed()
 
     /** O snapshot vigente tinha precedencia maior (`obsolete`). */
     fun obsolete()

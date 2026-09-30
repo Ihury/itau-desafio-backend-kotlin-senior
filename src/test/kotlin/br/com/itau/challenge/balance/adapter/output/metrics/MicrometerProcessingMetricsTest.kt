@@ -16,7 +16,7 @@ class MicrometerProcessingMetricsTest {
 
     @Test
     fun `applied increments only the processed outcome`() {
-        metrics.applied()
+        metrics.processed()
 
         assertEquals(1.0, events("processed"))
         assertEquals(0.0, events("obsolete"))
@@ -52,7 +52,7 @@ class MicrometerProcessingMetricsTest {
 
     @Test
     fun `counters accumulate across calls`() {
-        repeat(3) { metrics.applied() }
+        repeat(3) { metrics.processed() }
         repeat(2) { metrics.obsolete() }
         metrics.duplicate(conflicting = false)
         metrics.duplicate(conflicting = true)

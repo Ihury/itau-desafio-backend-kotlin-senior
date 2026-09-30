@@ -8,7 +8,7 @@ import java.time.format.DateTimeFormatter
 
 /**
  * Corpo do 200 de `GET /balances/{accountId}` (contrato em `openapi.yaml`). O saldo e o valor apresentado
- * (`Money.withCurrencyFractionDigits`: completa as casas da moeda, nunca arredonda) e o Jackson o escreve como decimal
+ * (`Money.paddedToCurrencyScale`: completa as casas da moeda, nunca arredonda) e o Jackson o escreve como decimal
  * simples (`write-bigdecimal-as-plain`). `updated_at` e o instante do evento que originou o snapshot, ISO 8601 com o
  * offset do fuso de exibicao (regras de fuso, nao um offset fixo), com a fracao de segundo somente quando nao nula.
  */
@@ -31,7 +31,7 @@ data class BalanceResponse(
             BalanceResponse(
                 id = snapshot.accountId.value,
                 owner = snapshot.ownerId.value,
-                balance = MoneyResponse(snapshot.balance.withCurrencyFractionDigits(), snapshot.balance.currency.value),
+                balance = MoneyResponse(snapshot.balance.paddedToCurrencyScale(), snapshot.balance.currency.value),
                 updatedAt = snapshot.precedence.timestamp.toInstant().atZone(displayZone).format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
             )
     }

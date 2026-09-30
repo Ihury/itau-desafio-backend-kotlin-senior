@@ -55,10 +55,10 @@ class DomainExceptionsTest {
 
     @Test
     fun `BalanceStoreUnavailableException describes the cause and, when there is one, the sdk diagnostics`() {
-        assertEquals("cause=TIMEOUT", BalanceStoreUnavailableException(StoreFailureCause.TIMEOUT).describe())
+        assertEquals("cause=TIMEOUT", BalanceStoreUnavailableException(StoreFailureCause.TIMEOUT).logDescription())
         assertEquals(
             "cause=MISCONFIGURED exception=x.Y errorCode=Z statusCode=400",
-            BalanceStoreUnavailableException(StoreFailureCause.MISCONFIGURED, null, StoreFailureDetails("x.Y", "Z", 400)).describe(),
+            BalanceStoreUnavailableException(StoreFailureCause.MISCONFIGURED, null, StoreFailureDetails("x.Y", "Z", 400)).logDescription(),
         )
     }
 

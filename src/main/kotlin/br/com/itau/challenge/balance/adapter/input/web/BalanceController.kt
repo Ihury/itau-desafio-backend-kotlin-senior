@@ -22,7 +22,7 @@ class InvalidAccountIdException : RuntimeException("invalid account id")
  */
 @RestController
 class BalanceController(
-    private val getBalance: GetBalanceUseCase,
+    private val getBalanceUseCase: GetBalanceUseCase,
     private val displayZone: ZoneId,
 ) {
     @GetMapping("/balances/{accountId}")
@@ -36,7 +36,7 @@ class BalanceController(
                 throw InvalidAccountIdException()
             }
         MDC.put(CorrelationIdFilter.MDC_ACCOUNT_ID, id.value)
-        val snapshot = getBalance.getBalance(id)
+        val snapshot = getBalanceUseCase.getBalance(id)
         return ResponseEntity
             .ok()
             .cacheControl(CacheControl.noStore())

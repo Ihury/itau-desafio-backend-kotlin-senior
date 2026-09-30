@@ -58,8 +58,8 @@ class ProblemDetailsAdvice(
         // configuracao/credencial (MISCONFIGURED) sobe a ERROR: o 503 e o mesmo, mas exige acao de quem opera.
         when {
             exception is BalanceStoreCircuitOpenException -> log.debug("balance read rejected: circuit breaker open")
-            exception.failureCause == StoreFailureCause.MISCONFIGURED -> log.error("balance store misconfigured {}", exception.describe())
-            else -> log.warn("balance store unavailable {}", exception.describe())
+            exception.failureCause == StoreFailureCause.MISCONFIGURED -> log.error("balance store misconfigured {}", exception.logDescription())
+            else -> log.warn("balance store unavailable {}", exception.logDescription())
         }
         return problem(
             request,
@@ -72,7 +72,7 @@ class ProblemDetailsAdvice(
     }
 
     @ExceptionHandler(Exception::class)
-    fun unexpected(
+    fun unexpectedError(
         exception: Exception,
         request: HttpServletRequest,
     ): ResponseEntity<ProblemDetail> {

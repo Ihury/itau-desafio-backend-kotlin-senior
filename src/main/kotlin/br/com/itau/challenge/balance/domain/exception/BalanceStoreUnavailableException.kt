@@ -13,5 +13,5 @@ open class BalanceStoreUnavailableException(
     val details: StoreFailureDetails? = null,
 ) : RuntimeException("balance store unavailable: $failureCause", cause) {
     /** `cause=<causa>` seguido do diagnostico do SDK, quando ha; o texto de log das falhas transitorias. */
-    fun describe(): String = details?.let { "cause=$failureCause $it" } ?: "cause=$failureCause"
+    fun logDescription(): String = details?.let { "cause=$failureCause $it" } ?: "cause=$failureCause"
 }

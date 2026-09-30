@@ -19,22 +19,22 @@ import java.time.Duration
  */
 @Suppress("LongParameterList")
 fun readCircuitBreakerConfig(
-    window: Duration,
+    slidingWindow: Duration,
     minCalls: Int,
-    failureRate: Float,
-    slowCall: Duration,
-    slowRate: Float,
+    failureRateThresholdPercent: Float,
+    slowCallThreshold: Duration,
+    slowCallRateThresholdPercent: Float,
     openWait: Duration,
     halfOpenCalls: Int,
 ): CircuitBreakerConfig =
     CircuitBreakerConfig
         .custom()
         .slidingWindowType(CircuitBreakerConfig.SlidingWindowType.TIME_BASED)
-        .slidingWindowSize(window.seconds.toInt().coerceAtLeast(1))
+        .slidingWindowSize(slidingWindow.seconds.toInt().coerceAtLeast(1))
         .minimumNumberOfCalls(minCalls)
-        .failureRateThreshold(failureRate)
-        .slowCallDurationThreshold(slowCall)
-        .slowCallRateThreshold(slowRate)
+        .failureRateThreshold(failureRateThresholdPercent)
+        .slowCallDurationThreshold(slowCallThreshold)
+        .slowCallRateThreshold(slowCallRateThresholdPercent)
         .waitDurationInOpenState(openWait)
         .automaticTransitionFromOpenToHalfOpenEnabled(true)
         .permittedNumberOfCallsInHalfOpenState(halfOpenCalls)

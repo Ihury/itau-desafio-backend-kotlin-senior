@@ -36,7 +36,7 @@ class ProcessTransactionEventService(
         val transactionId = snapshot.precedence.transactionId
         when (result) {
             is ApplyResult.Applied -> {
-                metrics.applied()
+                metrics.processed()
                 log.info("event applied accountId={} transactionId={}", accountId, transactionId)
             }
             is ApplyResult.Obsolete -> {
@@ -58,8 +58,8 @@ class ProcessTransactionEventService(
     /** Ordem fixa dos campos (kafka-events.md secao 3): `transaction.timestamp` antes de `account.created_at`. */
     private fun rejectFutureTimestamps(event: TransactionEvent) {
         val limit = latestAcceptableMicros()
-        if (event.transaction.timestamp.micros > limit) throw futureTimestamp("transaction.timestamp")
-        if (event.account.createdAt.micros > limit) throw futureTimestamp("account.created_at")
+        if (event.transaction.timestamp.micros > limit) throw futureTimestampRejection("transaction.timestamp")
+        if (event.account.createdAt.micros > limit) throw futureTimestampRejection("account.created_at")
     }
 
     private fun latestAcceptableMicros(): Long {
@@ -67,7 +67,7 @@ class ProcessTransactionEventService(
         return Math.addExact(Math.multiplyExact(latest.epochSecond, MICROS_PER_SECOND), latest.nano / NANOS_PER_MICRO)
     }
 
-    private fun futureTimestamp(path: String) = InvalidEventException(RejectionReason.INVALID_TIMESTAMP, path)
+    private fun futureTimestampRejection(path: String) = InvalidEventException(RejectionReason.INVALID_TIMESTAMP, path)
 
     private companion object {
         private const val MICROS_PER_SECOND = 1_000_000L

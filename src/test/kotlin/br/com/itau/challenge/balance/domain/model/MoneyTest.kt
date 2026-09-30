@@ -92,37 +92,37 @@ class MoneyTest {
 
     @Test
     fun `presentation completes the scale to the currency fraction digits`() {
-        assertEquals("183.10", money("183.1").withCurrencyFractionDigits().toPlainString())
-        assertEquals("100.00", money("100").withCurrencyFractionDigits().toPlainString())
-        assertEquals("10.123", money("10.123").withCurrencyFractionDigits().toPlainString())
-        assertEquals("0.00", money("0").withCurrencyFractionDigits().toPlainString())
-        assertEquals("-5.00", money("-5").withCurrencyFractionDigits().toPlainString())
-        assertEquals("1000.00", money("1E+3").withCurrencyFractionDigits().toPlainString())
+        assertEquals("183.10", money("183.1").paddedToCurrencyScale().toPlainString())
+        assertEquals("100.00", money("100").paddedToCurrencyScale().toPlainString())
+        assertEquals("10.123", money("10.123").paddedToCurrencyScale().toPlainString())
+        assertEquals("0.00", money("0").paddedToCurrencyScale().toPlainString())
+        assertEquals("-5.00", money("-5").paddedToCurrencyScale().toPlainString())
+        assertEquals("1000.00", money("1E+3").paddedToCurrencyScale().toPlainString())
     }
 
     @Test
     fun `presentation keeps currencies with zero fraction digits and never rounds`() {
         val jpy = CurrencyCode.parse("JPY")
-        assertEquals("500", money("500", jpy).withCurrencyFractionDigits().toPlainString())
-        assertEquals("500.5", money("500.5", jpy).withCurrencyFractionDigits().toPlainString())
+        assertEquals("500", money("500", jpy).paddedToCurrencyScale().toPlainString())
+        assertEquals("500.5", money("500.5", jpy).paddedToCurrencyScale().toPlainString())
     }
 
     @Test
     fun `presentation leaves currencies without fraction digits unchanged`() {
         val xau = CurrencyCode.parse("XAU")
         assertEquals(-1, xau.currency.defaultFractionDigits)
-        assertEquals("3", money("3", xau).withCurrencyFractionDigits().toPlainString())
-        assertEquals("3.5", money("3.5", xau).withCurrencyFractionDigits().toPlainString())
+        assertEquals("3", money("3", xau).paddedToCurrencyScale().toPlainString())
+        assertEquals("3.5", money("3.5", xau).paddedToCurrencyScale().toPlainString())
     }
 
     @Test
     fun `presentation never changes the numeric value and never uses scientific notation`() {
         listOf("183.1", "100", "10.123", "0", "-5", "0.0000001", "1E+3", "12345678901234567890.123456789012345678").forEach {
             val original = money(it).amount
-            val presented = money(it).withCurrencyFractionDigits()
+            val presented = money(it).paddedToCurrencyScale()
             assertEquals(0, original.compareTo(presented), "valor alterado para $it")
             assertFalse('E' in presented.toPlainString(), "notacao cientifica para $it")
         }
-        assertEquals("0.0000001", money("0.0000001").withCurrencyFractionDigits().toPlainString())
+        assertEquals("0.0000001", money("0.0000001").paddedToCurrencyScale().toPlainString())
     }
 }

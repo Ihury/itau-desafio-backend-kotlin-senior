@@ -30,7 +30,7 @@ import java.util.concurrent.TimeUnit
  *   condicao falsa e uma contradicao (`IllegalStateException`, sem valores): nao e indisponibilidade, entao nao e retentada
  *   sem fim; o consumer a trata como nao classificada (3 entregas e DLT). Ja o item ausente no fallback e transitorio (a
  *   proxima tentativa cria a conta).
- * - Demais falhas do SDK sao traduzidas por [DynamoDbExceptionTranslator.forWrite] e nunca engolidas; excecoes que nao
+ * - Demais falhas do SDK sao traduzidas por [DynamoDbExceptionTranslator.translateWriteFailure] e nunca engolidas; excecoes que nao
  *   sao do SDK propagam como estao.
  * - A latencia da `UpdateItem` vai para `balance.store.write.duration{result=applied|condition_failed|error}` (com histograma),
  *   inclusive quando o SDK lanca.
@@ -42,7 +42,7 @@ class DynamoDbBalanceSnapshotWriter(
     private val tableName: String,
     meterRegistry: MeterRegistry,
 ) : BalanceSnapshotWriter {
-    private val durations: Map<String, Timer> = RESULTS.associateWith { result -> writeTimer(meterRegistry, result) }
+    private val writeTimers: Map<String, Timer> = RESULTS.associateWith { result -> writeTimer(meterRegistry, result) }
 
     override fun applyIfNewer(snapshot: BalanceSnapshot): ApplyResult {
         val item = BalanceItemMapper.toItem(snapshot)
@@ -66,39 +66,39 @@ class DynamoDbBalanceSnapshotWriter(
                     ),
                 ).returnValuesOnConditionCheckFailure(ReturnValuesOnConditionCheckFailure.ALL_OLD)
                 .build()
-        val started = System.nanoTime()
+        val startedNanos = System.nanoTime()
         try {
             client.updateItem(request)
         } catch (failure: ConditionalCheckFailedException) {
             // Nao e erro: o vigente tem precedencia maior ou igual. O timer cobre so a chamada ao banco, nao a classificacao.
-            record(CONDITION_FAILED, started)
-            return classify(snapshot, failure)
+            recordDuration(CONDITION_FAILED, startedNanos)
+            return classifyConflict(snapshot, failure)
         } catch (failure: RuntimeException) {
-            record(ERROR, started)
-            throw DynamoDbExceptionTranslator.forWrite(failure) ?: failure
+            recordDuration(ERROR, startedNanos)
+            throw DynamoDbExceptionTranslator.translateWriteFailure(failure) ?: failure
         }
-        record(APPLIED, started)
+        recordDuration(APPLIED, startedNanos)
         return ApplyResult.Applied
     }
 
-    private fun record(
+    private fun recordDuration(
         result: String,
         startedNanos: Long,
-    ) = durations.getValue(result).record(System.nanoTime() - startedNanos, TimeUnit.NANOSECONDS)
+    ) = writeTimers.getValue(result).record(System.nanoTime() - startedNanos, TimeUnit.NANOSECONDS)
 
-    private fun classify(
+    private fun classifyConflict(
         candidate: BalanceSnapshot,
         failure: ConditionalCheckFailedException,
     ): ApplyResult {
-        val current = if (failure.hasItem()) failure.item() else fetchCurrent(candidate)
+        val current = if (failure.hasItem()) failure.item() else fetchCurrentItem(candidate)
         val currentTimestamp = current.long(BalanceAttributes.LAST_TX_TS_MICROS)
         val currentTransactionId = current.text(BalanceAttributes.LAST_TX_ID)
         val byTimestamp = currentTimestamp.compareTo(candidate.precedence.timestamp.micros)
         val byTransactionId = currentTransactionId.compareTo(candidate.precedence.transactionId.value)
-        val comparison = if (byTimestamp != 0) byTimestamp else byTransactionId
+        val currentComparedToCandidate = if (byTimestamp != 0) byTimestamp else byTransactionId
         return when {
-            comparison == 0 -> ApplyResult.Duplicate(conflicting = diverges(candidate, current))
-            comparison > 0 -> ApplyResult.Obsolete
+            currentComparedToCandidate == 0 -> ApplyResult.Duplicate(conflicting = hasDivergentContent(candidate, current))
+            currentComparedToCandidate > 0 -> ApplyResult.Obsolete
             // A condicao falhou mas o vigente e inferior ao evento: contradicao, nao indisponibilidade. Reentregar para sempre
             // (transitoria) bloquearia a particao se a causa fosse permanente (p.ex. item gravado fora do padrao); por isso e
             // falha interna, "nao classificada" no consumer: 3 entregas e DLT `unprocessable_event`, com log e metrica.
@@ -107,7 +107,7 @@ class DynamoDbBalanceSnapshotWriter(
     }
 
     /** Caminho raro: a excecao veio sem o item; uma unica leitura fortemente consistente o obtem. Item ausente e transitorio. */
-    private fun fetchCurrent(candidate: BalanceSnapshot): Map<String, AttributeValue> {
+    private fun fetchCurrentItem(candidate: BalanceSnapshot): Map<String, AttributeValue> {
         val request =
             GetItemRequest
                 .builder()
@@ -119,14 +119,14 @@ class DynamoDbBalanceSnapshotWriter(
             try {
                 client.getItem(request)
             } catch (failure: RuntimeException) {
-                throw DynamoDbExceptionTranslator.forWrite(failure) ?: failure
+                throw DynamoDbExceptionTranslator.translateWriteFailure(failure) ?: failure
             }
         if (!response.hasItem()) throw BalanceStoreUnavailableException(StoreFailureCause.UNAVAILABLE)
         return response.item()
     }
 
     /** Conteudo divergente de um mesmo evento (data-model 4.4): dono, situacao, moeda ou saldo (`compareTo`, nao `equals`). */
-    private fun diverges(
+    private fun hasDivergentContent(
         candidate: BalanceSnapshot,
         current: Map<String, AttributeValue>,
     ): Boolean =
@@ -169,7 +169,7 @@ class DynamoDbBalanceSnapshotWriter(
                 .builder("balance.store.write.duration")
                 .description("Latencia da UpdateItem condicional do snapshot")
                 .tag("result", result)
-                .serviceLevelObjectives(*StoreLatencyObjectives.DURATIONS)
+                .serviceLevelObjectives(*StoreLatencyObjectives.OBJECTIVES)
                 .register(registry)
 
         const val UPDATE_EXPRESSION =

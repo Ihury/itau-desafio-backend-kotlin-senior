@@ -51,7 +51,7 @@ class FutureTimestampToleranceTest {
         val failure = assertFailsWith<InvalidEventException> { service().process(transactionEvent(timestampMicros = beyond)) }
 
         assertEquals(RejectionReason.INVALID_TIMESTAMP, failure.reason)
-        assertEquals("transaction.timestamp", failure.detail)
+        assertEquals("transaction.timestamp", failure.fieldPath)
         assertNull(store.current(account), "o armazenamento nao pode ser tocado")
         assertEquals(emptyList(), metrics.outcomes)
     }
@@ -66,7 +66,7 @@ class FutureTimestampToleranceTest {
             }
 
         assertEquals(RejectionReason.INVALID_TIMESTAMP, failure.reason)
-        assertEquals("account.created_at", failure.detail)
+        assertEquals("account.created_at", failure.fieldPath)
         assertNull(store.current(account))
     }
 
@@ -99,7 +99,7 @@ class FutureTimestampToleranceTest {
                 service().process(transactionEvent(timestampMicros = beyond, accountCreatedAtMicros = beyond))
             }
 
-        assertEquals("transaction.timestamp", failure.detail)
+        assertEquals("transaction.timestamp", failure.fieldPath)
     }
 
     @Test
@@ -122,7 +122,7 @@ class FutureTimestampToleranceTest {
                     transactionEvent(transactionId = "22222222-b154-48b5-9f3e-553935cc4543", timestampMicros = threeMinutes),
                 )
             }
-        assertEquals("transaction.timestamp", failure.detail)
+        assertEquals("transaction.timestamp", failure.fieldPath)
     }
 
     @Test

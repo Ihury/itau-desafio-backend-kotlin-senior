@@ -21,11 +21,11 @@ class ResilienceConfig {
     fun circuitBreakerRegistry(properties: CircuitBreakerProperties): CircuitBreakerRegistry =
         CircuitBreakerRegistry.of(
             readCircuitBreakerConfig(
-                window = properties.window,
+                slidingWindow = properties.window,
                 minCalls = properties.minCalls,
-                failureRate = properties.failureRate,
-                slowCall = properties.slowCall,
-                slowRate = properties.slowRate,
+                failureRateThresholdPercent = properties.failureRate,
+                slowCallThreshold = properties.slowCall,
+                slowCallRateThresholdPercent = properties.slowRate,
                 openWait = properties.openWait,
                 halfOpenCalls = properties.halfOpenCalls,
             ),
@@ -33,7 +33,7 @@ class ResilienceConfig {
 
     @Bean
     fun dynamoDbReadCircuitBreaker(registry: CircuitBreakerRegistry): CircuitBreaker =
-        registry.circuitBreaker(DYNAMODB_READ).also { breaker ->
+        registry.circuitBreaker(DYNAMODB_READ_BREAKER_NAME).also { breaker ->
             // WARN so nas transicoes de estado (uma linha por transicao): com o circuito aberto as rejeicoes por requisicao nao logam.
             breaker.eventPublisher.onStateTransition { event ->
                 log.warn("circuit breaker {} changed state {} -> {}", event.circuitBreakerName, event.stateTransition.fromState, event.stateTransition.toState)
@@ -45,6 +45,6 @@ class ResilienceConfig {
 
     private companion object {
         private val log = LoggerFactory.getLogger(ResilienceConfig::class.java)
-        const val DYNAMODB_READ = "dynamodb-read"
+        const val DYNAMODB_READ_BREAKER_NAME = "dynamodb-read"
     }
 }

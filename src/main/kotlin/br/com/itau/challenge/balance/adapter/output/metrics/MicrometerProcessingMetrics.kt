@@ -18,9 +18,9 @@ import org.springframework.stereotype.Component
 class MicrometerProcessingMetrics(
     registry: MeterRegistry,
 ) : ProcessingMetrics {
-    private val processed = outcome(registry, "processed")
-    private val obsolete = outcome(registry, "obsolete")
-    private val duplicate = outcome(registry, "duplicate")
+    private val processedCounter = outcomeCounter(registry, "processed")
+    private val obsoleteCounter = outcomeCounter(registry, "obsolete")
+    private val duplicateCounter = outcomeCounter(registry, "duplicate")
     private val conflictingDuplicate =
         Counter
             .builder("balance.events.anomalies")
@@ -28,7 +28,7 @@ class MicrometerProcessingMetrics(
             .tag("type", "conflicting_duplicate")
             .register(registry)
 
-    private val rejected: Map<RejectionReason, Counter> =
+    private val rejectedCounters: Map<RejectionReason, Counter> =
         RejectionReason.entries.associateWith { reason ->
             Counter
                 .builder("balance.events")
@@ -37,13 +37,13 @@ class MicrometerProcessingMetrics(
                 .tag("reason", reason.code)
                 .register(registry)
         }
-    private val dltPublishFailures =
+    private val dltPublishFailuresCounter =
         Counter
             .builder("balance.dlt.publish.failures")
             .description("Falhas ao publicar no DLT (mensagem nao confirmada e reentregue)")
             .register(registry)
 
-    private val backpressure: Map<StoreFailureCause, Counter> =
+    private val backpressureCounters: Map<StoreFailureCause, Counter> =
         StoreFailureCause.entries.associateWith { cause ->
             Counter
                 .builder("balance.consumer.backpressure")
@@ -52,29 +52,29 @@ class MicrometerProcessingMetrics(
                 .register(registry)
         }
 
-    override fun applied() = processed.increment()
+    override fun processed() = processedCounter.increment()
 
-    override fun obsolete() = obsolete.increment()
+    override fun obsolete() = obsoleteCounter.increment()
 
     override fun duplicate(conflicting: Boolean) {
-        duplicate.increment()
+        duplicateCounter.increment()
         if (conflicting) conflictingDuplicate.increment()
     }
 
-    override fun rejected(reason: RejectionReason) = rejected.getValue(reason).increment()
+    override fun rejected(reason: RejectionReason) = rejectedCounters.getValue(reason).increment()
 
-    override fun dltPublishFailed() = dltPublishFailures.increment()
+    override fun dltPublishFailed() = dltPublishFailuresCounter.increment()
 
-    override fun backpressure(cause: StoreFailureCause) = backpressure.getValue(cause).increment()
+    override fun backpressure(cause: StoreFailureCause) = backpressureCounters.getValue(cause).increment()
 
-    private fun outcome(
+    private fun outcomeCounter(
         registry: MeterRegistry,
-        outcome: String,
+        label: String,
     ): Counter =
         Counter
             .builder("balance.events")
             .description("Desfecho de cada evento consumido")
-            .tag("outcome", outcome)
+            .tag("outcome", label)
             .tag("reason", "none")
             .register(registry)
 }

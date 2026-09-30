@@ -48,11 +48,11 @@ class ResilienceLoggingTest {
         val registry =
             CircuitBreakerRegistry.of(
                 readCircuitBreakerConfig(
-                    window = Duration.ofSeconds(10),
+                    slidingWindow = Duration.ofSeconds(10),
                     minCalls = 4,
-                    failureRate = 50f,
-                    slowCall = Duration.ofSeconds(5),
-                    slowRate = 80f,
+                    failureRateThresholdPercent = 50f,
+                    slowCallThreshold = Duration.ofSeconds(5),
+                    slowCallRateThresholdPercent = 80f,
                     openWait = Duration.ofSeconds(30),
                     halfOpenCalls = 2,
                 ),

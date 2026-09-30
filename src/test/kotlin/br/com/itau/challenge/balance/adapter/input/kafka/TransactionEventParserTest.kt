@@ -68,7 +68,7 @@ class TransactionEventParserTest {
     ) {
         val failure = rejection(text)
         assertEquals(expected, failure.reason, label)
-        assertEquals(detail, failure.detail, "detail de $label")
+        assertEquals(detail, failure.fieldPath, "detail de $label")
     }
 
     // ---- (a) caminho feliz
@@ -180,7 +180,7 @@ class TransactionEventParserTest {
 
         assertEquals(RejectionReason.MALFORMED_PAYLOAD, rejection(alone).reason)
         assertEquals(RejectionReason.MALFORMED_PAYLOAD, rejection(insideString).reason)
-        assertNull(rejection(insideString).detail)
+        assertNull(rejection(insideString).fieldPath)
     }
 
     @Test
@@ -406,7 +406,7 @@ class TransactionEventParserTest {
             val failure = rejection(payload)
 
             assertTrue(secret !in failure.message.orEmpty(), "message de $payload")
-            assertTrue(secret !in failure.detail.orEmpty(), "detail de $payload")
+            assertTrue(secret !in failure.fieldPath.orEmpty(), "detail de $payload")
             assertTrue(secret !in failure.toString(), "toString de $payload")
             assertNull(failure.cause, "cause de $payload")
             assertEquals(failure.reason.code, failure.message)

@@ -47,21 +47,21 @@ internal object BalanceAttributes {
 internal object BalanceItemMapper {
     fun keyOf(accountId: AccountId): Map<String, AttributeValue> =
         mapOf(
-            BalanceAttributes.PK to text("${BalanceAttributes.PK_PREFIX}${accountId.value}"),
-            BalanceAttributes.SK to text(BalanceAttributes.SK_VALUE),
+            BalanceAttributes.PK to stringAttribute("${BalanceAttributes.PK_PREFIX}${accountId.value}"),
+            BalanceAttributes.SK to stringAttribute(BalanceAttributes.SK_VALUE),
         )
 
     fun toItem(snapshot: BalanceSnapshot): Map<String, AttributeValue> =
         keyOf(snapshot.accountId) +
             mapOf(
-                BalanceAttributes.SCHEMA_VERSION to number(BalanceAttributes.CURRENT_SCHEMA_VERSION),
-                BalanceAttributes.OWNER_ID to text(snapshot.ownerId.value),
-                BalanceAttributes.ACCOUNT_STATUS to text(snapshot.status.name),
-                BalanceAttributes.BALANCE_AMOUNT to number(snapshot.balance.amount.toPlainString()),
-                BalanceAttributes.BALANCE_CURRENCY to text(snapshot.balance.currency.value),
-                BalanceAttributes.ACCOUNT_CREATED_AT_MICROS to number(snapshot.accountCreatedAt.micros.toString()),
-                BalanceAttributes.LAST_TX_TS_MICROS to number(snapshot.precedence.timestamp.micros.toString()),
-                BalanceAttributes.LAST_TX_ID to text(snapshot.precedence.transactionId.value),
+                BalanceAttributes.SCHEMA_VERSION to numberAttribute(BalanceAttributes.CURRENT_SCHEMA_VERSION),
+                BalanceAttributes.OWNER_ID to stringAttribute(snapshot.ownerId.value),
+                BalanceAttributes.ACCOUNT_STATUS to stringAttribute(snapshot.status.name),
+                BalanceAttributes.BALANCE_AMOUNT to numberAttribute(snapshot.balance.amount.toPlainString()),
+                BalanceAttributes.BALANCE_CURRENCY to stringAttribute(snapshot.balance.currency.value),
+                BalanceAttributes.ACCOUNT_CREATED_AT_MICROS to numberAttribute(snapshot.accountCreatedAt.micros.toString()),
+                BalanceAttributes.LAST_TX_TS_MICROS to numberAttribute(snapshot.precedence.timestamp.micros.toString()),
+                BalanceAttributes.LAST_TX_ID to stringAttribute(snapshot.precedence.transactionId.value),
             )
 
     fun fromItem(item: Map<String, AttributeValue>): BalanceSnapshot {
@@ -73,34 +73,34 @@ internal object BalanceItemMapper {
         if (!partitionKey.startsWith(BalanceAttributes.PK_PREFIX)) corrupted(BalanceAttributes.PK)
 
         return BalanceSnapshot(
-            accountId = parsed(BalanceAttributes.PK) { AccountId.parse(partitionKey.removePrefix(BalanceAttributes.PK_PREFIX)) },
-            ownerId = parsed(BalanceAttributes.OWNER_ID) { OwnerId.parse(item.text(BalanceAttributes.OWNER_ID)) },
-            status = parsed(BalanceAttributes.ACCOUNT_STATUS) { AccountStatus.parse(item.text(BalanceAttributes.ACCOUNT_STATUS)) },
+            accountId = readAttribute(BalanceAttributes.PK) { AccountId.parse(partitionKey.removePrefix(BalanceAttributes.PK_PREFIX)) },
+            ownerId = readAttribute(BalanceAttributes.OWNER_ID) { OwnerId.parse(item.text(BalanceAttributes.OWNER_ID)) },
+            status = readAttribute(BalanceAttributes.ACCOUNT_STATUS) { AccountStatus.parse(item.text(BalanceAttributes.ACCOUNT_STATUS)) },
             balance =
-                parsed(BalanceAttributes.BALANCE_AMOUNT) {
+                readAttribute(BalanceAttributes.BALANCE_AMOUNT) {
                     Money.of(
                         BigDecimal(item.number(BalanceAttributes.BALANCE_AMOUNT)),
                         CurrencyCode.parse(item.text(BalanceAttributes.BALANCE_CURRENCY)),
                     )
                 },
             accountCreatedAt =
-                parsed(BalanceAttributes.ACCOUNT_CREATED_AT_MICROS) {
+                readAttribute(BalanceAttributes.ACCOUNT_CREATED_AT_MICROS) {
                     EventInstant.fromPersisted(item.number(BalanceAttributes.ACCOUNT_CREATED_AT_MICROS).toLong())
                 },
             precedence =
                 Precedence(
                     timestamp =
-                        parsed(BalanceAttributes.LAST_TX_TS_MICROS) {
+                        readAttribute(BalanceAttributes.LAST_TX_TS_MICROS) {
                             EventInstant.fromPersisted(item.number(BalanceAttributes.LAST_TX_TS_MICROS).toLong())
                         },
-                    transactionId = parsed(BalanceAttributes.LAST_TX_ID) { TransactionId.parse(item.text(BalanceAttributes.LAST_TX_ID)) },
+                    transactionId = readAttribute(BalanceAttributes.LAST_TX_ID) { TransactionId.parse(item.text(BalanceAttributes.LAST_TX_ID)) },
                 ),
         )
     }
 
-    private fun text(value: String): AttributeValue = AttributeValue.builder().s(value).build()
+    private fun stringAttribute(value: String): AttributeValue = AttributeValue.builder().s(value).build()
 
-    private fun number(value: String): AttributeValue = AttributeValue.builder().n(value).build()
+    private fun numberAttribute(value: String): AttributeValue = AttributeValue.builder().n(value).build()
 
     private fun Map<String, AttributeValue>.text(name: String): String = this[name]?.s() ?: corrupted(name)
 
@@ -110,7 +110,7 @@ internal object BalanceItemMapper {
      * Executa a conversao de um atributo e a normaliza: falhas de validacao do dominio ou de parse numerico (`NumberFormatException`, inclusive expoente fora de faixa) viram
      * [IllegalStateException] sem causa (a causa de um parser pode conter o valor).
      */
-    private fun <T> parsed(
+    private fun <T> readAttribute(
         attribute: String,
         block: () -> T,
     ): T =

@@ -31,19 +31,19 @@ value class EventInstant private constructor(
         private const val NANOS_PER_MICRO = 1_000L
 
         /** `transaction.timestamp` >= 2000-01-01T00:00:00Z. */
-        val TRANSACTION_MINIMUM: Instant = Instant.parse("2000-01-01T00:00:00Z")
+        val DEFAULT_TRANSACTION_MINIMUM: Instant = Instant.parse("2000-01-01T00:00:00Z")
 
         /** `account.created_at` >= 1900-01-01T00:00:00Z. */
-        val ACCOUNT_CREATED_AT_MINIMUM: Instant = Instant.parse("1900-01-01T00:00:00Z")
+        val DEFAULT_ACCOUNT_CREATED_AT_MINIMUM: Instant = Instant.parse("1900-01-01T00:00:00Z")
 
         fun transactionTimestamp(
             micros: Long,
-            minimum: Instant = TRANSACTION_MINIMUM,
+            minimum: Instant = DEFAULT_TRANSACTION_MINIMUM,
         ): EventInstant = of(micros, minimum)
 
         fun accountCreatedAt(
             micros: Long,
-            minimum: Instant = ACCOUNT_CREATED_AT_MINIMUM,
+            minimum: Instant = DEFAULT_ACCOUNT_CREATED_AT_MINIMUM,
         ): EventInstant = of(micros, minimum)
 
         /**

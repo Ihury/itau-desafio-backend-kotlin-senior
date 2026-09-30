@@ -49,11 +49,11 @@ class CircuitBreakingBalanceSnapshotReaderTest {
         CircuitBreaker.of(
             "test",
             readCircuitBreakerConfig(
-                window = Duration.ofSeconds(10),
+                slidingWindow = Duration.ofSeconds(10),
                 minCalls = minCalls,
-                failureRate = failureRate,
-                slowCall = slowCall,
-                slowRate = slowRate,
+                failureRateThresholdPercent = failureRate,
+                slowCallThreshold = slowCall,
+                slowCallRateThresholdPercent = slowRate,
                 openWait = openWait,
                 halfOpenCalls = halfOpenCalls,
             ),

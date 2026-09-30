@@ -20,7 +20,7 @@ enum class FailureClass {
 /** Motivo e caminho do campo com que uma mensagem e isolada no DLT; nunca carrega valores do payload. */
 data class Rejection(
     val reason: RejectionReason,
-    val detail: String?,
+    val fieldPath: String?,
 )
 
 /**
@@ -39,7 +39,7 @@ object FailureClassifier {
     /** Motivo do isolamento: o do proprio evento invalido ou, para qualquer outra falha, `unprocessable_event` sem detalhe. */
     fun rejectionOf(failure: Throwable): Rejection =
         when (val root = unwrap(failure)) {
-            is InvalidEventException -> Rejection(root.reason, root.detail)
+            is InvalidEventException -> Rejection(root.reason, root.fieldPath)
             else -> Rejection(RejectionReason.UNPROCESSABLE_EVENT, null)
         }
 

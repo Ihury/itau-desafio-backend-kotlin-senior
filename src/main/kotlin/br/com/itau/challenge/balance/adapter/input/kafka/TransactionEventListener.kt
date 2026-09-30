@@ -32,11 +32,11 @@ class TransactionEventListener(
     private val processTransactionEvent: ProcessTransactionEventUseCase,
     meterRegistry: MeterRegistry,
 ) {
-    private val durations: Map<String, Timer> = OUTCOMES.associateWith { outcome -> ingestTimer(meterRegistry, outcome) }
+    private val ingestTimers: Map<String, Timer> = OUTCOMES.associateWith { outcome -> ingestTimer(meterRegistry, outcome) }
 
     @KafkaListener(id = LISTENER_ID, idIsGroup = false, topics = ["\${balance.events.topic}"])
     fun onMessage(record: ConsumerRecord<ByteArray?, ByteArray?>) {
-        val started = System.nanoTime()
+        val startedNanos = System.nanoTime()
         var outcome = ERROR
         MDC.put(CORRELATION_ID, "${record.topic()}-${record.partition()}@${record.offset()}")
         try {
@@ -48,7 +48,7 @@ class TransactionEventListener(
             outcome = REJECTED
             throw invalid
         } finally {
-            durations.getValue(outcome).record(System.nanoTime() - started, TimeUnit.NANOSECONDS)
+            ingestTimers.getValue(outcome).record(System.nanoTime() - startedNanos, TimeUnit.NANOSECONDS)
             MDC.remove(TRANSACTION_ID)
             MDC.remove(ACCOUNT_ID)
             MDC.remove(CORRELATION_ID)

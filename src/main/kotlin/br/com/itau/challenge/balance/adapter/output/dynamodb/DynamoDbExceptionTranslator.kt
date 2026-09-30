@@ -43,18 +43,19 @@ internal object DynamoDbExceptionTranslator {
     private const val CREDENTIALS_MESSAGE_PREFIX = "Unable to load credentials"
 
     private const val MAX_CAUSE_DEPTH = 5
+    private const val VALIDATION_EXCEPTION_CODE = "ValidationException"
     private val safeErrorCode = Regex("[A-Za-z0-9_.#:-]{1,100}")
 
-    fun forRead(failure: Throwable): BalanceStoreUnavailableException? = if (failure is SdkException) unavailable(failure) else null
+    fun translateReadFailure(failure: Throwable): BalanceStoreUnavailableException? = if (failure is SdkException) toUnavailable(failure) else null
 
-    fun forWrite(failure: Throwable): RuntimeException? =
+    fun translateWriteFailure(failure: Throwable): RuntimeException? =
         when {
             failure !is SdkException -> null
             isValidationError(failure) -> BalanceStoreRejectedException(failure)
-            else -> unavailable(failure)
+            else -> toUnavailable(failure)
         }
 
-    private fun unavailable(failure: SdkException) = BalanceStoreUnavailableException(causeOf(failure), failure, detailsOf(failure))
+    private fun toUnavailable(failure: SdkException) = BalanceStoreUnavailableException(causeOf(failure), failure, detailsOf(failure))
 
     private fun detailsOf(failure: SdkException): StoreFailureDetails =
         StoreFailureDetails(
@@ -90,7 +91,7 @@ internal object DynamoDbExceptionTranslator {
                 .take(MAX_CAUSE_DEPTH)
                 .any { it.message?.startsWith(CREDENTIALS_MESSAGE_PREFIX) == true }
 
-    private fun isValidationError(failure: SdkException): Boolean = errorCode(failure) == "ValidationException"
+    private fun isValidationError(failure: SdkException): Boolean = errorCode(failure) == VALIDATION_EXCEPTION_CODE
 
     /** Codigo do erro sem o prefixo de namespace (`com.amazon.coral.validate#ValidationException`). */
     private fun errorCode(failure: SdkException): String? =

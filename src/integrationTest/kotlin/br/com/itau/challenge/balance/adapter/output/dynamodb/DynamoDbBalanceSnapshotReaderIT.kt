@@ -64,7 +64,7 @@ class DynamoDbBalanceSnapshotReaderIT {
 
         val snapshot = assertNotNull(reader.find(AccountId.parse(accountId)))
         assertEquals(0, BigDecimal("183.10").compareTo(snapshot.balance.amount))
-        assertEquals(BigDecimal("183.10"), snapshot.balance.withCurrencyFractionDigits())
+        assertEquals(BigDecimal("183.10"), snapshot.balance.paddedToCurrencyScale())
     }
 
     @Test
@@ -84,7 +84,7 @@ class DynamoDbBalanceSnapshotReaderIT {
                 put(item(accountId, balanceAmount = "123456789012345678901234567890123456789"))
             }
 
-        val translated = DynamoDbExceptionTranslator.forWrite(failure)
+        val translated = DynamoDbExceptionTranslator.translateWriteFailure(failure)
         assertIs<BalanceStoreRejectedException>(translated, "o codigo de erro real do DynamoDB Local e reconhecido como ValidationException")
     }
 

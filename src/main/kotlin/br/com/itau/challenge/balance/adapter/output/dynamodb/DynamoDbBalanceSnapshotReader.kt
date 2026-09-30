@@ -28,12 +28,12 @@ class DynamoDbBalanceSnapshotReader(
     private val consistentRead: Boolean,
     meterRegistry: MeterRegistry,
 ) : BalanceSnapshotReader {
-    private val corrupted =
+    private val corruptedItems =
         Counter
             .builder("balance.store.read.corrupted")
             .description("Itens do snapshot ilegiveis ou fora dos limites do dominio (falha interna; alertar)")
             .register(meterRegistry)
-    private val durations: Map<String, Timer> = RESULTS.associateWith { result -> readTimer(meterRegistry, result) }
+    private val readTimers: Map<String, Timer> = RESULTS.associateWith { result -> readTimer(meterRegistry, result) }
 
     override fun find(accountId: AccountId): BalanceSnapshot? {
         val request =
@@ -43,29 +43,29 @@ class DynamoDbBalanceSnapshotReader(
                 .key(BalanceItemMapper.keyOf(accountId))
                 .consistentRead(consistentRead)
                 .build()
-        val started = System.nanoTime()
+        val startedNanos = System.nanoTime()
         val response =
             try {
                 client.getItem(request)
             } catch (failure: RuntimeException) {
-                record(ERROR, started)
-                throw DynamoDbExceptionTranslator.forRead(failure) ?: failure
+                recordDuration(ERROR, startedNanos)
+                throw DynamoDbExceptionTranslator.translateReadFailure(failure) ?: failure
             }
-        record(if (response.hasItem()) FOUND else NOT_FOUND, started)
+        recordDuration(if (response.hasItem()) FOUND else NOT_FOUND, startedNanos)
         if (!response.hasItem()) return null
         return try {
             BalanceItemMapper.fromItem(response.item())
         } catch (failure: IllegalStateException) {
-            corrupted.increment()
+            corruptedItems.increment()
             log.error("balance item cannot be mapped accountId={} reason={}", accountId, failure.message)
             throw failure
         }
     }
 
-    private fun record(
+    private fun recordDuration(
         result: String,
         startedNanos: Long,
-    ) = durations.getValue(result).record(System.nanoTime() - startedNanos, TimeUnit.NANOSECONDS)
+    ) = readTimers.getValue(result).record(System.nanoTime() - startedNanos, TimeUnit.NANOSECONDS)
 
     private companion object {
         private val log = LoggerFactory.getLogger(DynamoDbBalanceSnapshotReader::class.java)
@@ -83,7 +83,7 @@ class DynamoDbBalanceSnapshotReader(
                 .builder("balance.store.read.duration")
                 .description("Latencia do GetItem do snapshot")
                 .tag("result", result)
-                .serviceLevelObjectives(*StoreLatencyObjectives.DURATIONS)
+                .serviceLevelObjectives(*StoreLatencyObjectives.OBJECTIVES)
                 .register(registry)
     }
 }

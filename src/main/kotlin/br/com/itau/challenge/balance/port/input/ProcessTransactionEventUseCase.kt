@@ -8,6 +8,7 @@ interface ProcessTransactionEventUseCase {
     /**
      * Mantem o snapshot da conta como a projecao do evento de maior precedencia e contabiliza o desfecho.
      *
+     * @throws br.com.itau.challenge.balance.domain.exception.InvalidEventException `transaction.timestamp` ou `account.created_at` alem de agora + tolerancia (nenhum desfecho contabilizado)
      * @throws br.com.itau.challenge.balance.domain.exception.BalanceStoreUnavailableException armazenamento indisponivel (transitoria; nenhum desfecho contabilizado)
      * @throws br.com.itau.challenge.balance.domain.exception.BalanceStoreRejectedException o armazenamento rejeitou a escrita (nenhum desfecho contabilizado)
      */

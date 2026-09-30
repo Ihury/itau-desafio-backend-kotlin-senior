@@ -15,18 +15,18 @@ class RejectionHeaders(
 ) {
     fun of(
         reason: RejectionReason,
-        detail: String?,
+        fieldPath: String?,
     ): Headers {
         val headers = RecordHeaders()
-        headers.add(REASON, reason.code.toByteArray(Charsets.UTF_8))
-        if (detail != null) headers.add(DETAIL, detail.toByteArray(Charsets.UTF_8))
-        headers.add(REJECTED_AT, clock.instant().toString().toByteArray(Charsets.UTF_8))
+        headers.add(REASON_HEADER, reason.code.toByteArray(Charsets.UTF_8))
+        if (fieldPath != null) headers.add(FIELD_PATH_HEADER, fieldPath.toByteArray(Charsets.UTF_8))
+        headers.add(REJECTED_AT_HEADER, clock.instant().toString().toByteArray(Charsets.UTF_8))
         return headers
     }
 
     companion object {
-        const val REASON = "x-rejection-reason"
-        const val DETAIL = "x-rejection-detail"
-        const val REJECTED_AT = "x-rejected-at"
+        const val REASON_HEADER = "x-rejection-reason"
+        const val FIELD_PATH_HEADER = "x-rejection-detail"
+        const val REJECTED_AT_HEADER = "x-rejected-at"
     }
 }

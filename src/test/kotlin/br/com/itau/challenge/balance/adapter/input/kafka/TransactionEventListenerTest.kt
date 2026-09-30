@@ -140,7 +140,7 @@ class TransactionEventListenerTest {
         val thrown = assertFailsWith<InvalidEventException> { listener(useCase).onMessage(record(null)) }
 
         assertEquals(RejectionReason.MALFORMED_PAYLOAD, thrown.reason)
-        assertNull(thrown.detail)
+        assertNull(thrown.fieldPath)
         assertTrue(useCase.events.isEmpty())
     }
 

@@ -224,7 +224,7 @@ class ArchitectureTest {
         val CATCH = Regex("""catch\s*\(([^)]*)\)""")
         val BLOCK_COMMENT = Regex("""/\*.*?\*/""", RegexOption.DOT_MATCHES_ALL)
         val LINE_COMMENT = Regex("""(?m)^\s*//.*$|(?<=\s)//[^\n]*$""")
-        val ACCOUNTED = Regex("""\bthrow\b|\blog\.\w+\(|\.increment\(|\brecord\(|\bmetrics\.""")
+        val ACCOUNTED = Regex("""\bthrow\b|\blog\.\w+\(|\.increment\(|\brecord(?:Duration)?\(|\bmetrics\.""")
         val NOTHING_FUNCTION = Regex("""fun\s+(?:[\w<>?,. ]+\.)?(\w+)\([^)]*\)\s*:\s*Nothing""")
         const val ROOT = "br.com.itau.challenge"
         val LAYERS_WITH_DIRECTION = listOf("domain", "port", "application", "adapter")

@@ -23,7 +23,7 @@ class RecordingProcessingMetrics : ProcessingMetrics {
     /** Desfechos na ordem: `applied`, `obsolete`, `duplicate`, `duplicate(conflicting)` ou `rejected(<codigo>)`. */
     val outcomes: List<String> get() = recorded.toList()
 
-    override fun applied() {
+    override fun processed() {
         recorded += "applied"
     }
 

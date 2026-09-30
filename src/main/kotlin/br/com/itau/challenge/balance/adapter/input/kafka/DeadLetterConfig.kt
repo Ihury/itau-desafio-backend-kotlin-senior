@@ -85,13 +85,13 @@ class DeadLetterConfig {
     internal fun deadLetterErrorHandler(
         template: KafkaOperations<ByteArray, ByteArray>,
         dltTopic: String,
-        sendTimeout: Duration,
+        waitForSendResultTimeout: Duration,
         clock: Clock,
         metrics: ProcessingMetrics,
         backOff: BackOffProperties,
         backOffHandler: BackOffHandler,
     ): DefaultErrorHandler {
-        val recoverer = deadLetterRecoverer(template, dltTopic, sendTimeout, RejectionHeaders(clock))
+        val recoverer = deadLetterRecoverer(template, dltTopic, waitForSendResultTimeout, RejectionHeaders(clock))
         // O backoff padrao (o da transitoria) NUNCA e STOP: com um padrao que esgota, o Spring pularia a funcao por classe e
         // recuperaria toda falha na primeira entrega.
         val handler = DefaultErrorHandler(recoverer, transientBackOff(backOff), backOffHandler)
@@ -106,21 +106,21 @@ class DeadLetterConfig {
     private fun deadLetterRecoverer(
         template: KafkaOperations<ByteArray, ByteArray>,
         dltTopic: String,
-        sendTimeout: Duration,
+        waitForSendResultTimeout: Duration,
         rejectionHeaders: RejectionHeaders,
     ): DeadLetterPublishingRecoverer {
         // Particao -1: o particionador escolhe (o padrao "mesma particao" falharia com 12 -> 3 particoes).
         val recoverer = DeadLetterPublishingRecoverer(template) { _, _ -> TopicPartition(dltTopic, -1) }
         recoverer.setHeadersFunction { _, failure ->
             val rejection = FailureClassifier.rejectionOf(failure)
-            rejectionHeaders.of(rejection.reason, rejection.detail)
+            rejectionHeaders.of(rejection.reason, rejection.fieldPath)
         }
         // Mensagens de excecao de parsers podem conter trechos do payload: o DLT nao amplia essa superficie.
         recoverer.excludeHeader(HeadersToAdd.EXCEPTION, HeadersToAdd.EX_CAUSE, HeadersToAdd.EX_MSG, HeadersToAdd.EX_STACKTRACE)
         // Com particao nao definida nao ha o que verificar (e a verificacao consultaria os metadados de um topico ausente).
         recoverer.setVerifyPartition(false)
         recoverer.setFailIfSendResultIsError(true)
-        recoverer.setWaitForSendResultTimeout(sendTimeout)
+        recoverer.setWaitForSendResultTimeout(waitForSendResultTimeout)
         // Por padrao o Spring espera `delivery.timeout.ms + 5 s` (>= 125 s), ignorando `waitForSendResultTimeout` se menor.
         recoverer.setTimeoutBuffer(0)
         return recoverer
@@ -143,7 +143,7 @@ class DeadLetterConfig {
         settings: BackOffProperties,
     ): BackOff =
         when (FailureClassifier.classify(failure)) {
-            FailureClass.PERMANENT -> FixedBackOff(0L, 0L)
+            FailureClass.PERMANENT -> FixedBackOff(NO_RETRY, NO_RETRY)
             FailureClass.TRANSIENT -> transientBackOff(settings)
             FailureClass.UNCLASSIFIED -> unclassifiedBackOff()
         }
@@ -169,9 +169,9 @@ class DeadLetterConfig {
                         // Diagnostico sem a mensagem livre do SDK nem payload. Configuracao/credencial (MISCONFIGURED) sobe a ERROR: continua
                         // transitoria (retentada sem limite, nunca DLT), mas exige acao de quem opera.
                         if (failure.failureCause == StoreFailureCause.MISCONFIGURED) {
-                            log.error("store unavailable, container paused for the back off {} attempt={} {}", coordinates(record), deliveryAttempt, failure.describe())
+                            log.error("store unavailable, container paused for the back off {} attempt={} {}", coordinates(record), deliveryAttempt, failure.logDescription())
                         } else {
-                            log.warn("store unavailable, container paused for the back off {} attempt={} {}", coordinates(record), deliveryAttempt, failure.describe())
+                            log.warn("store unavailable, container paused for the back off {} attempt={} {}", coordinates(record), deliveryAttempt, failure.logDescription())
                         }
                     }
                     // Evento invalido e um desfecho esperado (permanente, sem reentrega): o isolamento e logado em `recovered`.
@@ -195,7 +195,7 @@ class DeadLetterConfig {
             val rejection = FailureClassifier.rejectionOf(exception ?: IllegalStateException())
             metrics.rejected(rejection.reason)
             correlated(record) {
-                log.warn("message isolated in the dlt {} reason={} detail={}", coordinates(record), rejection.reason.code, rejection.detail)
+                log.warn("message isolated in the dlt {} reason={} detail={}", coordinates(record), rejection.reason.code, rejection.fieldPath)
             }
         }
 
@@ -214,11 +214,11 @@ class DeadLetterConfig {
 
         private fun correlated(
             record: ConsumerRecord<*, *>,
-            log: () -> Unit,
+            block: () -> Unit,
         ) {
             MDC.put(CORRELATION_ID, coordinates(record))
             try {
-                log()
+                block()
             } finally {
                 MDC.remove(CORRELATION_ID)
             }
@@ -227,6 +227,7 @@ class DeadLetterConfig {
 
     private companion object {
         const val TRANSIENT_MULTIPLIER = 2.0
+        const val NO_RETRY = 0L
         const val UNCLASSIFIED_INTERVAL_MS = 100L
         const val UNCLASSIFIED_RETRIES = 2L
         const val CORRELATION_ID = "correlationId"

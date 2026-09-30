@@ -23,8 +23,8 @@ class CorrelationIdFilter : OncePerRequestFilter() {
         response: HttpServletResponse,
         filterChain: FilterChain,
     ) {
-        val supplied = request.getHeader(HEADER)
-        val correlationId = if (supplied != null && VALID.matches(supplied)) supplied else UUID.randomUUID().toString()
+        val suppliedId = request.getHeader(HEADER)
+        val correlationId = if (suppliedId != null && VALID_ID.matches(suppliedId)) suppliedId else UUID.randomUUID().toString()
         response.setHeader(HEADER, correlationId)
         MDC.put(MDC_CORRELATION_ID, correlationId)
         try {
@@ -41,6 +41,6 @@ class CorrelationIdFilter : OncePerRequestFilter() {
         const val MDC_CORRELATION_ID = "correlationId"
         const val MDC_ACCOUNT_ID = "accountId"
 
-        private val VALID = Regex(PATTERN)
+        private val VALID_ID = Regex(PATTERN)
     }
 }

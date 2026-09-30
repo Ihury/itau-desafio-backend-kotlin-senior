@@ -84,7 +84,7 @@ class BalanceItemMapperTest {
         val restored = BalanceItemMapper.fromItem(item)
 
         assertEquals(snapshot(balanceAmount = "183.10").balance, restored.balance)
-        assertEquals(BigDecimal("183.10"), restored.balance.withCurrencyFractionDigits())
+        assertEquals(BigDecimal("183.10"), restored.balance.paddedToCurrencyScale())
         assertEquals(0, BigDecimal("183.1").compareTo(restored.balance.amount))
     }
 

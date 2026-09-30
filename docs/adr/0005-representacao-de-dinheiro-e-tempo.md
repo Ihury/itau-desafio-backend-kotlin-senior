@@ -24,7 +24,7 @@ zeros à direita; JSON Number não carrega escala (RFC 8259); os timestamps da o
   Number (a escala recebida é artefato do serializador) e a Constitution IV a exclui expressamente de "perda de valor". Por isso
   `Money` compara por valor numérico (`compareTo == 0`, `hashCode` sobre `stripTrailingZeros()`).
 - **Apresentação**: a escala é completada até as casas padrão da moeda somente na resposta, sem nunca arredondar
-  (`Money.withCurrencyFractionDigits()`: BRL `183.1` vira `183.10`, `10.123` permanece `10.123`, JPY `500` permanece `500`, moedas
+  (`Money.paddedToCurrencyScale()`: BRL `183.1` vira `183.10`, `10.123` permanece `10.123`, JPY `500` permanece `500`, moedas
   com `-1` casas, como XAU, ficam inalteradas). A serialização usa notação plana.
 - **Teto de 38 dígitos**: precisão de até 38 dígitos significativos (medida por `BigDecimal.precision()` do valor recebido;
   zeros à direita contam, conservador) e escala positiva de até 38. Escala negativa (`1E+3`) é expandida para escala zero só se

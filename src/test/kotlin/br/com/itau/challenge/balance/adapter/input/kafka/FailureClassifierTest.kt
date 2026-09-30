@@ -58,7 +58,7 @@ class FailureClassifierTest {
         val rejection = FailureClassifier.rejectionOf(wrapped(InvalidEventException(RejectionReason.INVALID_CURRENCY, "transaction.currency")))
 
         assertEquals(RejectionReason.INVALID_CURRENCY, rejection.reason)
-        assertEquals("transaction.currency", rejection.detail)
+        assertEquals("transaction.currency", rejection.fieldPath)
     }
 
     @Test
@@ -66,7 +66,7 @@ class FailureClassifierTest {
         val rejection = FailureClassifier.rejectionOf(wrapped(IllegalStateException("x")))
 
         assertEquals(RejectionReason.UNPROCESSABLE_EVENT, rejection.reason)
-        assertNull(rejection.detail)
+        assertNull(rejection.fieldPath)
     }
 
     @Test
