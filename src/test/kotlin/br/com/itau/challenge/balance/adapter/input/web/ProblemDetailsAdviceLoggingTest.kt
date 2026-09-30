@@ -1,5 +1,6 @@
 package br.com.itau.challenge.balance.adapter.input.web
 
+import br.com.itau.challenge.balance.domain.exception.BalanceStoreCircuitOpenException
 import br.com.itau.challenge.balance.domain.exception.BalanceStoreUnavailableException
 import br.com.itau.challenge.balance.domain.model.StoreFailureCause
 import br.com.itau.challenge.balance.domain.model.StoreFailureDetails
@@ -59,6 +60,27 @@ class ProblemDetailsAdviceLoggingTest {
         assertTrue("exception=software.amazon.awssdk.core.exception.SdkClientException" in line.formattedMessage, line.formattedMessage)
         assertFalse("segredo" in line.formattedMessage)
         assertNull(line.throwableProxy, "sem pilha")
+    }
+
+    @Test
+    fun `fifty rejections by the open circuit answer 503 with retry after and log no warn or error, only debug and without stack`() {
+        val rejection = BalanceStoreCircuitOpenException(SdkClientException.builder().message("segredo").build())
+
+        repeat(50) {
+            val response = advice.storeUnavailable(rejection, request)
+            assertEquals(HttpStatus.SERVICE_UNAVAILABLE, response.statusCode)
+            assertEquals("10", response.headers.getFirst("Retry-After"))
+        }
+
+        assertTrue(appender.list.none { it.level.isGreaterOrEqual(Level.INFO) }, "nenhum INFO/WARN/ERROR: ${appender.list.map { it.formattedMessage }}")
+        assertTrue(appender.list.all { it.level == Level.DEBUG && it.throwableProxy == null })
+    }
+
+    @Test
+    fun `fifty real failures still log fifty warns because each one is a real read failure`() {
+        repeat(50) { advice.storeUnavailable(unavailable(StoreFailureCause.TIMEOUT, StoreFailureDetails("software.amazon.awssdk.core.exception.ApiCallTimeoutException")), request) }
+
+        assertEquals(50, appender.list.count { it.level == Level.WARN })
     }
 
     @Test

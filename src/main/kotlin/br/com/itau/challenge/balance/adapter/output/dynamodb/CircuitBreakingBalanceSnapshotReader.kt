@@ -1,9 +1,9 @@
 package br.com.itau.challenge.balance.adapter.output.dynamodb
 
+import br.com.itau.challenge.balance.domain.exception.BalanceStoreCircuitOpenException
 import br.com.itau.challenge.balance.domain.exception.BalanceStoreUnavailableException
 import br.com.itau.challenge.balance.domain.model.AccountId
 import br.com.itau.challenge.balance.domain.model.BalanceSnapshot
-import br.com.itau.challenge.balance.domain.model.StoreFailureCause
 import br.com.itau.challenge.balance.port.output.BalanceSnapshotReader
 import io.github.resilience4j.circuitbreaker.CallNotPermittedException
 import io.github.resilience4j.circuitbreaker.CircuitBreaker
@@ -14,7 +14,8 @@ import java.time.Duration
  * Configuracao do circuit breaker da leitura: janela por tempo, abertura por taxa de falha ou de chamadas lentas,
  * transicao automatica OPEN -> HALF_OPEN. So [BalanceStoreUnavailableException] conta como falha: item encontrado,
  * ausente (`null`) e falhas internas como [IllegalStateException] (item corrompido: o banco respondeu) contam como
- * sucesso, pois nao indicam indisponibilidade do armazenamento.
+ * sucesso, pois nao indicam indisponibilidade do armazenamento. A pilha da rejeicao com o circuito aberto e desligada
+ * (`writableStackTraceEnabled(false)`): ela ocorre por requisicao e a pilha so custaria CPU e ruido.
  */
 @Suppress("LongParameterList")
 fun readCircuitBreakerConfig(
@@ -38,11 +39,13 @@ fun readCircuitBreakerConfig(
         .automaticTransitionFromOpenToHalfOpenEnabled(true)
         .permittedNumberOfCallsInHalfOpenState(halfOpenCalls)
         .recordExceptions(BalanceStoreUnavailableException::class.java)
+        .writableStackTraceEnabled(false)
         .build()
 
 /**
  * Decorator do [BalanceSnapshotReader] com circuit breaker (falha rapida, Constitution V). Com o circuito aberto a chamada
- * falha com [BalanceStoreUnavailableException] SEM invocar o delegate; jamais devolve `null` nem saldo presumido.
+ * falha com [BalanceStoreCircuitOpenException] (uma [BalanceStoreUnavailableException]) SEM invocar o delegate; jamais devolve
+ * `null` nem saldo presumido.
  */
 class CircuitBreakingBalanceSnapshotReader(
     private val delegate: BalanceSnapshotReader,
@@ -52,6 +55,6 @@ class CircuitBreakingBalanceSnapshotReader(
         try {
             circuitBreaker.executeSupplier { delegate.find(accountId) }
         } catch (rejected: CallNotPermittedException) {
-            throw BalanceStoreUnavailableException(StoreFailureCause.UNAVAILABLE, rejected)
+            throw BalanceStoreCircuitOpenException(rejected)
         }
 }

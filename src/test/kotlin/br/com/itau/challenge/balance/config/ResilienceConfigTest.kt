@@ -12,6 +12,7 @@ import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.test.context.ActiveProfiles
 import java.time.Duration
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
@@ -62,6 +63,7 @@ class ResilienceConfigTest {
         assertEquals(Duration.ofMillis(500), config.slowCallDurationThreshold)
         assertEquals(5, config.permittedNumberOfCallsInHalfOpenState)
         assertTrue(config.isAutomaticTransitionFromOpenToHalfOpenEnabled)
+        assertFalse(config.isWritableStackTraceEnabled, "a rejeicao com o circuito aberto nao preenche pilha (custo e ruido por requisicao)")
     }
 
     @Test

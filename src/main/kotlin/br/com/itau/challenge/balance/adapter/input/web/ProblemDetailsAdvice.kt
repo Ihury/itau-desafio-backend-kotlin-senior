@@ -2,6 +2,7 @@ package br.com.itau.challenge.balance.adapter.input.web
 
 import br.com.itau.challenge.balance.domain.exception.AccountDisabledException
 import br.com.itau.challenge.balance.domain.exception.AccountNotFoundException
+import br.com.itau.challenge.balance.domain.exception.BalanceStoreCircuitOpenException
 import br.com.itau.challenge.balance.domain.exception.BalanceStoreUnavailableException
 import br.com.itau.challenge.balance.domain.model.StoreFailureCause
 import jakarta.servlet.http.HttpServletRequest
@@ -52,11 +53,13 @@ class ProblemDetailsAdvice(
         exception: BalanceStoreUnavailableException,
         request: HttpServletRequest,
     ): ResponseEntity<ProblemDetail> {
-        // Diagnostico sem a mensagem livre do SDK. Configuracao/credencial (MISCONFIGURED) sobe a ERROR: o 503 e o mesmo, mas exige acao.
-        if (exception.failureCause == StoreFailureCause.MISCONFIGURED) {
-            log.error("balance store misconfigured {}", exception.describe())
-        } else {
-            log.warn("balance store unavailable {}", exception.describe())
+        // A rejeicao com o circuito aberto e esperada e ocorre por requisicao: DEBUG, sem pilha. O WARN fica para as falhas REAIS de
+        // leitura e para as transicoes de estado do breaker (`ResilienceConfig`). O diagnostico nunca traz a mensagem livre do SDK;
+        // configuracao/credencial (MISCONFIGURED) sobe a ERROR: o 503 e o mesmo, mas exige acao de quem opera.
+        when {
+            exception is BalanceStoreCircuitOpenException -> log.debug("balance read rejected: circuit breaker open")
+            exception.failureCause == StoreFailureCause.MISCONFIGURED -> log.error("balance store misconfigured {}", exception.describe())
+            else -> log.warn("balance store unavailable {}", exception.describe())
         }
         return problem(
             request,

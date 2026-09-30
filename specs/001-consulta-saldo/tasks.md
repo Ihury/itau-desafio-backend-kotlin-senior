@@ -507,7 +507,7 @@ Os atalhos abaixo são expandidos nos caminhos deste arquivo; todos os caminhos 
 
 ### Commit C46: `fix(web): reduz ruido de log com o circuit breaker aberto`
 
-- [ ] T190 `ProblemDetailsAdvice.kt`, `CircuitBreakingBalanceSnapshotReader.kt`, `config/ResilienceConfig.kt`: rejeição por circuito aberto em DEBUG sem stack; WARN só nas transições de estado do breaker (`onStateTransition`) e nas falhas reais de leitura; `writableStackTraceEnabled(false)` no `CircuitBreakerConfig`; teste de que N rejeições não geram N linhas WARN e de que a transição gera exatamente uma
+- [X] T190 `ProblemDetailsAdvice.kt`, `CircuitBreakingBalanceSnapshotReader.kt`, `config/ResilienceConfig.kt`: rejeição por circuito aberto em DEBUG sem stack; WARN só nas transições de estado do breaker (`onStateTransition`) e nas falhas reais de leitura; `writableStackTraceEnabled(false)` no `CircuitBreakerConfig`; teste de que N rejeições não geram N linhas WARN e de que a transição gera exatamente uma
 - [ ] T191 `BackpressureConfig.kt` e `DeadLetterConfig.kt` (comentário/KDoc): o `ContainerPausingBackOffHandler` recebe o container PAI (`thisOrParentContainer`) e a pausa vale para TODAS as threads da instância, não só o filho que falhou (verificado no bytecode do Spring Kafka 4.1)
 
 ### Etapa 2 (documentação; não executar na etapa 1)

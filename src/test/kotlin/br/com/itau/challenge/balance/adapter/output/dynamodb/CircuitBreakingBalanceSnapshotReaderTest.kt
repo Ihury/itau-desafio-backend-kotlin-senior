@@ -1,5 +1,6 @@
 package br.com.itau.challenge.balance.adapter.output.dynamodb
 
+import br.com.itau.challenge.balance.domain.exception.BalanceStoreCircuitOpenException
 import br.com.itau.challenge.balance.domain.exception.BalanceStoreUnavailableException
 import br.com.itau.challenge.balance.domain.model.AccountId
 import br.com.itau.challenge.balance.domain.model.BalanceSnapshot
@@ -16,6 +17,7 @@ import java.time.Duration
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertSame
@@ -63,6 +65,30 @@ class CircuitBreakingBalanceSnapshotReaderTest {
         reader: BalanceSnapshotReader,
         times: Int,
     ) = repeat(times) { runCatching { reader.find(accountId) } }
+
+    @Test
+    fun `a rejection by the open circuit is a specific store unavailable without stack trace, still unavailable for the callers`() {
+        val circuit = breaker()
+        val reader = CircuitBreakingBalanceSnapshotReader(FakeReader { throw unavailable() }, circuit)
+        repeatFind(reader, 4)
+
+        val rejection = assertFailsWith<BalanceStoreCircuitOpenException> { reader.find(accountId) }
+
+        assertIs<BalanceStoreUnavailableException>(rejection)
+        assertEquals(StoreFailureCause.UNAVAILABLE, rejection.failureCause)
+        assertIs<CallNotPermittedException>(rejection.cause)
+        assertEquals(0, rejection.stackTrace.size, "sem pilha")
+        assertEquals(0, rejection.cause!!.stackTrace.size, "a CallNotPermittedException tambem nao preenche pilha")
+    }
+
+    @Test
+    fun `a real failure of the store keeps its own stack trace and is not a circuit rejection`() {
+        val reader = CircuitBreakingBalanceSnapshotReader(FakeReader { throw unavailable() }, breaker())
+
+        val failure = assertFailsWith<BalanceStoreUnavailableException> { reader.find(accountId) }
+
+        assertFalse(failure is BalanceStoreCircuitOpenException)
+    }
 
     @Test
     fun `failures above the threshold open the circuit and the next call fails fast without hitting the delegate`() {
