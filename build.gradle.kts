@@ -77,13 +77,20 @@ kotlin {
 configurations["integrationTestImplementation"].extendsFrom(configurations.testImplementation.get())
 configurations["integrationTestRuntimeOnly"].extendsFrom(configurations.testRuntimeOnly.get())
 
+// Testes de PERFORMANCE (assercao de latencia relativa, hoje so o p99 do SC-006) levam `@Tag("perf")`: sao sensiveis ao ruido de um
+// runner compartilhado e por isso ficam FORA do gate funcional (`integrationTest`, usado no CI) e rodam em `perfTest`
+// (`make perf-test`). Ver docs/adr/0014-estrategia-de-testes-e-evidencia-de-corretude.md.
+val perfTag = "perf"
+
 val integrationTest =
 	tasks.register<Test>("integrationTest") {
-		description = "Runs integration tests against live infrastructure (start it first with `make db-up`)."
+		description = "Runs the functional integration tests against live infrastructure (start it first with `make db-up`); excludes the `perf` tag."
 		group = "verification"
 		testClassesDirs = sourceSets["integrationTest"].output.classesDirs
 		classpath = sourceSets["integrationTest"].runtimeClasspath
-		useJUnitPlatform()
+		useJUnitPlatform {
+			excludeTags(perfTag)
+		}
 		shouldRunAfter(tasks.test)
 
 		testLogging {
@@ -91,6 +98,22 @@ val integrationTest =
 			exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.SHORT
 		}
 	}
+
+tasks.register<Test>("perfTest") {
+	description = "Runs only the `perf` tagged integration tests (latency assertions, e.g. SC-006) against live infrastructure (`make perf-test`)."
+	group = "verification"
+	testClassesDirs = sourceSets["integrationTest"].output.classesDirs
+	classpath = sourceSets["integrationTest"].runtimeClasspath
+	useJUnitPlatform {
+		includeTags(perfTag)
+	}
+	shouldRunAfter(integrationTest)
+
+	testLogging {
+		events("passed", "skipped", "failed")
+		exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.SHORT
+	}
+}
 
 jacoco {
 	toolVersion = "0.8.12"
@@ -137,6 +160,11 @@ tasks.withType<Test> {
 			}
 		},
 	)
+}
+
+// O p99 medido e impresso pelo teste (`println`): no perfTest a saida padrao aparece no terminal.
+tasks.named<Test>("perfTest") {
+	testLogging.showStandardStreams = true
 }
 
 val jacocoCoverageExclusions =

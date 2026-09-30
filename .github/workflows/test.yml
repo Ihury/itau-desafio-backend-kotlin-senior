@@ -76,6 +76,7 @@ jobs:
         run: ./infra/wait-seeds.sh 120
 
       # Inclui os testes de caos (`docker compose pause dynamodb`): o runner tem Docker e o projeto compose e o mesmo diretorio.
+      # Exclui os testes `@Tag("perf")` (p99 relativo do SC-006, instavel em runner compartilhado): rodam em `make perf-test`.
       - name: Run integration tests (./gradlew integrationTest)
         run: ./gradlew integrationTest --no-daemon
 

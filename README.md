@@ -93,7 +93,13 @@ Alvos úteis:
 |-|-|-|
 | `./gradlew check` | Testes unitários (395), teste de arquitetura Konsist, propriedade de convergência e **gate JaCoCo >= 90%** (hoje 97,1%) | Nenhuma (o contexto Spring de teste sobe sem broker nem banco) |
 | `make test` | O mesmo `check`, dentro de um container (estágio `test` do Dockerfile), como no CI | Só Docker |
-| `make integration-test` | 66 testes de integração contra DynamoDB Local e Redpanda **reais**: ingestão ponta a ponta, concorrência real (32 threads na mesma conta), DLT por motivo, indisponibilidade do armazenamento, métricas e saúde, reinício gracioso | Compose (sobe e espera os seeds; sempre reexecuta) |
+| `make integration-test` | Testes de integração **funcionais** contra DynamoDB Local e Redpanda **reais** (é o que o CI executa): ingestão ponta a ponta, concorrência real (32 threads na mesma conta), DLT por motivo, indisponibilidade do armazenamento, métricas e saúde, reinício gracioso. **Exclui** os testes com `@Tag("perf")` | Compose (sobe e espera os seeds; sempre reexecuta) |
+| `make perf-test` | Só os testes de **performance** (`@Tag("perf")`): o p99 da ingestão com mensagens inválidas intercaladas deve ficar em no máximo 1,10x o baseline (SC-006). Sensível a ruído: rode numa máquina ociosa; não roda no CI | Compose (igual ao `integration-test`) |
+
+A asserção de latência relativa do SC-006 (p99 com inválidas <= 1,10x o baseline) é um teste de performance e fica fora do gate
+funcional: num runner compartilhado de 2 vCPUs o mesmo código mediu 1,54x, contra 0,9x a 1,0x localmente. O limite não foi
+afrouxado; o que o SC-006 tem de determinístico (as válidas nunca são retidas e só as inválidas vão ao DLT) segue no
+`make integration-test` ([ADR-0014](docs/adr/0014-estrategia-de-testes-e-evidencia-de-corretude.md), item 8).
 
 Pontos que sustentam a confiança na corretude (detalhes no [ADR-0014](docs/adr/0014-estrategia-de-testes-e-evidencia-de-corretude.md)):
 

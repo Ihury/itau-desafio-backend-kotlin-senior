@@ -135,8 +135,12 @@ wait-seeds: ## Wait for the DynamoDB and Redpanda seed jobs to finish (works whe
 	./infra/wait-seeds.sh
 
 .PHONY: integration-test
-integration-test: db-up kafka-up wait-seeds ## Run all integration tests against live DynamoDB + Redpanda (always re-executed)
+integration-test: db-up kafka-up wait-seeds ## Run the functional integration tests against live DynamoDB + Redpanda, excluding the perf tag (always re-executed)
 	./gradlew cleanIntegrationTest integrationTest
+
+.PHONY: perf-test
+perf-test: db-up kafka-up wait-seeds ## Run the perf-tagged integration tests (SC-006: p99 with invalid messages <= 1.10x baseline); latency-sensitive, run on a quiet machine
+	./gradlew cleanPerfTest perfTest
 
 .PHONY: load-test
 load-test: ## Load test GET /balances/{id} with k6 (SC-001: p50<50ms, p99<300ms at 500 req/s). Needs make up. Vars: LOAD_RATE, LOAD_DURATION, LOAD_ACCOUNTS

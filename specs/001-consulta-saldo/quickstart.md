@@ -246,7 +246,8 @@ docker compose start app; sleep 30; metric 'balance_events_total.*duplicate'    
 ## 10. Concorrência real e propriedade contra infraestrutura real
 
 ```bash
-make integration-test          # sobe DynamoDB Local + Redpanda, roda ./gradlew integrationTest
+make integration-test          # sobe DynamoDB Local + Redpanda, roda ./gradlew integrationTest (sem a tag perf)
+make perf-test                 # opcional: so a comparacao de p99 do SC-006 (@Tag("perf")), sensivel a ruido; nao roda no CI
 ```
 
 Esperado: verdes — ingestão ponta a ponta; duplicata/desordem/empate; **N threads na mesma conta fora de ordem** convergem para o evento de maior
