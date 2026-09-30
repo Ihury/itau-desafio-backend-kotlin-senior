@@ -2,9 +2,15 @@ package br.com.itau.challenge.balance.adapter.input.kafka
 
 import br.com.itau.challenge.balance.adapter.output.dynamodb.DynamoDbClientProperties
 import org.apache.kafka.clients.consumer.CooperativeStickyAssignor
+import br.com.itau.challenge.balance.domain.exception.BalanceStoreUnavailableException
+import br.com.itau.challenge.balance.domain.model.StoreFailureCause
+import org.apache.kafka.clients.consumer.Consumer
+import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.apache.kafka.common.serialization.ByteArrayDeserializer
 import org.apache.kafka.common.serialization.ByteArraySerializer
 import org.junit.jupiter.api.Test
+import org.mockito.Mockito.mock
+import org.mockito.Mockito.verify
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.ApplicationContext
@@ -15,6 +21,8 @@ import org.springframework.kafka.listener.CommonErrorHandler
 import org.springframework.kafka.listener.ConcurrentMessageListenerContainer
 import org.springframework.kafka.listener.ContainerProperties
 import org.springframework.kafka.listener.DefaultErrorHandler
+import org.springframework.kafka.listener.ListenerExecutionFailedException
+import org.springframework.kafka.listener.MessageListenerContainer
 import org.springframework.kafka.support.KafkaUtils
 import org.springframework.test.context.ActiveProfiles
 import java.time.Duration
@@ -47,6 +55,9 @@ class KafkaConsumerSettingsTest {
 
     @Autowired
     private lateinit var dynamoDbProperties: DynamoDbClientProperties
+
+    @Autowired
+    private lateinit var backOffProperties: BackOffProperties
 
     private val consumerProperties: Map<String, Any> get() = consumerFactory.configurationProperties
 
@@ -98,6 +109,27 @@ class KafkaConsumerSettingsTest {
             maxPollRecords * dynamoDbProperties.write.callTimeout.toMillis() < maxPollIntervalMs,
             "max.poll.records x DYNAMODB_WRITE_CALL_TIMEOUT deve ser menor que max.poll.interval.ms",
         )
+    }
+
+    @Test
+    fun `the transient back off defaults are 500 ms, thirty seconds and 250 ms of jitter, and no wait can reach the poll interval`() {
+        assertEquals(BackOffProperties(initialMs = 500, maxMs = 30_000, jitterMs = 250), backOffProperties)
+        val maxPollIntervalMs = consumerProperties["max.poll.interval.ms"].toString().toLong()
+
+        // a pausa nao bloqueia o poll, mas nenhuma espera pode passar do intervalo de poll nem se o operador aumentar o teto
+        assertTrue(backOffProperties.maxMs < maxPollIntervalMs, "KAFKA_BACKOFF_MAX_MS deve ser menor que max.poll.interval.ms")
+    }
+
+    @Test
+    fun `the real error handler pauses the container during the back off of a transient failure`() {
+        val container = mock(MessageListenerContainer::class.java)
+        val consumer = mock(Consumer::class.java)
+        val record = ConsumerRecord<Any, Any>("transacoes-financeiras-processadas", 0, 5L, null, ByteArray(0))
+        val failure = ListenerExecutionFailedException("x", BalanceStoreUnavailableException(StoreFailureCause.UNAVAILABLE))
+
+        (errorHandler as DefaultErrorHandler).handleOne(failure, record, consumer, container)
+
+        verify(container).pause()
     }
 
     @Test

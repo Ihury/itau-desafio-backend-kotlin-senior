@@ -1,6 +1,7 @@
 package br.com.itau.challenge.balance.port.output
 
 import br.com.itau.challenge.balance.domain.model.RejectionReason
+import br.com.itau.challenge.balance.domain.model.StoreFailureCause
 
 /** Contadores de desfecho do processamento: exatamente um desfecho por evento aplicado (FR-031). */
 interface ProcessingMetrics {
@@ -21,4 +22,10 @@ interface ProcessingMetrics {
 
     /** A publicacao no DLT falhou: a mensagem NAO foi confirmada e sera reentregue (alertar). Nao e um desfecho. */
     fun dltPublishFailed()
+
+    /**
+     * O consumer pausou a leitura por uma falha transitoria do armazenamento (indisponibilidade da ingestao); [cause] e a
+     * classificacao da falha. Nao e um desfecho: a mensagem valida segue no broker e sera reentregue.
+     */
+    fun backpressure(cause: StoreFailureCause)
 }

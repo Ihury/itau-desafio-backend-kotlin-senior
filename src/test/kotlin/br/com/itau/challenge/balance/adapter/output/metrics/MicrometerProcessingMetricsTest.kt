@@ -1,6 +1,7 @@
 package br.com.itau.challenge.balance.adapter.output.metrics
 
 import br.com.itau.challenge.balance.domain.model.RejectionReason
+import br.com.itau.challenge.balance.domain.model.StoreFailureCause
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
@@ -93,5 +94,27 @@ class MicrometerProcessingMetricsTest {
 
         assertEquals(2.0, dltFailures())
         RejectionReason.entries.forEach { assertEquals(0.0, rejected(it.code)) }
+    }
+
+    private fun backpressure(cause: String): Double? = registry.find("balance.consumer.backpressure").tag("cause", cause).counter()?.count()
+
+    @Test
+    fun `backpressure counts under the lowercase cause tag and touches no other counter`() {
+        metrics.backpressure(StoreFailureCause.THROTTLED)
+        metrics.backpressure(StoreFailureCause.THROTTLED)
+        metrics.backpressure(StoreFailureCause.TIMEOUT)
+
+        assertEquals(2.0, backpressure("throttled"))
+        assertEquals(0.0, backpressure("unavailable"))
+        assertEquals(1.0, backpressure("timeout"))
+        assertEquals(0.0, events("processed"))
+        assertEquals(0.0, dltFailures())
+        RejectionReason.entries.forEach { assertEquals(0.0, rejected(it.code)) }
+    }
+
+    @Test
+    fun `every cause has its backpressure counter registered at zero, with the tag values of the observability contract`() {
+        assertEquals(setOf("throttled", "unavailable", "timeout"), registry.find("balance.consumer.backpressure").counters().map { it.id.getTag("cause") }.toSet())
+        StoreFailureCause.entries.forEach { assertEquals(0.0, backpressure(it.name.lowercase()), it.name) }
     }
 }

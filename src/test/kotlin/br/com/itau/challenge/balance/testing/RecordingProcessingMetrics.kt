@@ -1,6 +1,7 @@
 package br.com.itau.challenge.balance.testing
 
 import br.com.itau.challenge.balance.domain.model.RejectionReason
+import br.com.itau.challenge.balance.domain.model.StoreFailureCause
 import br.com.itau.challenge.balance.port.output.ProcessingMetrics
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
@@ -13,6 +14,11 @@ class RecordingProcessingMetrics : ProcessingMetrics {
 
     /** Falhas de publicacao no DLT (nao sao desfechos). */
     val dltPublishFailures: Int get() = dltFailures.get()
+
+    private val backpressure = CopyOnWriteArrayList<StoreFailureCause>()
+
+    /** Causas de cada pausa por backpressure, na ordem (nao sao desfechos). */
+    val backpressureCauses: List<StoreFailureCause> get() = backpressure.toList()
 
     /** Desfechos na ordem: `applied`, `obsolete`, `duplicate`, `duplicate(conflicting)` ou `rejected(<codigo>)`. */
     val outcomes: List<String> get() = recorded.toList()
@@ -35,5 +41,9 @@ class RecordingProcessingMetrics : ProcessingMetrics {
 
     override fun dltPublishFailed() {
         dltFailures.incrementAndGet()
+    }
+
+    override fun backpressure(cause: StoreFailureCause) {
+        backpressure += cause
     }
 }

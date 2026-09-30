@@ -61,8 +61,11 @@ class FailSafeErrorHandlerTest {
     private val metrics = RecordingProcessingMetrics()
     private val config = DeadLetterConfig()
 
+    /** Sem jitter, para as esperas serem exatas (o jitter e coberto por `BackpressureConfigTest`). */
+    private val noJitter = BackOffProperties(initialMs = 500, maxMs = 30_000, jitterMs = 0)
+
     private fun failSafeErrorHandler(backOffHandler: BackOffHandler) =
-        config.deadLetterErrorHandler(dlt, "transacoes-financeiras-processadas.DLT", Duration.ofSeconds(5), Clock.systemUTC(), metrics, backOffHandler)
+        config.deadLetterErrorHandler(dlt, "transacoes-financeiras-processadas.DLT", Duration.ofSeconds(5), Clock.systemUTC(), metrics, noJitter, backOffHandler)
     private val record = ConsumerRecord<Any, Any>("transacoes-financeiras-processadas", 2, 41L, null, ByteArray(0))
     private val partition = TopicPartition(record.topic(), record.partition())
 
@@ -85,12 +88,12 @@ class FailSafeErrorHandlerTest {
 
     @Test
     fun `the back off never runs out, grows to the ceiling and never waits past the poll interval`() {
-        val execution = config.transientBackOff().start()
+        val execution = config.transientBackOff(noJitter).start()
         val waits = (1..1000).map { execution.nextBackOff() }
 
         assertTrue(waits.none { it == BackOffExecution.STOP }, "o backoff nao pode esgotar")
         assertEquals(500L, waits.first())
-        assertEquals(waits.sorted(), waits, "crescente (sem jitter nesta unidade)")
+        assertEquals(waits.sorted(), waits, "crescente (jitter zerado neste teste)")
         assertEquals(30_000L, waits.max(), "teto de 30 s")
         assertEquals(30_000L, waits.last())
         assertTrue(waits.all { it < 300_000L }, "nenhuma espera pode chegar ao max.poll.interval.ms")
@@ -99,7 +102,7 @@ class FailSafeErrorHandlerTest {
 
     @Test
     fun `the back off has no attempt or elapsed time limit`() {
-        val backOff = config.transientBackOff()
+        val backOff = config.transientBackOff(noJitter)
 
         assertEquals(500L, backOff.initialInterval)
         assertEquals(2.0, backOff.multiplier)

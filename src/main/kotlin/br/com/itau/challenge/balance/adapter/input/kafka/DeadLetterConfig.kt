@@ -41,8 +41,10 @@ class DeadLetterProperties(
  *
  * - **Permanente** ([InvalidEventException]): nao retentavel; vai ao DLT na primeira falha, com os bytes originais e os headers
  *   `x-rejection-*` (nenhum header de excecao do Spring, que poderia trazer trechos do payload).
- * - **Transitoria** ([BalanceStoreUnavailableException]): `ExponentialBackOff` (500 ms x2, teto de 30 s) SEM limite de tentativas
- *   nem de tempo; o recoverer NUNCA e acionado, a mensagem valida fica no broker e jamais chega ao DLT (FR-017).
+ * - **Transitoria** ([BalanceStoreUnavailableException]): `ExponentialBackOff` (500 ms x2, teto de 30 s, jitter de 250 ms; parametros
+ *   em [BackOffProperties]) SEM limite de tentativas nem de tempo e com o container PAUSADO durante a espera
+ *   ([BackpressureConfig]); o recoverer NUNCA e acionado, a mensagem valida fica no broker e jamais chega ao DLT (FR-017), e cada
+ *   entrega que falha conta `balance.consumer.backpressure{cause}`.
  * - **Nao classificada** (qualquer outra): 3 entregas (`FixedBackOff(100 ms, 2)`) e DLT `unprocessable_event`, para que um
  *   defeito deterministico nao bloqueie a particao para sempre (Constitution III).
  *
@@ -68,30 +70,32 @@ class DeadLetterConfig {
         properties: DeadLetterProperties,
         clock: Clock,
         metrics: ProcessingMetrics,
-    ): CommonErrorHandler = deadLetterErrorHandler(deadLetterKafkaTemplate, dltTopic, properties.waitForSendResultTimeout, clock, metrics)
+        backOff: BackOffProperties,
+        containerPausingBackOffHandler: BackOffHandler,
+    ): CommonErrorHandler =
+        deadLetterErrorHandler(deadLetterKafkaTemplate, dltTopic, properties.waitForSendResultTimeout, clock, metrics, backOff, containerPausingBackOffHandler)
 
-    /** [backOffHandler] so e informado por testes, para observar a espera sem dormir; producao usa o padrao do Spring Kafka. */
+    /**
+     * [backOffHandler] decide o que fazer durante a espera: em producao e o `ContainerPausingBackOffHandler` (pausa o container
+     * e mantem o poll vivo); os testes informam um que so registra o intervalo, para nao esperar de verdade.
+     */
     internal fun deadLetterErrorHandler(
         template: KafkaOperations<ByteArray, ByteArray>,
         dltTopic: String,
         sendTimeout: Duration,
         clock: Clock,
         metrics: ProcessingMetrics,
-        backOffHandler: BackOffHandler? = null,
+        backOff: BackOffProperties,
+        backOffHandler: BackOffHandler,
     ): DefaultErrorHandler {
         val recoverer = deadLetterRecoverer(template, dltTopic, sendTimeout, RejectionHeaders(clock))
         // O backoff padrao (o da transitoria) NUNCA e STOP: com um padrao que esgota, o Spring pularia a funcao por classe e
         // recuperaria toda falha na primeira entrega.
-        val handler =
-            if (backOffHandler == null) {
-                DefaultErrorHandler(recoverer, transientBackOff())
-            } else {
-                DefaultErrorHandler(recoverer, transientBackOff(), backOffHandler)
-            }
+        val handler = DefaultErrorHandler(recoverer, transientBackOff(backOff), backOffHandler)
         // So o evento invalido e nao retentavel. Todo o resto e retentavel, inclusive o que o Spring Kafka classifica como fatal
         // por padrao (conversao, `ClassCastException`): iria direto ao DLT sem as 3 entregas.
         handler.setClassifications(mapOf(InvalidEventException::class.java to false), true)
-        handler.setBackOffFunction { _, failure -> backOffFor(failure) }
+        handler.setBackOffFunction { _, failure -> backOffFor(failure, backOff) }
         handler.setRetryListeners(DeadLetterRetryListener(metrics))
         return handler
     }
@@ -119,14 +123,25 @@ class DeadLetterConfig {
         return recoverer
     }
 
-    internal fun transientBackOff(): ExponentialBackOff = ExponentialBackOff(TRANSIENT_INITIAL_MS, TRANSIENT_MULTIPLIER).apply { maxInterval = TRANSIENT_MAX_MS }
+    /**
+     * Backoff da transitoria: exponencial (multiplicador 2,0) com jitter nativo do Spring Framework 7, teto [BackOffProperties.maxMs]
+     * e SEM limite de tentativas nem de tempo (o `ExponentialBackOff` so esgota se `maxAttempts` ou `maxElapsedTime` forem limitados).
+     */
+    internal fun transientBackOff(settings: BackOffProperties): ExponentialBackOff =
+        ExponentialBackOff(settings.initialMs, TRANSIENT_MULTIPLIER).apply {
+            maxInterval = settings.maxMs
+            jitter = settings.jitterMs
+        }
 
     internal fun unclassifiedBackOff(): FixedBackOff = FixedBackOff(UNCLASSIFIED_INTERVAL_MS, UNCLASSIFIED_RETRIES)
 
-    internal fun backOffFor(failure: Exception): BackOff =
+    internal fun backOffFor(
+        failure: Exception,
+        settings: BackOffProperties,
+    ): BackOff =
         when (FailureClassifier.classify(failure)) {
             FailureClass.PERMANENT -> FixedBackOff(0L, 0L)
-            FailureClass.TRANSIENT -> transientBackOff()
+            FailureClass.TRANSIENT -> transientBackOff(settings)
             FailureClass.UNCLASSIFIED -> unclassifiedBackOff()
         }
 
@@ -144,8 +159,10 @@ class DeadLetterConfig {
         ) {
             val failure = exception?.let { FailureClassifier.unwrap(it) }
             when (failure) {
-                is BalanceStoreUnavailableException ->
-                    log.warn("store unavailable, record kept for redelivery {} attempt={} cause={}", coordinates(record), deliveryAttempt, failure.failureCause)
+                is BalanceStoreUnavailableException -> {
+                    metrics.backpressure(failure.failureCause)
+                    log.warn("store unavailable, container paused for the back off {} attempt={} cause={}", coordinates(record), deliveryAttempt, failure.failureCause)
+                }
                 else ->
                     log.error(
                         "unclassified failure {} attempt={} exception={} at={}",
@@ -179,9 +196,7 @@ class DeadLetterConfig {
     }
 
     private companion object {
-        const val TRANSIENT_INITIAL_MS = 500L
         const val TRANSIENT_MULTIPLIER = 2.0
-        const val TRANSIENT_MAX_MS = 30_000L
         const val UNCLASSIFIED_INTERVAL_MS = 100L
         const val UNCLASSIFIED_RETRIES = 2L
         private val log = LoggerFactory.getLogger(DeadLetterConfig::class.java)

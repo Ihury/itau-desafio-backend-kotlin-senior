@@ -70,6 +70,12 @@ balance:
     dlt-topic: ${BALANCE_EVENTS_DLT_TOPIC:${BALANCE_EVENTS_TOPIC:transacoes-financeiras-processadas}.DLT}
   dlt:
     wait-for-send-result-timeout: ${BALANCE_DLT_SEND_TIMEOUT:PT5S}
+  # Backoff da falha transitoria do armazenamento (multiplicador 2,0 fixo; o container fica pausado durante a espera).
+  consumer:
+    backoff:
+      initial-ms: ${KAFKA_BACKOFF_INITIAL_MS:500}
+      max-ms: ${KAFKA_BACKOFF_MAX_MS:30000}
+      jitter-ms: ${KAFKA_BACKOFF_JITTER_MS:250}
   # Limites inferiores de plausibilidade dos timestamps do evento (contracts/kafka-events.md secao 3, passo 3).
   min-event-timestamp: ${BALANCE_MIN_EVENT_TIMESTAMP:2000-01-01T00:00:00Z}
   min-account-created-at: ${BALANCE_MIN_ACCOUNT_CREATED_AT:1900-01-01T00:00:00Z}

@@ -75,7 +75,10 @@ class DeadLetterConfigTest {
     private val clock = Clock.fixed(Instant.parse("2026-06-01T12:00:00Z"), ZoneOffset.UTC)
     private val backOffs = RecordingBackOffHandler()
     private val config = DeadLetterConfig()
-    private val handler: DefaultErrorHandler = config.deadLetterErrorHandler(template, dltTopic, Duration.ofMillis(300), clock, metrics, backOffs)
+
+    /** Sem jitter, para as esperas serem exatas (o jitter e coberto por `BackpressureConfigTest`). */
+    private val noJitter = BackOffProperties(initialMs = 500, maxMs = 30_000, jitterMs = 0)
+    private val handler: DefaultErrorHandler = config.deadLetterErrorHandler(template, dltTopic, Duration.ofMillis(300), clock, metrics, noJitter, backOffs)
     private val consumer = mock(Consumer::class.java)
     private val container = mock(MessageListenerContainer::class.java)
 
