@@ -52,7 +52,7 @@ class DynamoDbBalanceSnapshotWriterContractIT : BalanceSnapshotWriterContract() 
                 .item()
                 .getValue("balanceAmount")
                 .n()
-        // O DynamoDB pode normalizar a escala do `N` (`183.10` -> `183.1`, data-model 4.2); o DynamoDB Local 3.3.0 preserva
+        // O DynamoDB pode normalizar a escala do `N` (`183.10` -> `183.1`); o DynamoDB Local 3.3.0 preserva
         // `183.10` quando o valor vem de uma expressao de `UpdateItem`. O contrato e o VALOR, nao a escala armazenada.
         assertEquals(0, BigDecimal("183.10").compareTo(BigDecimal(rawAmount)), "valor armazenado identico, com ou sem normalizacao")
         val stored = assertNotNull(currentOf(AccountId.parse(account)))

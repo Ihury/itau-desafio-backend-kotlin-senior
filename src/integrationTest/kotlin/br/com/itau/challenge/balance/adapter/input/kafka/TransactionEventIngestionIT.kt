@@ -1,7 +1,7 @@
 package br.com.itau.challenge.balance.adapter.input.kafka
 
 import br.com.itau.challenge.balance.support.EventPayloads
-import br.com.itau.challenge.balance.support.KafkaIngestionITBase
+import br.com.itau.challenge.balance.support.SharedContextKafkaITBase
 import org.awaitility.kotlin.await
 import org.awaitility.kotlin.untilAsserted
 import org.junit.jupiter.api.Test
@@ -10,10 +10,10 @@ import kotlin.test.assertEquals
 
 /**
  * Ingestao ponta a ponta com Redpanda e DynamoDB Local reais (`make integration-test`): publica no topico exclusivo, o
- * listener real consome, o servico grava e a consulta HTTP real reflete o saldo. Cada teste usa contas aleatorias. O saldo
- * precisa estar consultavel em ate 5 s apos a publicacao em cada caso (SC-002).
+ * listener real consome, o servico grava e a consulta HTTP real reflete o saldo em ate 5 s apos a publicacao.
+ * Cada teste usa contas aleatorias.
  */
-class TransactionEventIngestionIT : KafkaIngestionITBase() {
+class TransactionEventIngestionIT : SharedContextKafkaITBase() {
     @Test
     fun `a new account is created by the first event and reflected by the query`() {
         val account = newAccount()

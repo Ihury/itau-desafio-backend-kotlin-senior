@@ -44,12 +44,12 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * Falhas transitorias do armazenamento com as excecoes REAIS do SDK (`ProvisionedThroughputExceededException`,
+ * Falhas transientes do armazenamento com as excecoes REAIS do SDK (`ProvisionedThroughputExceededException`,
  * `SdkClientException` de conexao, `ApiCallTimeoutException` e `DynamoDbException` 503), injetadas nas primeiras chamadas de
- * escrita de uma conta (o DynamoDB Local nao emula throttling). Prova FR-017 e FR-028/FR-029: a mensagem valida NUNCA vai ao DLT,
- * fica no broker (lag > 0), e processada quando a falha passa, o container fica PAUSADO durante a espera (o poll continua vivo:
- * `max.poll.interval.ms` de 3 s e esperas de ate 12 s, sem rebalance), a espera cresce e `balance.consumer.backpressure` conta cada
- * falha com a `cause` certa. Contexto e topicos proprios (`@TestConfiguration`).
+ * escrita de uma conta (o DynamoDB Local nao emula throttling). A mensagem valida NUNCA vai ao DLT, fica no broker (lag > 0) e
+ * e processada quando a falha passa; o container fica PAUSADO durante a espera (o poll continua vivo: `max.poll.interval.ms`
+ * de 3 s e esperas de ate 12 s, sem rebalance), a espera cresce e `balance.consumer.backpressure` conta cada falha com a
+ * `cause` certa. Contexto e topicos proprios (`@TestConfiguration`).
  */
 class TransientFailureIngestionIT : KafkaITBase() {
     override val topics: TopicSet
@@ -57,8 +57,8 @@ class TransientFailureIngestionIT : KafkaITBase() {
 
     /** Falhas a lancar, em ordem, para a conta marcada; depois disso a escrita segue para o DynamoDB real. */
     class ScriptedFailures {
-        val failures = ConcurrentLinkedQueue<RuntimeException>()
-        val account = ConcurrentHashMap.newKeySet<String>()
+        val pendingFailures = ConcurrentLinkedQueue<RuntimeException>()
+        val accounts = ConcurrentHashMap.newKeySet<String>()
         val attemptsNanos = CopyOnWriteArrayList<Long>()
         val injected = AtomicInteger()
     }
@@ -74,16 +74,16 @@ class TransientFailureIngestionIT : KafkaITBase() {
         fun failingWriter(
             @Qualifier("dynamoDbWriteClient") real: DynamoDbClient,
             properties: DynamoDbClientProperties,
-            script: ScriptedFailures,
+            scriptedFailures: ScriptedFailures,
             meterRegistry: MeterRegistry,
         ): BalanceSnapshotWriter {
             val failing =
                 Proxy.newProxyInstance(DynamoDbClient::class.java.classLoader, arrayOf(DynamoDbClient::class.java)) { _, method, args ->
                     val request = args?.firstOrNull() as? UpdateItemRequest
-                    if (method.name == "updateItem" && request != null && request.key()["pk"]?.s()?.removePrefix("ACCOUNT#") in script.account) {
-                        script.attemptsNanos += System.nanoTime()
-                        script.failures.poll()?.let {
-                            script.injected.incrementAndGet()
+                    if (method.name == "updateItem" && request != null && request.key()["pk"]?.s()?.removePrefix("ACCOUNT#") in scriptedFailures.accounts) {
+                        scriptedFailures.attemptsNanos += System.nanoTime()
+                        scriptedFailures.pendingFailures.poll()?.let {
+                            scriptedFailures.injected.incrementAndGet()
                             throw it
                         }
                     }
@@ -101,7 +101,7 @@ class TransientFailureIngestionIT : KafkaITBase() {
     }
 
     @Autowired
-    private lateinit var script: ScriptedFailures
+    private lateinit var scriptedFailures: ScriptedFailures
 
     private fun details(code: String) = AwsErrorDetails.builder().errorCode(code).errorMessage(code).serviceName("DynamoDB").build()
 
@@ -155,8 +155,8 @@ class TransientFailureIngestionIT : KafkaITBase() {
         val before = mapOf("throttled" to backpressure("throttled"), "unavailable" to backpressure("unavailable"), "timeout" to backpressure("timeout"))
         val account = newAccount()
         val neighbour = newAccount()
-        script.account += account
-        script.failures += sdkFailures()
+        scriptedFailures.accounts += account
+        scriptedFailures.pendingFailures += sdkFailures()
 
         // amostrador: o container fica pausado durante a espera do backoff (poll vivo, sem dormir no thread do poll)
         val sampling = AtomicBoolean(true)
@@ -177,13 +177,11 @@ class TransientFailureIngestionIT : KafkaITBase() {
             topics.publishKeyed("mesma-particao", EventPayloads.transaction(account, balanceAmount = "77.70"))
             topics.publishKeyed("mesma-particao", EventPayloads.transaction(neighbour, balanceAmount = "88.80"))
 
-            // durante a falha: nada no DLT, a mensagem fica no broker e a conta nao foi gravada
-            await.atMost(Duration.ofSeconds(10)).until { script.injected.get() >= 2 }
+            await.atMost(Duration.ofSeconds(10)).until { scriptedFailures.injected.get() >= 2 }
             assertEquals(0, topics.dltCountSince(dltBefore), "falha transitoria nunca leva mensagem valida ao DLT")
             assertTrue(topics.groupLag() > 0, "a mensagem continua no broker (nao confirmada)")
             assertEquals(404, get(account).statusCode(), "conta ainda nao gravada")
 
-            // depois das 5 falhas: a mensagem e a vizinha (atras dela) sao processadas, sem intervencao
             await.atMost(Duration.ofSeconds(60)).until { get(account).statusCode() == 200 && get(neighbour).statusCode() == 200 }
         } finally {
             sampling.set(false)
@@ -191,9 +189,9 @@ class TransientFailureIngestionIT : KafkaITBase() {
         }
         awaitBalance(account, "77.70")
         awaitBalance(neighbour, "88.80")
-        topics.awaitLagZero()
+        topics.awaitGroupLagZero()
 
-        assertEquals(5, script.injected.get(), "as 5 falhas injetadas foram entregues ao consumer")
+        assertEquals(5, scriptedFailures.injected.get(), "as 5 falhas injetadas foram entregues ao consumer")
         assertEquals(0, topics.dltCountSince(dltBefore), "DLT com exatamente 0 mensagens")
 
         // metrica: cada falha contada com a causa da classificacao (2 throttling, 1 timeout, 2 indisponibilidade)
@@ -202,7 +200,7 @@ class TransientFailureIngestionIT : KafkaITBase() {
         assertEquals(before.getValue("unavailable") + 2, backpressure("unavailable"))
 
         // as esperas crescem (500 ms x2, jitter de 250 ms escalado): 6 tentativas, 5 intervalos dentro da faixa de cada passo
-        val stamps = script.attemptsNanos.toList()
+        val stamps = scriptedFailures.attemptsNanos.toList()
         assertEquals(6, stamps.size, "5 falhas + 1 sucesso")
         val intervalsMs = stamps.zipWithNext { a, b -> (b - a) / 1_000_000 }
         println("BACKOFF-INTERVALS-MS=$intervalsMs")

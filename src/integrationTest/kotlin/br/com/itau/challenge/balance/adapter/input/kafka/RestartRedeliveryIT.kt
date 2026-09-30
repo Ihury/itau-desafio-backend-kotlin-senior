@@ -36,13 +36,12 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * Reinicio sem perda (US3.6, US6.4, FR-034): o contexto A consome o topico, e ENCERRADO DE FORMA GRACIOSA (`close`, o mesmo caminho do
- * SIGTERM) no meio do consumo e o contexto B, do mesmo grupo, retoma de onde o grupo confirmou: o container confirma exatamente o
- * que A ja persistiu (`immediate-stop`, commit so pelo container) e B processa exatamente o que A nunca escreveu; qualquer excedente
- * reentregue vira `duplicate` (nunca uma segunda escrita nem um saldo errado). Cada mensagem consumida por B tem exatamente um
- * desfecho (SC-010) e ao final existem exatamente 500 itens, cada um com o saldo do seu evento e nenhum evento no DLT. Depois, o
- * grupo volta ao inicio (a reentrega total que uma queda sem confirmacao provocaria) e o contexto C reconcilia as 500 mensagens
- * como `duplicate`, sem alterar nenhum item.
+ * Reinicio sem perda: o contexto A consome o topico e e ENCERRADO DE FORMA GRACIOSA (`close`, o mesmo caminho do SIGTERM) no
+ * meio; o contexto B, do mesmo grupo, retoma de onde o grupo confirmou (`immediate-stop`, commit so pelo container): B processa
+ * exatamente o que A nunca escreveu e qualquer excedente reentregue vira `duplicate` (nunca uma segunda escrita nem um saldo
+ * errado). Cada mensagem consumida por B tem exatamente um desfecho; ao final existem exatamente 500 itens, cada um com o saldo
+ * do seu evento, e nenhum evento no DLT. Depois o grupo volta ao inicio (a reentrega total que uma queda sem confirmacao
+ * provocaria) e o contexto C reconcilia as 500 mensagens como `duplicate`, sem alterar nenhum item.
  *
  * Os contextos sao criados programaticamente (`SpringApplicationBuilder`) para poderem ser encerrados e recriados; as
  * `@TestConfiguration` de outros ITs no classpath ficam de fora da varredura (o `TestTypeExcludeFilter` so existe em `@SpringBootTest`).
@@ -88,7 +87,7 @@ class RestartRedeliveryIT {
     private fun outcomes(registry: MeterRegistry): Map<String, Int> = listOf("processed", "obsolete", "duplicate", "rejected").associateWith { registry.total(it) }
 
     @Test
-    fun `a graceful shutdown in the middle of the consumption loses nothing and the redeliveries are counted as duplicates (US3-6, US6-4)`() {
+    fun `a graceful shutdown in the middle of the consumption loses nothing and the redeliveries are counted as duplicates`() {
         val topics = TopicSet("it-restart")
         val accounts = (1..EVENTS).map { DynamoDbTestSupport.randomAccountId() }
         val raw = DynamoDbTestSupport.rawClient()
@@ -107,11 +106,10 @@ class RestartRedeliveryIT {
             val metricsOfA = a.getBean(MeterRegistry::class.java)
             topics.awaitAssignment(a.getBean(KafkaListenerEndpointRegistry::class.java))
             val dltBefore = topics.dltEndOffsets()
-            // 500 eventos de 500 contas, sem chave (espalhados pelas particoes), cada um com o saldo do seu indice
+            // sem chave (espalhados pelas particoes), cada evento com o saldo do seu indice
             accounts.forEachIndexed { index, account -> topics.publish(EventPayloads.transaction(account, balanceAmount = "${index + 1}.00")) }
 
-            // no meio do consumo: A ja escreveu bastante e ainda falta muito
-            await.atMost(Duration.ofSeconds(60)).pollInterval(Duration.ofMillis(20)).until { metricsOfA.total("processed") >= MID_POINT }
+            await.atMost(Duration.ofSeconds(60)).pollInterval(Duration.ofMillis(20)).until { metricsOfA.total("processed") >= SHUTDOWN_AFTER_PROCESSED }
             a.close()
             contexts.remove(a)
             val processedByA = metricsOfA.total("processed")
@@ -123,14 +121,14 @@ class RestartRedeliveryIT {
 
             val b = start(topics).also { contexts += it }
             topics.awaitAssignment(b.getBean(KafkaListenerEndpointRegistry::class.java))
-            topics.awaitLagZero(Duration.ofSeconds(90))
+            topics.awaitGroupLagZero(Duration.ofSeconds(90))
             await.atMost(Duration.ofSeconds(30)).untilAsserted { assertEquals(EVENTS, stored().size, "itens gravados") }
 
             val counts = outcomes(b.getBean(MeterRegistry::class.java))
             println("RESTART lagBeforeB=$lagBeforeB outcomes(B)=$counts")
-            assertEquals(lagBeforeB.toInt(), counts.getValue("processed") + counts.getValue("duplicate") + counts.getValue("obsolete"), "cada mensagem consumida por B tem exatamente um desfecho (SC-010)")
+            assertEquals(lagBeforeB.toInt(), counts.getValue("processed") + counts.getValue("duplicate") + counts.getValue("obsolete"), "cada mensagem consumida por B tem exatamente um desfecho")
             assertEquals(EVENTS - processedByA, counts.getValue("processed"), "B processa exatamente o que A nunca escreveu")
-            // o que A escreveu e nao confirmou (nada, num encerramento gracioso: o container confirma o que ja processou) seria `duplicate`
+            // num encerramento gracioso o container confirma o que A ja processou: o excedente de lagBeforeB e a reentrega de A
             assertEquals(lagBeforeB.toInt() - (EVENTS - processedByA), counts.getValue("duplicate"), "a reentrega do que A ja escrevera e `duplicate`")
             assertEquals(0, counts.getValue("obsolete"))
             assertEquals(0, counts.getValue("rejected"))
@@ -146,7 +144,7 @@ class RestartRedeliveryIT {
             assertEquals(EVENTS.toLong(), topics.groupLag(), "o grupo voltou ao inicio: as $EVENTS mensagens serao reentregues")
             val c = start(topics).also { contexts += it }
             topics.awaitAssignment(c.getBean(KafkaListenerEndpointRegistry::class.java))
-            topics.awaitLagZero(Duration.ofSeconds(90))
+            topics.awaitGroupLagZero(Duration.ofSeconds(90))
             val redelivered = outcomes(c.getBean(MeterRegistry::class.java))
             println("RESTART outcomes(C)=$redelivered")
             assertEquals(mapOf("processed" to 0, "obsolete" to 0, "duplicate" to EVENTS, "rejected" to 0), redelivered, "toda reentrega vira `duplicate`: nenhuma escrita a mais, nenhum saldo trocado")
@@ -172,7 +170,7 @@ class RestartRedeliveryIT {
 
     private companion object {
         const val EVENTS = 500
-        const val MID_POINT = 80
+        const val SHUTDOWN_AFTER_PROCESSED = 80
         const val WRITE_DELAY_MS = 20L
 
         init {

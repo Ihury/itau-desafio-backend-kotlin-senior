@@ -2,19 +2,19 @@ package br.com.itau.challenge.balance.adapter.input.kafka
 
 import br.com.itau.challenge.balance.support.EventPayloads
 import br.com.itau.challenge.balance.support.IntegrationInfra
-import br.com.itau.challenge.balance.support.KafkaIngestionITBase
+import br.com.itau.challenge.balance.support.SharedContextKafkaITBase
 import org.awaitility.kotlin.await
 import org.awaitility.kotlin.untilAsserted
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 
 /**
- * Convergencia sob desordem, duplicidade e reentrega pelo caminho real (Kafka -> listener -> DynamoDB -> consulta HTTP),
- * espelhando `quickstart.md` 5.1 a 5.4. Os testes que contam desfechos exatos publicam COM chave (a conta), para que a ordem de
- * chegada seja a de publicacao (mesma particao); o autorizador real publica sem chave e o servico converge em qualquer ordem.
+ * Convergencia sob desordem, duplicidade e reentrega pelo caminho real (Kafka -> listener -> DynamoDB -> consulta HTTP).
+ * Os testes que contam desfechos exatos publicam COM chave (a conta), para que a ordem de chegada seja a de publicacao
+ * (mesma particao); o autorizador real publica sem chave e o servico converge em qualquer ordem.
  * Os desfechos sao medidos por delta do `MeterRegistry` (`balance.events{outcome}`).
  */
-class ConvergenceIngestionIT : KafkaIngestionITBase() {
+class ConvergenceIngestionIT : SharedContextKafkaITBase() {
     private data class Outcomes(
         val processed: Int,
         val obsolete: Int,
@@ -32,19 +32,19 @@ class ConvergenceIngestionIT : KafkaIngestionITBase() {
 
     /** Baseline dos desfechos depois de uma barreira de lag zero: nada em voo pode ser contado depois da leitura. */
     private fun baselineOutcomes(): Outcomes {
-        topics.awaitLagZero()
+        topics.awaitGroupLagZero()
         return outcomes()
     }
 
-    private fun tx(n: Int): String = "00000000-0000-4000-8000-%012d".format(n)
+    private fun transactionId(n: Int): String = "00000000-0000-4000-8000-%012d".format(n)
 
-    /** Instante `n` segundos apos o base, com microssegundos (`...433123`) como no quickstart. */
-    private fun t(n: Int): Long = 1751749453433123L + n * 1_000_000L
+    /** Instante `n` segundos apos o base, com microssegundos (`...433123`). */
+    private fun instantMicros(secondsAfterBase: Int): Long = 1751749453433123L + secondsAfterBase * 1_000_000L
 
-    private fun updatedAt(n: Int): String = "2025-07-05T18:04:%02d.433123-03:00".format(13 + n)
+    private fun expectedUpdatedAt(secondsAfterBase: Int): String = "2025-07-05T18:04:%02d.433123-03:00".format(13 + secondsAfterBase)
 
     @Suppress("LongParameterList")
-    private fun send(
+    private fun publishEvent(
         account: String,
         txNumber: Int,
         instant: Int,
@@ -55,116 +55,121 @@ class ConvergenceIngestionIT : KafkaIngestionITBase() {
         account,
         EventPayloads.transaction(
             account,
-            timestampMicros = t(instant),
-            transactionId = tx(txNumber),
+            timestampMicros = instantMicros(instant),
+            transactionId = transactionId(txNumber),
             balanceAmount = amount,
             accountStatus = accountStatus,
             transactionStatus = transactionStatus,
         ),
     )
 
-    private fun awaitTotal(
+    private fun awaitOutcomeTotal(
         baseline: Outcomes,
         events: Int,
     ) = await.atMost(SLO).untilAsserted { assertEquals(events, (outcomes() - baseline).total, "desfechos contabilizados") }
 
-    private fun amountText(account: String): String {
+    private fun queriedAmount(account: String): String {
         val response = get(account)
         assertEquals(200, response.statusCode())
         return json.readTree(response.body())["balance"]["amount"].decimalValue().toPlainString()
     }
 
     @Test
-    fun `out of order events plus a duplicate converge to the highest instant and are counted exactly (5-1)`() {
+    fun `out of order events plus a duplicate converge to the highest instant and are counted exactly`() {
         val account = newAccount()
         val baseline = baselineOutcomes()
 
-        send(account, txNumber = 3, instant = 3, amount = "300.00")
-        send(account, txNumber = 1, instant = 1, amount = "100.00")
-        send(account, txNumber = 2, instant = 2, amount = "200.00")
-        send(account, txNumber = 3, instant = 3, amount = "300.00")
+        publishEvent(account, txNumber = 3, instant = 3, amount = "300.00")
+        publishEvent(account, txNumber = 1, instant = 1, amount = "100.00")
+        publishEvent(account, txNumber = 2, instant = 2, amount = "200.00")
+        publishEvent(account, txNumber = 3, instant = 3, amount = "300.00")
 
-        awaitTotal(baseline, 4)
+        awaitOutcomeTotal(baseline, 4)
         assertEquals(Outcomes(processed = 1, obsolete = 2, duplicate = 1), outcomes() - baseline)
-        awaitBalance(account, "300.00", updatedAt = updatedAt(3))
-        assertEquals("300.00", amountText(account))
+        awaitBalance(account, "300.00", updatedAt = expectedUpdatedAt(3))
+        assertEquals("300.00", queriedAmount(account))
     }
 
     @Test
-    fun `redelivering the same messages changes nothing and only adds obsolete and duplicate outcomes (US3-6)`() {
+    fun `redelivering the same messages changes nothing and only adds obsolete and duplicate outcomes`() {
         val account = newAccount()
         val baseline = baselineOutcomes()
-        val messages = { send(account, 3, 3, "300.00"); send(account, 1, 1, "100.00"); send(account, 2, 2, "200.00"); send(account, 3, 3, "300.00") }
-        messages()
-        awaitTotal(baseline, 4)
-        awaitBalance(account, "300.00", updatedAt = updatedAt(3))
+        val publishRound = {
+            publishEvent(account, 3, 3, "300.00")
+            publishEvent(account, 1, 1, "100.00")
+            publishEvent(account, 2, 2, "200.00")
+            publishEvent(account, 3, 3, "300.00")
+        }
+        publishRound()
+        awaitOutcomeTotal(baseline, 4)
+        awaitBalance(account, "300.00", updatedAt = expectedUpdatedAt(3))
 
-        messages()
+        publishRound()
 
-        awaitTotal(baseline, 8)
+        awaitOutcomeTotal(baseline, 8)
         // 2a rodada: tx3 duplicado (x2), tx1 e tx2 obsoletos; nada foi aplicado de novo
         assertEquals(Outcomes(processed = 1, obsolete = 4, duplicate = 3), outcomes() - baseline)
-        awaitBalance(account, "300.00", updatedAt = updatedAt(3))
+        awaitBalance(account, "300.00", updatedAt = expectedUpdatedAt(3))
     }
 
     @Test
-    fun `a timestamp tie is won by the greater transaction id in both arrival orders (5-2)`() {
+    fun `a timestamp tie is won by the greater transaction id in both arrival orders`() {
         val account = newAccount()
         val reversedAccount = newAccount()
         val baseline = baselineOutcomes()
 
-        send(account, txNumber = 11, instant = 5, amount = "20.00")
-        send(account, txNumber = 10, instant = 5, amount = "10.00")
-        send(reversedAccount, txNumber = 10, instant = 5, amount = "10.00")
-        send(reversedAccount, txNumber = 11, instant = 5, amount = "20.00")
+        publishEvent(account, txNumber = 11, instant = 5, amount = "20.00")
+        publishEvent(account, txNumber = 10, instant = 5, amount = "10.00")
+        publishEvent(reversedAccount, txNumber = 10, instant = 5, amount = "10.00")
+        publishEvent(reversedAccount, txNumber = 11, instant = 5, amount = "20.00")
 
-        awaitTotal(baseline, 4)
-        awaitBalance(account, "20.00", updatedAt = updatedAt(5))
-        awaitBalance(reversedAccount, "20.00", updatedAt = updatedAt(5))
+        awaitOutcomeTotal(baseline, 4)
+        awaitBalance(account, "20.00", updatedAt = expectedUpdatedAt(5))
+        awaitBalance(reversedAccount, "20.00", updatedAt = expectedUpdatedAt(5))
         // ordem 11 -> 10: processed + obsolete; ordem 10 -> 11: processed + processed
         assertEquals(Outcomes(processed = 3, obsolete = 1, duplicate = 0), outcomes() - baseline)
     }
 
     @Test
-    fun `declined events update, precision is exact and the response completes the scale of the currency (5-3)`() {
+    fun `declined events update, precision is exact and the response completes the scale of the currency`() {
         val account = newAccount()
         val exact = "12345678901234567890.123456789012345678"
 
-        send(account, txNumber = 20, instant = 1, amount = exact)
-        awaitBalance(account, exact, updatedAt = updatedAt(1))
-        assertEquals(exact, amountText(account))
+        publishEvent(account, txNumber = 20, instant = 1, amount = exact)
+        awaitBalance(account, exact, updatedAt = expectedUpdatedAt(1))
+        assertEquals(exact, queriedAmount(account))
 
-        send(account, txNumber = 21, instant = 2, amount = "0.10", transactionStatus = "DECLINED")
-        awaitBalance(account, "0.10", updatedAt = updatedAt(2))
-        assertEquals("0.10", amountText(account))
+        publishEvent(account, txNumber = 21, instant = 2, amount = "0.10", transactionStatus = "DECLINED")
+        awaitBalance(account, "0.10", updatedAt = expectedUpdatedAt(2))
+        assertEquals("0.10", queriedAmount(account))
 
-        send(account, txNumber = 22, instant = 3, amount = "100")
-        awaitBalance(account, "100.00", updatedAt = updatedAt(3))
-        assertEquals("100.00", amountText(account))
+        publishEvent(account, txNumber = 22, instant = 3, amount = "100")
+        awaitBalance(account, "100.00", updatedAt = expectedUpdatedAt(3))
+        assertEquals("100.00", queriedAmount(account))
 
-        send(account, txNumber = 23, instant = 4, amount = "10.123")
-        awaitBalance(account, "10.123", updatedAt = updatedAt(4))
-        assertEquals("10.123", amountText(account))
+        publishEvent(account, txNumber = 23, instant = 4, amount = "10.123")
+        awaitBalance(account, "10.123", updatedAt = expectedUpdatedAt(4))
+        assertEquals("10.123", queriedAmount(account))
     }
 
     @Test
-    fun `the disabled cycle answers 200 then 409, ignores an older event and answers 200 again (5-4)`() {
+    fun `the disabled cycle answers 200 then 409, ignores an older event and answers 200 again`() {
         val account = newAccount()
 
-        send(account, txNumber = 30, instant = 1, amount = "50.00")
+        publishEvent(account, txNumber = 30, instant = 1, amount = "50.00")
         awaitBalance(account, "50.00")
 
-        send(account, txNumber = 31, instant = 2, amount = "50.00", accountStatus = "DISABLED")
+        publishEvent(account, txNumber = 31, instant = 2, amount = "50.00", accountStatus = "DISABLED")
         await.atMost(SLO).untilAsserted { assertEquals(409, get(account).statusCode()) }
 
         val baseline = baselineOutcomes()
-        send(account, txNumber = 29, instant = 0, amount = "40.00")
-        awaitTotal(baseline, 1)
+        publishEvent(account, txNumber = 29, instant = 0, amount = "40.00")
+        awaitOutcomeTotal(baseline, 1)
         assertEquals(Outcomes(processed = 0, obsolete = 1, duplicate = 0), outcomes() - baseline)
         assertEquals(409, get(account).statusCode(), "o evento antigo nao reabilita a conta")
 
-        send(account, txNumber = 32, instant = 3, amount = "70.00")
-        awaitBalance(account, "70.00", updatedAt = updatedAt(3))
-        assertEquals("70.00", amountText(account))
+        publishEvent(account, txNumber = 32, instant = 3, amount = "70.00")
+        awaitBalance(account, "70.00", updatedAt = expectedUpdatedAt(3))
+        assertEquals("70.00", queriedAmount(account))
     }
 }

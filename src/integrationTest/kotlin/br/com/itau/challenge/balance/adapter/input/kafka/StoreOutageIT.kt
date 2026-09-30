@@ -5,7 +5,7 @@ import br.com.itau.challenge.balance.support.DynamoDbTestSupport
 import br.com.itau.challenge.balance.support.EventPayloads
 import br.com.itau.challenge.balance.support.KafkaITBase
 import br.com.itau.challenge.balance.support.TopicSet
-import br.com.itau.challenge.balance.support.single
+import br.com.itau.challenge.balance.support.singleValue
 import io.github.resilience4j.circuitbreaker.CircuitBreaker
 import org.awaitility.kotlin.await
 import org.awaitility.kotlin.until
@@ -32,10 +32,10 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * Indisponibilidade REAL do armazenamento (`docker compose pause dynamodb`; `quickstart.md` secao 8): a API falha rapido com 503 e
- * `Retry-After`, a ingestao segura as mensagens no broker (nunca DLT, nunca perda) e, apos o `unpause`, o backlog drena sozinho e
- * o circuito fecha (SC-007, SC-008, FR-025, FR-028). O `unpause` SEMPRE roda (`finally`, `@AfterEach` e `@AfterAll`). Pulado
- * quando o Docker CLI ou o servico `dynamodb` deste projeto compose nao estao disponiveis. Contexto e topicos proprios.
+ * Indisponibilidade REAL do armazenamento (`docker compose pause dynamodb`): a API falha rapido com 503 e `Retry-After`, a
+ * ingestao segura as mensagens no broker (nunca DLT, nunca perda) e, apos o `unpause`, o backlog drena sozinho e o circuito
+ * fecha. O `unpause` SEMPRE roda (`finally`, `@AfterEach` e `@AfterAll`). Pulado quando o Docker CLI ou o servico `dynamodb`
+ * deste projeto compose nao estao disponiveis. Contexto e topicos proprios.
  */
 @Tag("chaos")
 class StoreOutageIT : KafkaITBase() {
@@ -48,8 +48,8 @@ class StoreOutageIT : KafkaITBase() {
 
     @BeforeEach
     fun requireDockerAndDynamoDb() {
-        val available = ComposeControl.isRunning(SERVICE)
-        val message = "Docker CLI e servico $SERVICE do compose deste projeto necessarios"
+        val available = ComposeControl.isRunning(DYNAMODB_SERVICE)
+        val message = "Docker CLI e servico $DYNAMODB_SERVICE do compose deste projeto necessarios"
         // No CI (variavel `CI` definida) a indisponibilidade do Docker/compose FALHA o teste: pular em silencio esconderia a perda
         // da cobertura de caos. Localmente continua pulando para nao exigir Docker de quem so roda os ITs sem o teste de caos.
         if (runningOnCi()) assertTrue(available, "CI: $message") else assumeTrue(available, message)
@@ -59,43 +59,43 @@ class StoreOutageIT : KafkaITBase() {
 
     @AfterEach
     fun alwaysUnpause() {
-        ComposeControl.unpause(SERVICE)
+        ComposeControl.unpause(DYNAMODB_SERVICE)
     }
 
     private fun backpressureTotal(): Double = meterRegistry.find("balance.consumer.backpressure").counters().sumOf { it.count() }
 
     private fun backpressure(cause: String): Double = meterRegistry.get("balance.consumer.backpressure").tag("cause", cause).counter().count()
 
-    private fun dependencyUp(): Double = scrape().single("balance_dependency_up", "dependency" to "dynamodb")
+    private fun dependencyUp(): Double = scrape().singleValue("balance_dependency_up", "dependency" to "dynamodb")
 
-    private fun status(group: String): Int = management("/actuator/health/$group").statusCode()
+    private fun healthStatus(group: String): Int = management("/actuator/health/$group").statusCode()
 
-    /** Saude com o DynamoDB fora (FR-033): so `dependencies` cai; a instancia continua em rotacao (liveness e readiness 200). */
+    /** Saude com o DynamoDB fora: so `dependencies` cai; a instancia continua em rotacao (liveness e readiness 200). */
     private fun assertHealthDuringOutage(knownAccount: String) {
         // o probe tem timeout curto e o resultado fica em cache por 5 s: dentro de 5 s + cache o grupo cai
-        await.atMost(Duration.ofSeconds(15)).pollInterval(Duration.ofMillis(500)).untilAsserted { assertEquals(503, status("dependencies"), "dependencies") }
+        await.atMost(Duration.ofSeconds(15)).pollInterval(Duration.ofMillis(500)).untilAsserted { assertEquals(503, healthStatus("dependencies"), "dependencies") }
         assertEquals("""{"status":"DOWN"}""", management("/actuator/health/dependencies").body(), "show-details=never")
-        assertEquals(200, status("readiness"), "a readiness NAO depende do DynamoDB (a instancia continua em rotacao)")
+        assertEquals(200, healthStatus("readiness"), "a readiness NAO depende do DynamoDB (a instancia continua em rotacao)")
         assertEquals("""{"status":"UP"}""", management("/actuator/health/readiness").body())
-        assertEquals(200, status("liveness"), "a liveness independe do banco")
+        assertEquals(200, healthStatus("liveness"), "a liveness independe do banco")
         assertEquals("""{"status":"UP"}""", management("/actuator/health/liveness").body())
         assertEquals(503, management("/actuator/health").statusCode(), "a raiz agrega as dependencias: nao serve de sonda")
         await.atMost(Duration.ofSeconds(15)).pollInterval(Duration.ofMillis(500)).untilAsserted { assertEquals(0.0, dependencyUp(), "balance_dependency_up{dependency=dynamodb}") }
         assertEquals(503, get(knownAccount).statusCode(), "a API segue respondendo 503 explicito")
     }
 
-    private data class Timed(
+    private data class TimedResponse(
         val response: HttpResponse<String>,
         val millis: Long,
     )
 
-    private fun timedGet(accountId: String): Timed {
+    private fun timedGet(accountId: String): TimedResponse {
         val started = System.nanoTime()
         val response = get(accountId)
-        return Timed(response, Duration.ofNanos(System.nanoTime() - started).toMillis())
+        return TimedResponse(response, Duration.ofNanos(System.nanoTime() - started).toMillis())
     }
 
-    private fun items(accounts: List<String>): Set<String> =
+    private fun storedAccountIds(accounts: List<String>): Set<String> =
         accounts
             .chunked(100)
             .flatMap { chunk ->
@@ -114,10 +114,10 @@ class StoreOutageIT : KafkaITBase() {
         val unavailableTimeoutBefore = backpressure("timeout") + backpressure("unavailable")
         val eventAccount = newAccount()
 
-        ComposeControl.pause(SERVICE)
+        ComposeControl.pause(DYNAMODB_SERVICE)
         try {
             publish(EventPayloads.transaction(eventAccount, balanceAmount = "321.00"))
-            // 20 consultas sucessivas: cada uma 503 + Retry-After 10, em <= 2 s, nunca 404 nem saldo antigo (SC-008)
+            // 20 consultas sucessivas: cada uma 503 + Retry-After 10, em <= 2 s, nunca 404 nem saldo antigo
             val queries = (1..20).map { timedGet(known) }
             queries.forEachIndexed { index, timed ->
                 assertEquals(503, timed.response.statusCode(), "consulta ${index + 1}: nunca 404 nem saldo antigo")
@@ -129,7 +129,7 @@ class StoreOutageIT : KafkaITBase() {
                 val body = json.readTree(timed.response.body())
                 assertEquals("urn:problem-type:consulta-saldo:servico-indisponivel", body["type"].asString())
                 assertTrue(body["balance"] == null && body["owner"] == null, "consulta ${index + 1}: sem saldo")
-                assertTrue(timed.millis <= 2_000, "consulta ${index + 1}: ${timed.millis} ms > 2 s (SC-008)")
+                assertTrue(timed.millis <= 2_000, "consulta ${index + 1}: ${timed.millis} ms > 2 s")
             }
             println("OUTAGE-503-MS=${queries.map { it.millis }}")
 
@@ -160,23 +160,22 @@ class StoreOutageIT : KafkaITBase() {
             await.atMost(Duration.ofSeconds(45)).until { backpressureTotal() > failedBefore }
             println("OUTAGE-FAILED-DELIVERIES-AT-UNPAUSE=${backpressureTotal() - backpressureBefore}")
         } finally {
-            ComposeControl.unpause(SERVICE)
+            ComposeControl.unpause(DYNAMODB_SERVICE)
         }
         val unpausedAt = System.nanoTime()
 
         // retomada sem intervencao: em <= 60 s o saldo reflete o evento (lido direto do DynamoDB, independente do circuito)
         // `ignoreExceptions`: logo apos o `unpause` o SDK ainda pode lancar (timeout/conexao) ate o DynamoDB Local responder de novo
-        await.atMost(Duration.ofSeconds(60)).ignoreExceptions().untilAsserted { assertEquals(setOf(eventAccount), items(listOf(eventAccount))) }
+        await.atMost(Duration.ofSeconds(60)).ignoreExceptions().untilAsserted { assertEquals(setOf(eventAccount), storedAccountIds(listOf(eventAccount))) }
         val drainMillis = Duration.ofNanos(System.nanoTime() - unpausedAt).toMillis()
         println("OUTAGE-DRAIN-MS=$drainMillis")
         assertEquals(0, topics.dltCountSince(dltBefore), "DLT segue inalterado")
         // O item pode aparecer logo apos o unpause: a escrita que o SDK deu por expirada ficou na fila do socket do DynamoDB Local
         // congelado e ele a aplica ao voltar (a escrita condicional e idempotente; a nova entrega sera um `duplicate`). A retomada
         // do consumer, essa sim, so termina quando a espera do backoff acaba e o offset e confirmado: e o que se mede aqui.
-        topics.awaitLagZero(Duration.ofSeconds(60))
+        topics.awaitGroupLagZero(Duration.ofSeconds(60))
         println("OUTAGE-LAG-ZERO-MS=${Duration.ofNanos(System.nanoTime() - unpausedAt).toMillis()}")
 
-        // o circuito fecha sozinho (OPEN -> HALF_OPEN -> CLOSED) e a API volta a responder o saldo novo
         await.atMost(Duration.ofSeconds(60)).pollInterval(Duration.ofMillis(500)).ignoreExceptions().untilAsserted {
             get(eventAccount)
             assertEquals(CircuitBreaker.State.CLOSED, circuitBreaker.state)
@@ -184,11 +183,11 @@ class StoreOutageIT : KafkaITBase() {
         awaitBalance(eventAccount, "321.00")
         assertEquals(200, get(known).statusCode())
         // a dependencia volta sozinha (cache de 5 s): dependencies 200, gauge 1; liveness e readiness nunca cairam
-        await.atMost(Duration.ofSeconds(20)).pollInterval(Duration.ofMillis(500)).untilAsserted { assertEquals(200, status("dependencies"), "dependencies apos o unpause") }
+        await.atMost(Duration.ofSeconds(20)).pollInterval(Duration.ofMillis(500)).untilAsserted { assertEquals(200, healthStatus("dependencies"), "dependencies apos o unpause") }
         assertEquals("""{"status":"UP"}""", management("/actuator/health/dependencies").body())
         assertEquals(1.0, dependencyUp(), "balance_dependency_up apos o unpause")
-        assertEquals(200, status("readiness"))
-        assertEquals(200, status("liveness"))
+        assertEquals(200, healthStatus("readiness"))
+        assertEquals(200, healthStatus("liveness"))
         assertEquals(200, management("/actuator/health").statusCode(), "a raiz volta a 200")
         assertTrue(
             backpressure("timeout") + backpressure("unavailable") - unavailableTimeoutBefore >= 5,
@@ -205,7 +204,7 @@ class StoreOutageIT : KafkaITBase() {
         val backpressureBefore = backpressureTotal()
         val accounts = (1..200).map { newAccount() }
 
-        ComposeControl.pause(SERVICE)
+        ComposeControl.pause(DYNAMODB_SERVICE)
         try {
             accounts.forEachIndexed { index, account -> publish(EventPayloads.transaction(account, balanceAmount = "${index + 1}.50")) }
             // segura a falha ate as threads de consumo retentarem varias vezes (o backoff cresce e as esperas ficam longas)
@@ -213,18 +212,17 @@ class StoreOutageIT : KafkaITBase() {
             assertTrue(topics.groupLag() > 0, "o backlog fica no broker")
             assertEquals(0, topics.dltCountSince(dltBefore), "nenhum evento valido no DLT durante a falha")
         } finally {
-            ComposeControl.unpause(SERVICE)
+            ComposeControl.unpause(DYNAMODB_SERVICE)
         }
         val unpausedAt = System.nanoTime()
 
-        await.atMost(Duration.ofSeconds(90)).pollInterval(Duration.ofMillis(500)).ignoreExceptions().untilAsserted { assertEquals(200, items(accounts).size, "itens gravados") }
+        await.atMost(Duration.ofSeconds(90)).pollInterval(Duration.ofMillis(500)).ignoreExceptions().untilAsserted { assertEquals(200, storedAccountIds(accounts).size, "itens gravados") }
         println("BACKLOG-DRAIN-MS=${Duration.ofNanos(System.nanoTime() - unpausedAt).toMillis()}")
-        topics.awaitLagZero(Duration.ofSeconds(60))
+        topics.awaitGroupLagZero(Duration.ofSeconds(60))
         println("BACKLOG-LAG-ZERO-MS=${Duration.ofNanos(System.nanoTime() - unpausedAt).toMillis()}")
 
-        assertEquals(accounts.toSet(), items(accounts), "exatamente 200 itens, 0 perdas (SC-007)")
+        assertEquals(accounts.toSet(), storedAccountIds(accounts), "exatamente 200 itens, 0 perdas")
         assertEquals(0, topics.dltCountSince(dltBefore), "nenhum evento valido no DLT")
-        // cada saldo e o do seu evento (nada trocado nem perdido)
         accounts.forEachIndexed { index, account ->
             val item = raw.getItem { it.tableName(DynamoDbTestSupport.tableName).key(DynamoDbTestSupport.key(account)).consistentRead(true) }.item()
             assertEquals(0, BigDecimal("${index + 1}.50").compareTo(BigDecimal(item.getValue("balanceAmount").n())), "saldo da conta ${index + 1}")
@@ -232,21 +230,21 @@ class StoreOutageIT : KafkaITBase() {
     }
 
     companion object {
-        private const val SERVICE = "dynamodb"
+        private const val DYNAMODB_SERVICE = "dynamodb"
         private val topicSet = TopicSet("it-outage")
 
         @JvmStatic
         @BeforeAll
         fun unpauseLeftovers() {
             // um `pause` esquecido por uma execucao anterior interrompida quebraria todos os ITs seguintes
-            if (ComposeControl.isPaused(SERVICE)) ComposeControl.unpause(SERVICE)
-            Runtime.getRuntime().addShutdownHook(Thread { ComposeControl.unpause(SERVICE) })
+            if (ComposeControl.isPaused(DYNAMODB_SERVICE)) ComposeControl.unpause(DYNAMODB_SERVICE)
+            Runtime.getRuntime().addShutdownHook(Thread { ComposeControl.unpause(DYNAMODB_SERVICE) })
         }
 
         @JvmStatic
         @AfterAll
         fun unpauseAtTheEnd() {
-            ComposeControl.unpause(SERVICE)
+            ComposeControl.unpause(DYNAMODB_SERVICE)
         }
 
         @JvmStatic

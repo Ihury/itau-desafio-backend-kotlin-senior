@@ -13,7 +13,6 @@ import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Primary
-import org.springframework.kafka.config.KafkaListenerEndpointRegistry
 import org.springframework.kafka.listener.ConcurrentMessageListenerContainer
 import org.springframework.test.context.DynamicPropertyRegistry
 import org.springframework.test.context.DynamicPropertySource
@@ -65,9 +64,6 @@ class UnclassifiedFailureIT : KafkaITBase() {
     @Autowired
     private lateinit var writer: DefectiveWriter
 
-    @Autowired
-    private lateinit var listenerRegistry: KafkaListenerEndpointRegistry
-
     private fun rejected(reason: String): Double = meterRegistry.get("balance.events").tags("outcome", "rejected", "reason", reason).counter().count()
 
     @Test
@@ -84,7 +80,7 @@ class UnclassifiedFailureIT : KafkaITBase() {
         topics.publishKeyed("mesma-particao", EventPayloads.transaction(neighbour, balanceAmount = "88.00"))
 
         awaitBalance(neighbour, "88.00")
-        topics.awaitLagZero()
+        topics.awaitGroupLagZero()
         assertEquals(3, writer.attempts.getValue(poisoned).get(), "exatamente 3 entregas antes do DLT")
         val records = topics.dltRecordsSince(before)
         assertEquals(1, records.size)
@@ -121,7 +117,7 @@ class UnclassifiedFailureIT : KafkaITBase() {
         val ownerThread = assertNotNull(writer.lastThread[poisoned])
         val owner =
             assertNotNull(
-                listenerRegistry.listenerContainers
+                registry.listenerContainers
                     .filterIsInstance<ConcurrentMessageListenerContainer<*, *>>()
                     .flatMap { it.containers }
                     .firstOrNull { ownerThread.startsWith("${it.beanName}-C-") },
@@ -131,7 +127,7 @@ class UnclassifiedFailureIT : KafkaITBase() {
         owner.stop()
         try {
             awaitBalance(neighbour, "77.00")
-            topics.awaitLagZero()
+            topics.awaitGroupLagZero()
         } finally {
             owner.start()
         }

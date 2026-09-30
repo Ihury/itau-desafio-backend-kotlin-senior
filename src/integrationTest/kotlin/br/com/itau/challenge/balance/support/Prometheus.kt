@@ -24,13 +24,13 @@ data class PrometheusSample(
 }
 
 /** Soma dos valores das amostras de [name] cujos rotulos contem todos os pares de [labels]. */
-fun List<PrometheusSample>.sum(
+fun List<PrometheusSample>.sumOfSamples(
     name: String,
     vararg labels: Pair<String, String>,
 ): Double = filter { it.name == name && labels.all { (key, value) -> it.labels[key] == value } }.sumOf { it.value }
 
 /** Valor unico (gauge) da amostra de [name] com os [labels] dados; falha se nao houver exatamente uma. */
-fun List<PrometheusSample>.single(
+fun List<PrometheusSample>.singleValue(
     name: String,
     vararg labels: Pair<String, String>,
 ): Double =

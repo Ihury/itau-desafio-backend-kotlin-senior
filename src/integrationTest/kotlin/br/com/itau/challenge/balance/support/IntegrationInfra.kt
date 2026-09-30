@@ -29,9 +29,8 @@ import java.util.concurrent.TimeUnit
  * aqui via `AdminClient`. O grupo de consumo tambem e exclusivo, para o teste nunca competir com o grupo `consulta-saldo` nem
  * com execucoes anteriores. Os topicos criados sao removidos ao fim da JVM (melhor esforco).
  *
- * O conjunto [shared] (topico, DLT e grupo) e o dos ITs que herdam de [KafkaIngestionITBase] e compartilham UM contexto Spring.
- * Um IT que precisa de um contexto proprio (outra configuracao, `@TestConfiguration`) DEVE usar um [TopicSet] proprio: dois
- * contextos no mesmo grupo dividiriam as particoes e um deles processaria as mensagens do outro.
+ * O conjunto [sharedTopics] e o dos ITs que herdam de [SharedContextKafkaITBase] (UM contexto Spring). Um IT com contexto
+ * proprio DEVE usar um [TopicSet] proprio: dois contextos no mesmo grupo dividiriam as particoes.
  */
 object IntegrationInfra {
     val bootstrapServers: String = System.getenv("KAFKA_BOOTSTRAP_SERVERS")?.takeIf { it.isNotBlank() } ?: "localhost:19092"
@@ -45,17 +44,13 @@ object IntegrationInfra {
         Awaitility.setDefaultPollInterval(Duration.ofMillis(100))
     }
 
-    /** Conjunto de topicos e grupo compartilhado pelos ITs que herdam de [KafkaIngestionITBase]. */
-    val shared: TopicSet by lazy { TopicSet("it") }
+    val sharedTopics: TopicSet by lazy { TopicSet("it") }
 
-    /** Topico principal exclusivo desta execucao (conjunto compartilhado). */
-    val topic: String get() = shared.topic
+    val topic: String get() = sharedTopics.topic
 
-    /** DLT exclusivo desta execucao (conjunto compartilhado). */
-    val dltTopic: String get() = shared.dltTopic
+    val dltTopic: String get() = sharedTopics.dltTopic
 
-    /** Grupo de consumo exclusivo desta execucao (conjunto compartilhado). */
-    val groupId: String get() = shared.groupId
+    val groupId: String get() = sharedTopics.groupId
 
     internal fun adminClient(): AdminClient =
         AdminClient.create(mapOf(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG to bootstrapServers, AdminClientConfig.REQUEST_TIMEOUT_MS_CONFIG to "15000"))
@@ -71,22 +66,20 @@ object IntegrationInfra {
         )
     }
 
-    /** Registra as propriedades do conjunto compartilhado (`@DynamicPropertySource`); cria os topicos antes de o contexto subir. */
-    fun registerProperties(registry: DynamicPropertyRegistry) = shared.registerProperties(registry)
+    /** Registra as propriedades do conjunto compartilhado; cria os topicos antes de o contexto subir. */
+    fun registerProperties(registry: DynamicPropertyRegistry) = sharedTopics.registerProperties(registry)
 
     /** Publica os bytes no topico principal compartilhado, sem chave (como o autorizador), e espera a confirmacao do broker. */
-    fun publish(payload: ByteArray) = shared.publish(payload)
+    fun publish(payload: ByteArray) = sharedTopics.publish(payload)
 
-    fun publish(payload: String) = shared.publish(payload)
+    fun publish(payload: String) = sharedTopics.publish(payload)
 
-    /** Publica com [key] no conjunto compartilhado; ver [TopicSet.publishKeyed]. */
     fun publishKeyed(
         key: String,
         payload: String,
-    ) = shared.publishKeyed(key, payload)
+    ) = sharedTopics.publishKeyed(key, payload)
 
-    /** Espera as 12 particoes do topico compartilhado estarem atribuidas aos containers do listener. */
-    fun awaitAssignment(registry: KafkaListenerEndpointRegistry) = shared.awaitAssignment(registry)
+    fun awaitAssignment(registry: KafkaListenerEndpointRegistry) = sharedTopics.awaitAssignment(registry)
 }
 
 /**
@@ -103,7 +96,7 @@ class TopicSet(
     val dltTopic: String = "$topic.DLT"
     val groupId: String = "$prefix-group-$runId"
 
-    private val topicsCreated: Boolean by lazy {
+    private val ensureTopicsCreated: Boolean by lazy {
         IntegrationInfra.adminClient().use { admin ->
             val topics = mutableListOf(NewTopic(topic, IntegrationInfra.MAIN_PARTITIONS, 1.toShort()))
             if (createDltOnStart) topics += dltDefinition()
@@ -130,7 +123,7 @@ class TopicSet(
      * um `docker compose up app` na 8080/8082 nunca colida com os ITs); cria os topicos antes de o contexto subir.
      */
     fun properties(): Map<String, String> {
-        check(topicsCreated)
+        check(ensureTopicsCreated)
         return mapOf(
             "balance.events.topic" to topic,
             "balance.events.dlt-topic" to dltTopic,
@@ -141,7 +134,6 @@ class TopicSet(
         )
     }
 
-    /** Registra as propriedades do teste (`@DynamicPropertySource`). */
     fun registerProperties(registry: DynamicPropertyRegistry) {
         properties().forEach { (name, value) -> registry.add(name) { value } }
     }
@@ -171,13 +163,10 @@ class TopicSet(
     ) = publishKeyed(key, payload.toByteArray(Charsets.UTF_8))
 
     /**
-     * Espera o grupo ESTABILIZAR: todas as particoes do topico atribuidas E cada consumidor do container concorrente com ao menos
-     * uma delas. So as particoes atribuidas nao bastam: os consumidores entram no grupo em momentos diferentes (num runner
-     * lento, alguns segundos depois), o primeiro rebalance ja atribui as 12 particoes a dois deles e o seguinte, cooperativo,
-     * as move para os demais. Um rebalance no meio de um teste zera a contagem de entregas de um registro em retry (o
-     * `DefaultErrorHandler` guarda a contagem por consumidor) e reentrega o que estava em voo, o que o at-least-once permite
-     * mas que estes testes nao querem medir. Sem isso o primeiro teste tambem mediria o tempo de entrada no grupo, e nao a
-     * latencia de processamento.
+     * Espera o grupo ESTABILIZAR: todas as particoes atribuidas E cada consumidor do container com ao menos uma. Os consumidores
+     * entram em momentos diferentes (num runner lento, segundos depois): o 1o rebalance atribui as 12 particoes a dois deles e
+     * o cooperativo seguinte as redistribui. Um rebalance no meio do teste zera a contagem de entregas do `DefaultErrorHandler`
+     * (por consumidor) e reentrega o que estava em voo: valido no at-least-once, mas nao e o que estes testes medem.
      */
     fun awaitAssignment(registry: KafkaListenerEndpointRegistry) {
         await.untilAsserted {
@@ -198,11 +187,9 @@ class TopicSet(
         }
     }
 
-    // ----- DLT e lag ---------------------------------------------------------------------------------------------------
-
     private fun dltPartitions(): List<TopicPartition> = (0 until IntegrationInfra.DLT_PARTITIONS).map { TopicPartition(dltTopic, it) }
 
-    /** Offset final de cada particao do DLT (retencao e o inicio do intervalo dos testes seguintes). */
+    /** Offset final de cada particao do DLT; marco inicial para [dltCountSince] e [dltRecordsSince]. */
     fun dltEndOffsets(): Map<TopicPartition, Long> =
         IntegrationInfra.adminClient().use { admin ->
             admin
@@ -212,7 +199,6 @@ class TopicSet(
                 .mapValues { it.value.offset() }
         }
 
-    /** Quantas mensagens o DLT recebeu desde [from] (soma das diferencas de offset final). */
     fun dltCountSince(from: Map<TopicPartition, Long>): Int = dltEndOffsets().entries.sumOf { (partition, end) -> end - (from[partition] ?: 0L) }.toInt()
 
     /** Todas as mensagens do DLT desde [from], lidas sem grupo (atribuicao manual), com os headers. */
@@ -249,7 +235,7 @@ class TopicSet(
         }
 
     /** Espera o grupo confirmar TODAS as mensagens publicadas (o commit e em lote, depois de processar o poll). */
-    fun awaitLagZero(atMost: Duration = Duration.ofSeconds(30)) {
+    fun awaitGroupLagZero(atMost: Duration = Duration.ofSeconds(30)) {
         // `AssertionError` (nao `IllegalStateException`): o Awaitility so repete a condicao quando ela lanca `AssertionError`
         await.atMost(atMost).untilAsserted {
             val lag = groupLag()

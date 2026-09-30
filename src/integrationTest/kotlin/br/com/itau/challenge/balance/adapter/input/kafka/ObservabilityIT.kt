@@ -8,8 +8,8 @@ import br.com.itau.challenge.balance.support.KafkaITBase
 import br.com.itau.challenge.balance.support.PrometheusSample
 import br.com.itau.challenge.balance.support.TopicSet
 import br.com.itau.challenge.balance.support.histogramQuantile
-import br.com.itau.challenge.balance.support.single
-import br.com.itau.challenge.balance.support.sum
+import br.com.itau.challenge.balance.support.singleValue
+import br.com.itau.challenge.balance.support.sumOfSamples
 import org.awaitility.kotlin.await
 import org.awaitility.kotlin.untilAsserted
 import org.junit.jupiter.api.Test
@@ -30,12 +30,11 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * Observabilidade ponta a ponta contra Redpanda e DynamoDB Local reais (US6, `quickstart.md` 2 e 9): um lote com TODOS os desfechos
- * (processado, obsoleto, duplicado e um rejeitado de cada motivo do catalogo) reconcilia com o total consumido (SC-010) lido em
- * `/actuator/prometheus` na porta de gerenciamento; as metricas do contrato (histogramas, circuit breaker) existem e as razoes de
- * rejeitados e obsoletos saem das consultas PromQL do contrato (SC-011); os logs do container real (inclusive o do Spring Kafka
- * para `RecordInRetryException`) sao JSON e nao carregam valores do payload; saude e Actuator ficam so na porta de gerenciamento.
- * Contexto e topicos proprios.
+ * Observabilidade ponta a ponta contra Redpanda e DynamoDB Local reais: um lote com TODOS os desfechos (processado, obsoleto,
+ * duplicado e um rejeitado de cada motivo do catalogo) reconcilia com o total consumido, lido em `/actuator/prometheus` na
+ * porta de gerenciamento; as metricas do contrato (histogramas, circuit breaker) existem e as razoes de rejeitados e obsoletos
+ * saem das consultas PromQL do contrato; os logs do container real (inclusive o do Spring Kafka para `RecordInRetryException`)
+ * sao JSON e nao carregam valores do payload; saude e Actuator ficam so na porta de gerenciamento. Contexto e topicos proprios.
  */
 @ExtendWith(OutputCaptureExtension::class)
 class ObservabilityIT : KafkaITBase() {
@@ -69,13 +68,13 @@ class ObservabilityIT : KafkaITBase() {
     private val balanceSentinel = "98765.43"
     private val ownerSentinel = "0b5e1c2d-aaaa-4bbb-8ccc-1234567890ab"
     private val textSentinel = "SEGREDO-OBS-999"
-    private val reasons =
+    private val allRejectionReasons =
         listOf("malformed_payload", "missing_field", "invalid_identifier", "invalid_value", "invalid_currency", "invalid_timestamp", "unknown_domain_value", "unprocessable_event")
 
-    private fun events(
+    private fun eventsTotal(
         samples: List<PrometheusSample>,
         vararg labels: Pair<String, String>,
-    ) = samples.sum("balance_events_total", *labels)
+    ) = samples.sumOfSamples("balance_events_total", *labels)
 
     private fun JsonNode.text(field: String): String? = this[field]?.asString()
 
@@ -83,60 +82,66 @@ class ObservabilityIT : KafkaITBase() {
     private fun publishBatch(): Int {
         val accountA = newAccount()
         val accountB = newAccount()
-        val txOld = "11111111-1111-4111-8111-111111111111"
-        val txNew = "22222222-2222-4222-8222-222222222222"
-        val old = EventPayloads.transaction(accountA, timestampMicros = EventPayloads.BASE_TIMESTAMP_MICROS, transactionId = txOld, balanceAmount = "10.00")
-        val newer = EventPayloads.transaction(accountA, timestampMicros = EventPayloads.BASE_TIMESTAMP_MICROS + 1_000, transactionId = txNew, balanceAmount = "20.00")
+        val olderTransactionId = "11111111-1111-4111-8111-111111111111"
+        val newerTransactionId = "22222222-2222-4222-8222-222222222222"
+        val olderEvent = EventPayloads.transaction(accountA, timestampMicros = EventPayloads.BASE_TIMESTAMP_MICROS, transactionId = olderTransactionId, balanceAmount = "10.00")
+        val newerEvent = EventPayloads.transaction(accountA, timestampMicros = EventPayloads.BASE_TIMESTAMP_MICROS + 1_000, transactionId = newerTransactionId, balanceAmount = "20.00")
         // mesma chave = mesma particao = ordem de publicacao: processado, processado, obsoleto (o vigente e mais novo) e duplicado
-        listOf(old, newer, old, newer).forEach { topics.publishKeyed("obs-a", it) }
+        listOf(olderEvent, newerEvent, olderEvent, newerEvent).forEach { topics.publishKeyed("obs-a", it) }
         topics.publish(EventPayloads.transaction(accountB, balanceAmount = "30.00"))
 
-        val poisoned = newAccount()
-        writer.poisoned += poisoned
-        val hazardous = { balance: String -> EventPayloads.transaction(newAccount(), balanceAmount = balance, ownerId = ownerSentinel) }
+        val poisonedAccount = newAccount()
+        writer.poisoned += poisonedAccount
+        val payloadWithSentinels = { balance: String -> EventPayloads.transaction(newAccount(), balanceAmount = balance, ownerId = ownerSentinel) }
+        val malformedPayload = """{"account":{"owner":"$ownerSentinel","balance":{"amount":$balanceSentinel,"note":"$textSentinel""""
+        val missingFieldPayload = payloadWithSentinels(balanceSentinel).replace(""""owner":"$ownerSentinel",""", "")
+        val invalidIdentifierPayload = EventPayloads.transaction(newAccount(), transactionId = "1-1-1-1-1", balanceAmount = balanceSentinel, ownerId = ownerSentinel)
+        val invalidValuePayload = EventPayloads.transaction(newAccount(), balanceAmount = "\"$balanceSentinel\"", ownerId = ownerSentinel)
+        val invalidCurrencyPayload = EventPayloads.transaction(newAccount(), currency = "brl", balanceAmount = balanceSentinel, ownerId = ownerSentinel)
+        val invalidTimestampPayload = EventPayloads.transaction(newAccount(), timestampMicros = 1751749453433L, balanceAmount = balanceSentinel, ownerId = ownerSentinel)
+        val unknownDomainValuePayload = EventPayloads.transaction(newAccount(), transactionType = "TRANSFER", balanceAmount = balanceSentinel, ownerId = ownerSentinel)
+        val unprocessableEventPayload = EventPayloads.transaction(poisonedAccount, balanceAmount = balanceSentinel, ownerId = ownerSentinel)
         listOf(
-            """{"account":{"owner":"$ownerSentinel","balance":{"amount":$balanceSentinel,"note":"$textSentinel"""", // malformado: JSON truncado
-            hazardous(balanceSentinel).replace(""""owner":"$ownerSentinel",""", ""), // missing_field
-            EventPayloads.transaction(newAccount(), transactionId = "1-1-1-1-1", balanceAmount = balanceSentinel, ownerId = ownerSentinel), // invalid_identifier
-            EventPayloads.transaction(newAccount(), balanceAmount = "\"$balanceSentinel\"", ownerId = ownerSentinel), // invalid_value (texto)
-            EventPayloads.transaction(newAccount(), currency = "brl", balanceAmount = balanceSentinel, ownerId = ownerSentinel), // invalid_currency
-            EventPayloads.transaction(newAccount(), timestampMicros = 1751749453433L, balanceAmount = balanceSentinel, ownerId = ownerSentinel), // invalid_timestamp
-            EventPayloads.transaction(newAccount(), transactionType = "TRANSFER", balanceAmount = balanceSentinel, ownerId = ownerSentinel), // unknown_domain_value
-            EventPayloads.transaction(poisoned, balanceAmount = balanceSentinel, ownerId = ownerSentinel), // unprocessable_event (defeito interno)
+            malformedPayload,
+            missingFieldPayload,
+            invalidIdentifierPayload,
+            invalidValuePayload,
+            invalidCurrencyPayload,
+            invalidTimestampPayload,
+            unknownDomainValuePayload,
+            unprocessableEventPayload,
         ).forEach { topics.publish(it) }
         return 4 + 1 + 8
     }
 
     @Test
-    fun `every consumed message has exactly one counted outcome and the rejected and obsolete ratios are computable (SC-010, SC-011)`(output: CapturedOutput) {
-        val from = output.all.length
+    fun `every consumed message has exactly one counted outcome and the rejected and obsolete ratios are computable`(output: CapturedOutput) {
+        val logOffset = output.all.length
         val before = scrape()
 
         val published = publishBatch()
 
-        topics.awaitLagZero(Duration.ofSeconds(60))
+        topics.awaitGroupLagZero(Duration.ofSeconds(60))
         val after = scrape()
-        fun delta(vararg labels: Pair<String, String>) = events(after, *labels) - events(before, *labels)
+        fun delta(vararg labels: Pair<String, String>) = eventsTotal(after, *labels) - eventsTotal(before, *labels)
         assertEquals(3.0, delta("outcome" to "processed"), "processados")
         assertEquals(1.0, delta("outcome" to "obsolete"), "obsoletos")
         assertEquals(1.0, delta("outcome" to "duplicate"), "duplicados")
         assertEquals(8.0, delta("outcome" to "rejected"), "rejeitados")
-        reasons.forEach { assertEquals(1.0, delta("outcome" to "rejected", "reason" to it), "rejeitado por $it") }
-        assertEquals(published.toDouble(), delta(), "a soma dos desfechos e igual ao total consumido (SC-010)")
+        allRejectionReasons.forEach { assertEquals(1.0, delta("outcome" to "rejected", "reason" to it), "rejeitado por $it") }
+        assertEquals(published.toDouble(), delta(), "a soma dos desfechos e igual ao total consumido")
 
-        // SC-011: as consultas do contrato, sobre os deltas do periodo
+        // razoes calculadas como as consultas PromQL do contrato, sobre os deltas do periodo
         val rejectedRatio = delta("outcome" to "rejected") / delta()
         val obsoleteRatio = delta("outcome" to "obsolete") / delta()
         assertEquals(8.0 / published, rejectedRatio, 1e-9)
         assertEquals(1.0 / published, obsoleteRatio, 1e-9)
 
-        // o timer de ingestao registra cada ENTREGA por desfecho. Os desfechos com entrega unica (processado, obsoleto, duplicado e os
-        // 7 rejeitados por evento invalido) tem contagem exata. O defeito interno (nao classificado) tem NO MINIMO 3 entregas, todas
-        // `error`: se o dono da particao sai do grupo no meio delas (rebalance quando os consumidores entram com atraso, como no
-        // runner de 2 vCPUs do CI, que viu 5), o novo dono recomeca a contagem e reentrega, o que o at-least-once permite
-        // (`UnclassifiedFailureIT` reproduz isso de forma deterministica). O que continua exato e o DESFECHO: `rejected{unprocessable_event}`
-        // e contado UMA vez, pois so o `recovered` (a confirmacao do DLT) o conta, verificado acima com `delta(...) == 1.0`.
-        fun ingested(outcome: String) = after.sum("balance_ingest_duration_seconds_count", "outcome" to outcome) - before.sum("balance_ingest_duration_seconds_count", "outcome" to outcome)
+        // o timer de ingestao registra cada ENTREGA por desfecho. Os de entrega unica tem contagem exata. O defeito interno
+        // tem NO MINIMO 3 entregas, todas `error`: se o dono da particao sai do grupo no meio (rebalance, como no runner de 2 vCPUs
+        // do CI, que viu 5), o novo dono recomeca a contagem e reentrega (at-least-once; `UnclassifiedFailureIT` reproduz isso de
+        // forma deterministica). O DESFECHO continua exato: `rejected{unprocessable_event}` conta UMA vez, so o `recovered` conta.
+        fun ingested(outcome: String) = after.sumOfSamples("balance_ingest_duration_seconds_count", "outcome" to outcome) - before.sumOfSamples("balance_ingest_duration_seconds_count", "outcome" to outcome)
         assertEquals(
             mapOf("processed" to 3.0, "obsolete" to 1.0, "duplicate" to 1.0, "rejected" to 7.0),
             listOf("processed", "obsolete", "duplicate", "rejected").associateWith(::ingested),
@@ -144,7 +149,7 @@ class ObservabilityIT : KafkaITBase() {
         assertTrue(ingested("error") >= 3.0, "o defeito interno tem no minimo 3 entregas (podem ser mais se houver rebalance): ${ingested("error")}")
 
         // privacidade dos logs do container real: JSON, sem valores do payload, com a mensagem do Spring Kafka para o retry
-        val emitted = output.all.substring(from).lines().filter { it.isNotBlank() }
+        val emitted = output.all.substring(logOffset).lines().filter { it.isNotBlank() }
         val records = emitted.map { line -> runCatching { json.readTree(line) }.getOrElse { throw AssertionError("linha que nao e JSON: $line") } }
         val text = emitted.joinToString("\n")
         listOf(balanceSentinel, ownerSentinel, textSentinel, "97.07", "1751749453433").forEach { assertTrue(it !in text, "'$it' vazou para os logs") }
@@ -180,11 +185,10 @@ class ObservabilityIT : KafkaITBase() {
         listOf("balance_store_write_duration_seconds", "balance_store_read_duration_seconds", "balance_ingest_duration_seconds").forEach {
             assertTrue(bounds(it).size >= 9, "histograma de $it: ${bounds(it)}")
         }
-        assertEquals(1.0, samples.single("resilience4j_circuitbreaker_state", "name" to "dynamodb-read", "state" to "closed"), "circuit breaker fechado")
+        assertEquals(1.0, samples.singleValue("resilience4j_circuitbreaker_state", "name" to "dynamodb-read", "state" to "closed"), "circuit breaker fechado")
         assertTrue(samples.any { it.name == "resilience4j_circuitbreaker_calls_seconds_count" || it.name.startsWith("resilience4j_circuitbreaker_") }, "metricas do circuit breaker")
-        assertTrue(samples.sum("spring_kafka_listener_seconds_count") > 0, "observacao do listener Kafka (spring.kafka.listener.observation-enabled)")
+        assertTrue(samples.sumOfSamples("spring_kafka_listener_seconds_count") > 0, "observacao do listener Kafka (spring.kafka.listener.observation-enabled)")
 
-        // histogram_quantile do contrato (p99 da escrita e da API)
         val writeP99 = samples.histogramQuantile(0.99, "balance_store_write_duration_seconds")
         val apiP99 = samples.histogramQuantile(0.99, "http_server_requests_seconds", "uri" to "/balances/{accountId}")
         assertTrue(writeP99.isFinite() && writeP99 > 0.0, "p99 da escrita: $writeP99")
@@ -198,7 +202,7 @@ class ObservabilityIT : KafkaITBase() {
             assertEquals(200, response.statusCode(), group)
             assertEquals("""{"status":"UP"}""", response.body(), group)
         }
-        assertEquals(1.0, scrape().single("balance_dependency_up", "dependency" to "dynamodb"))
+        assertEquals(1.0, scrape().singleValue("balance_dependency_up", "dependency" to "dynamodb"))
         listOf("/actuator/health", "/actuator/health/liveness", "/actuator/health/readiness", "/actuator/health/dependencies", "/actuator/prometheus", "/actuator/info").forEach {
             assertEquals(404, api(it).statusCode(), "$it nao pode responder na porta da API")
         }

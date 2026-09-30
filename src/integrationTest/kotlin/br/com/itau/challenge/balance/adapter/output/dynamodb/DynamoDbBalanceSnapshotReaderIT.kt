@@ -12,6 +12,7 @@ import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient
+import software.amazon.awssdk.services.dynamodb.model.AttributeValue
 import software.amazon.awssdk.services.dynamodb.model.DynamoDbException
 import software.amazon.awssdk.services.dynamodb.model.GetItemRequest
 import software.amazon.awssdk.services.dynamodb.model.PutItemRequest
@@ -45,8 +46,8 @@ class DynamoDbBalanceSnapshotReaderIT {
         readClient.close()
     }
 
-    private fun put(item: Map<String, software.amazon.awssdk.services.dynamodb.model.AttributeValue>) {
-        raw.putItem(PutItemRequest.builder().tableName(DynamoDbTestSupport.tableName).item(item).build())
+    private fun put(attributes: Map<String, AttributeValue>) {
+        raw.putItem(PutItemRequest.builder().tableName(DynamoDbTestSupport.tableName).item(attributes).build())
     }
 
     private fun rawBalanceAmount(): String =
@@ -60,7 +61,7 @@ class DynamoDbBalanceSnapshotReaderIT {
     fun `database normalizes trailing zeros of the stored number and the reader still delivers the same value`() {
         put(item(accountId, balanceAmount = "183.10"))
 
-        assertEquals("183.1", rawBalanceAmount(), "normalizacao do N documentada no data-model 4.2")
+        assertEquals("183.1", rawBalanceAmount(), "o DynamoDB normaliza 183.10 para 183.1")
 
         val snapshot = assertNotNull(reader.find(AccountId.parse(accountId)))
         assertEquals(0, BigDecimal("183.10").compareTo(snapshot.balance.amount))
@@ -89,7 +90,7 @@ class DynamoDbBalanceSnapshotReaderIT {
     }
 
     @Test
-    fun `absent account is null`() {
+    fun `an absent account is read as null`() {
         assertNull(reader.find(AccountId.parse(accountId)))
     }
 

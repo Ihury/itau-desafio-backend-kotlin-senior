@@ -27,8 +27,8 @@ import kotlin.test.assertTrue
  * Concorrencia REAL contra o DynamoDB Local (`make integration-test`): 32 threads, liberadas juntas por um
  * `CountDownLatch`, gravam 400 eventos (300 chaves distintas + 100 duplicatas, fora de ordem, com empates de `timestamp`) na
  * MESMA conta pelo `DynamoDbBalanceSnapshotWriter` real, sem lock local. O snapshot final tem de ser o de maior
- * `(timestamp, transactionId)` (FR-007) e cada escrita produz exatamente um desfecho. Um leitor concorrente (leitura
- * fortemente consistente) so pode observar snapshots INTEGROS: todos os campos do MESMO evento, nunca uma mistura (FR-027).
+ * `(timestamp, transactionId)` e cada escrita produz exatamente um desfecho. Um leitor concorrente (leitura
+ * fortemente consistente) so pode observar snapshots INTEGROS: todos os campos do MESMO evento, nunca uma mistura.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class ConcurrentWritesIT {
@@ -51,7 +51,7 @@ class ConcurrentWritesIT {
         const val DUPLICATES = 100
         const val TOTAL = UNIQUE_KEYS + DUPLICATES
 
-        /** O leitor concorrente precisa de amostras suficientes para a garantia de integridade (FR-027) ter valor. */
+        /** O leitor concorrente precisa de amostras suficientes para a verificacao de integridade ter valor. */
         const val MIN_CONCURRENT_READS = 50
         val TX_COUNT = ConvergenceModel.TRANSACTION_IDS.size
     }

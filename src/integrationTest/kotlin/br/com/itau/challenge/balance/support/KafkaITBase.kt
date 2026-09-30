@@ -30,24 +30,22 @@ import kotlin.test.assertEquals
  * espera de saldo. O conjunto de topicos e grupo ([topics]) e definido pela subclasse.
  *
  * Um IT com contexto Spring PROPRIO (outras propriedades ou `@TestConfiguration`) estende esta classe com um [TopicSet] proprio e
- * a sua `@DynamicPropertySource`; os ITs sem contexto proprio estendem [KafkaIngestionITBase], que compartilha um unico contexto
- * (dois contextos no mesmo grupo dividiriam as particoes e um deles processaria as mensagens do outro).
+ * a sua `@DynamicPropertySource`; os ITs sem contexto proprio estendem [SharedContextKafkaITBase], que compartilha um unico
+ * contexto (dois contextos no mesmo grupo dividiriam as particoes e um deles processaria as mensagens do outro).
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
 abstract class KafkaITBase {
     companion object {
-        /** SLO de consulta apos a publicacao (SC-002). */
+        /** Prazo maximo (5 s) para o saldo ficar consultavel apos a publicacao. */
         val SLO: Duration = Duration.ofSeconds(5)
     }
 
-    /** Topicos e grupo do contexto deste IT. */
     protected abstract val topics: TopicSet
 
     @LocalServerPort
     protected var port: Int = 0
 
-    /** Porta do Actuator (health e prometheus), separada da API. */
     @LocalManagementPort
     protected var managementPort: Int = 0
 
@@ -60,7 +58,7 @@ abstract class KafkaITBase {
     private val http = HttpClient.newHttpClient()
     protected val json: JsonMapper = JsonMapper.builder().enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS).build()
     protected lateinit var raw: DynamoDbClient
-    private val created = mutableListOf<String>()
+    private val createdAccountIds = mutableListOf<String>()
 
     @BeforeEach
     fun setUp() {
@@ -68,30 +66,27 @@ abstract class KafkaITBase {
         topics.awaitAssignment(registry)
         // Barreira de isolamento: eventos em voo do teste anterior (processados, mas ainda nao confirmados) contaminariam os deltas
         // exatos de metricas lidos como baseline por este teste. Com o lag zerado, todo desfecho anterior ja foi contabilizado.
-        topics.awaitLagZero()
+        topics.awaitGroupLagZero()
     }
 
     @AfterEach
     fun tearDown() {
-        created.forEach { raw.deleteItem(DeleteItemRequest.builder().tableName(DynamoDbTestSupport.tableName).key(DynamoDbTestSupport.key(it)).build()) }
-        created.clear()
+        createdAccountIds.forEach { raw.deleteItem(DeleteItemRequest.builder().tableName(DynamoDbTestSupport.tableName).key(DynamoDbTestSupport.key(it)).build()) }
+        createdAccountIds.clear()
         raw.close()
     }
 
-    protected fun newAccount(): String = DynamoDbTestSupport.randomAccountId().also { created += it }
+    protected fun newAccount(): String = DynamoDbTestSupport.randomAccountId().also { createdAccountIds += it }
 
     protected fun get(accountId: String): HttpResponse<String> =
         http.send(HttpRequest.newBuilder(URI.create("http://localhost:$port/balances/$accountId")).GET().build(), HttpResponse.BodyHandlers.ofString())
 
-    /** GET na porta da API, em um caminho qualquer. */
     protected fun api(path: String): HttpResponse<String> =
         http.send(HttpRequest.newBuilder(URI.create("http://localhost:$port$path")).GET().build(), HttpResponse.BodyHandlers.ofString())
 
-    /** GET na porta de gerenciamento (Actuator). */
     protected fun management(path: String): HttpResponse<String> =
         http.send(HttpRequest.newBuilder(URI.create("http://localhost:$managementPort$path")).GET().build(), HttpResponse.BodyHandlers.ofString())
 
-    /** Amostras de `/actuator/prometheus` na porta de gerenciamento. */
     protected fun scrape(): List<PrometheusSample> {
         val response = management("/actuator/prometheus")
         assertEquals(200, response.statusCode(), "GET /actuator/prometheus")
@@ -120,11 +115,11 @@ abstract class KafkaITBase {
 
 /**
  * Base dos ITs de ingestao que compartilham UM contexto Spring em cache: a `@DynamicPropertySource` vive AQUI, de modo que todas
- * as subclasses usam o mesmo conjunto [IntegrationInfra.shared] e um unico listener no grupo de consumo exclusivo da execucao.
+ * as subclasses usam o mesmo conjunto [IntegrationInfra.sharedTopics] e um unico listener no grupo de consumo exclusivo da execucao.
  */
-abstract class KafkaIngestionITBase : KafkaITBase() {
+abstract class SharedContextKafkaITBase : KafkaITBase() {
     override val topics: TopicSet
-        get() = IntegrationInfra.shared
+        get() = IntegrationInfra.sharedTopics
 
     companion object {
         @JvmStatic
