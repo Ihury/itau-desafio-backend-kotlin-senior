@@ -8,11 +8,9 @@ import io.micrometer.core.instrument.MeterRegistry
 import org.springframework.stereotype.Component
 
 /**
- * Contadores de desfecho (contracts/observability.md): `balance.events{outcome, reason}` com exatamente um desfecho por
- * evento (`reason=none` fora de `rejected`) e `balance.events.anomalies{type=conflicting_duplicate}`, que e adicional e nao
- * conta um segundo desfecho. `rejected` tem um contador por motivo do catalogo (todos registrados em zero) e
- * `balance.dlt.publish.failures` conta as falhas de publicacao no DLT, que nao sao desfecho, e
- * `balance.consumer.backpressure{cause=throttled|unavailable|timeout}` conta as pausas do consumer por falha transitoria.
+ * Um contador `balance.events{outcome, reason}` por desfecho (`reason=none` fora de `rejected`; `rejected` tem um por motivo
+ * do catalogo, todos registrados em zero). `balance.events.anomalies{type=conflicting_duplicate}` e adicional: nao conta um
+ * segundo desfecho. `balance.dlt.publish.failures` e `balance.consumer.backpressure{cause}` nao sao desfechos.
  */
 @Component
 class MicrometerProcessingMetrics(

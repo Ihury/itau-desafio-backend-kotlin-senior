@@ -8,9 +8,9 @@ import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.RestController
 
 /**
- * Serve o contrato (`static/openapi.yaml`, copia verbatim de `specs/.../contracts/openapi.yaml`) em `/openapi.yaml`
- * como `application/yaml`. O handler estatico padrao o serviria como `application/octet-stream` (nem o JDK nem o Spring
- * conhecem a extensao `yaml`, e o Spring 7 nao permite registrar o tipo no handler de recursos).
+ * Serve `static/openapi.yaml` em `/openapi.yaml` como `application/yaml`. O handler estatico padrao o serviria como
+ * `application/octet-stream` (nem o JDK nem o Spring conhecem a extensao `yaml`, e o Spring 7 nao permite registrar o tipo no
+ * handler de recursos).
  */
 @RestController
 class OpenApiController {

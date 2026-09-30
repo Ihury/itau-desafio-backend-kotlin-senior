@@ -5,7 +5,6 @@ import br.com.itau.challenge.balance.domain.exception.InvalidEventException
 import br.com.itau.challenge.balance.domain.model.RejectionReason
 import org.springframework.kafka.listener.ListenerExecutionFailedException
 
-/** As tres classes de falha do consumer (research.md R-08). */
 enum class FailureClass {
     /** Evento invalido: nunca vai funcionar, e isolado no DLT na primeira falha. */
     PERMANENT,
@@ -24,9 +23,8 @@ data class Rejection(
 )
 
 /**
- * Classifica a excecao lancada pelo listener. O container embrulha a excecao do listener em
- * [ListenerExecutionFailedException]; ela e desembrulhada antes de classificar. A classificacao e por classe, nunca por
- * mensagem.
+ * O container embrulha a excecao do listener em [ListenerExecutionFailedException]; ela e desembrulhada antes de
+ * classificar. A classificacao e por classe, nunca por mensagem.
  */
 object FailureClassifier {
     fun classify(failure: Throwable): FailureClass =

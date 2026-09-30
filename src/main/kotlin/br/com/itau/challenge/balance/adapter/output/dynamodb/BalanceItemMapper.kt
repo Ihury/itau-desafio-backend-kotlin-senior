@@ -13,7 +13,6 @@ import br.com.itau.challenge.balance.domain.model.TransactionId
 import software.amazon.awssdk.services.dynamodb.model.AttributeValue
 import java.math.BigDecimal
 
-/** Nomes dos atributos do item `AccountBalances` (data-model.md 4.1). */
 internal object BalanceAttributes {
     const val PK = "pk"
     const val SK = "sk"
@@ -32,17 +31,15 @@ internal object BalanceAttributes {
 }
 
 /**
- * Traduz entre [BalanceSnapshot] e o item do DynamoDB. `balanceAmount` e `N` escrito com `toPlainString()` (sem
- * notacao cientifica) e lido com `BigDecimal(String)`: o banco normaliza zeros a direita (`183.10` -> `183.1`) sem
- * alterar o valor.
+ * `balanceAmount` e `N` escrito com `toPlainString()` (sem notacao cientifica) e lido com `BigDecimal(String)`: o banco
+ * normaliza zeros a direita (`183.10` -> `183.1`) sem alterar o valor.
  *
- * Os instantes sao reidratados SEM checagem de faixa ([EventInstant.fromPersisted]): os minimos configuraveis de plausibilidade
- * (`BALANCE_MIN_*`) foram aplicados na escrita e a leitura confia no dado persistido (uma configuracao diferente da vigente na
- * gravacao nao pode transformar um snapshot valido em erro 500).
+ * Os instantes sao reidratados sem checagem de faixa ([EventInstant.fromPersisted]): os minimos configuraveis foram aplicados
+ * na escrita e a leitura confia no dado persistido.
  *
- * Um item que nao respeita o layout ou os tipos do dominio (corrompido ou legado) e SEMPRE uma
- * [IllegalStateException] (falha interna), nunca `InvalidEventException` (que a API leria como requisicao invalida)
- * nem dado errado. A mensagem cita apenas o nome do atributo; jamais o valor.
+ * Um item que nao respeita o layout ou os tipos do dominio (corrompido ou legado) e sempre uma [IllegalStateException] (falha
+ * interna), nunca `InvalidEventException` (que a API leria como requisicao invalida) nem dado errado. A mensagem cita apenas
+ * o nome do atributo; jamais o valor.
  */
 internal object BalanceItemMapper {
     fun keyOf(accountId: AccountId): Map<String, AttributeValue> =
@@ -107,7 +104,7 @@ internal object BalanceItemMapper {
     private fun Map<String, AttributeValue>.number(name: String): String = this[name]?.n() ?: corrupted(name)
 
     /**
-     * Executa a conversao de um atributo e a normaliza: falhas de validacao do dominio ou de parse numerico (`NumberFormatException`, inclusive expoente fora de faixa) viram
+     * Falhas de validacao do dominio ou de parse numerico (`NumberFormatException`, inclusive expoente fora de faixa) viram
      * [IllegalStateException] sem causa (a causa de um parser pode conter o valor).
      */
     private fun <T> readAttribute(

@@ -16,15 +16,14 @@ import java.util.concurrent.TimeUnit
 /**
  * Entrada Kafka: um registro por vez, com os bytes verbatim (`ByteArrayDeserializer` nunca lanca), convertidos pelo parser
  * estrito e entregues ao caso de uso. Nao recebe `Acknowledgment`: o commit do offset e do container (`AckMode=BATCH`, depois
- * que o listener retorna para todos os registros do poll), o que da entrega at-least-once (Constitution III). Qualquer excecao
- * propaga ao error handler do container; nada e engolido.
+ * que o listener retorna para todos os registros do poll), o que da entrega at-least-once. Qualquer excecao propaga ao error
+ * handler do container; nada e engolido.
  *
  * O MDC leva `correlationId=<topic>-<partition>@<offset>` durante todo o processamento e `accountId`/`transactionId` somente
  * depois que o evento foi parseado; e sempre limpo em `finally`. Nunca registra payload, saldo nem titular.
  *
- * O timer `balance.ingest.duration{outcome}` (histograma, SLO de 5 ms a 2,5 s; parse + validacao + escrita) e registrado por
- * mensagem em `finally`: `processed`, `obsolete` ou `duplicate` conforme o caso de uso, `rejected` para [InvalidEventException]
- * e `error` para qualquer outra falha (a excecao sempre propaga ao error handler).
+ * O timer `balance.ingest.duration{outcome}` e registrado por mensagem em `finally`: `processed`, `obsolete` ou `duplicate`
+ * conforme o caso de uso, `rejected` para [InvalidEventException] e `error` para qualquer outra falha.
  */
 @Component
 class TransactionEventListener(
@@ -75,10 +74,9 @@ class TransactionEventListener(
         private const val ERROR = "error"
         private val OUTCOMES = listOf(PROCESSED, OBSOLETE, DUPLICATE, REJECTED, ERROR)
 
-        /** Objetivos do histograma: de 5 ms a 2,5 s (contracts/observability.md). */
         private val OBJECTIVES = listOf(5L, 10L, 25L, 50L, 100L, 250L, 500L, 1_000L, 2_500L).map(Duration::ofMillis).toTypedArray()
 
-        /** As cinco series nascem em zero, para as consultas do Prometheus enxergarem a serie antes da primeira mensagem. */
+        /** As cinco series nascem em zero, para o Prometheus enxerga-las antes da primeira mensagem. */
         private fun ingestTimer(
             registry: MeterRegistry,
             outcome: String,

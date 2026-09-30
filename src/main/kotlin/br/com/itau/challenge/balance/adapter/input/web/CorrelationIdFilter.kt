@@ -11,9 +11,8 @@ import org.springframework.web.filter.OncePerRequestFilter
 import java.util.UUID
 
 /**
- * Correlacao da requisicao: aceita `X-Correlation-Id` valido (`[A-Za-z0-9._-]{1,64}`) ou gera um UUID, devolve o valor
- * no MESMO cabecalho (inclusive nas respostas de erro, pois e escrito antes da cadeia) e o poe no MDC `correlationId`.
- * O MDC (`correlationId` e `accountId`, este definido pelo controller) e sempre limpo em `finally`.
+ * Aceita `X-Correlation-Id` valido ou gera um UUID. O cabecalho de resposta e escrito antes da cadeia, para constar tambem
+ * nas respostas de erro. Limpa o MDC (`correlationId` e `accountId`, este definido pelo controller) em `finally`.
  */
 @Component
 @Order(Ordered.HIGHEST_PRECEDENCE)

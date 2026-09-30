@@ -29,8 +29,8 @@ import java.time.Clock
 import java.time.Duration
 
 /**
- * Propriedades `balance.dlt.*` (contracts/configuration.md; os defaults vivem no `application.yaml`). [waitForSendResultTimeout]
- * e o tempo maximo que a publicacao SINCRONA no DLT espera pela confirmacao do broker.
+ * Propriedades `balance.dlt.*`. [waitForSendResultTimeout] e o tempo maximo que a publicacao sincrona no DLT espera pela
+ * confirmacao do broker.
  */
 @ConfigurationProperties("balance.dlt")
 class DeadLetterProperties(
@@ -38,27 +38,25 @@ class DeadLetterProperties(
 )
 
 /**
- * Tratamento de erros do consumer (US4): o UNICO `CommonErrorHandler` do contexto (bean `kafkaErrorHandler`), que substitui o
- * handler sem descarte da US2 e classifica cada falha por CLASSE (research.md R-08, [FailureClassifier]):
+ * Unico `CommonErrorHandler` do contexto (bean `kafkaErrorHandler`); classifica cada falha por classe ([FailureClassifier]):
  *
- * - **Permanente** ([InvalidEventException]): nao retentavel; vai ao DLT na primeira falha, com os bytes originais e os headers
+ * - Permanente ([InvalidEventException]): nao retentavel; vai ao DLT na primeira falha, com os bytes originais e os headers
  *   `x-rejection-*` (nenhum header de excecao do Spring, que poderia trazer trechos do payload).
- * - **Transitoria** ([BalanceStoreUnavailableException]): `ExponentialBackOff` (500 ms x2, teto de 30 s, jitter de 250 ms; parametros
- *   em [BackOffProperties]) SEM limite de tentativas nem de tempo e com o container PAUSADO durante a espera
- *   ([BackpressureConfig]; a pausa e do container pai: vale para todas as threads de consumo da instancia); o recoverer NUNCA e acionado, a mensagem valida fica no broker e jamais chega ao DLT (FR-017), e cada
- *   entrega que falha conta `balance.consumer.backpressure{cause}`.
- * - **Nao classificada** (qualquer outra): 3 entregas (`FixedBackOff(100 ms, 2)`) e DLT `unprocessable_event`, para que um
- *   defeito deterministico nao bloqueie a particao para sempre (Constitution III).
+ * - Transitoria ([BalanceStoreUnavailableException]): backoff exponencial ([BackOffProperties]) sem limite de tentativas nem de
+ *   tempo, com o container pausado durante a espera ([BackpressureConfig]). O recoverer nunca e acionado: a mensagem valida
+ *   fica no broker e jamais chega ao DLT. Cada entrega que falha conta `balance.consumer.backpressure{cause}`.
+ * - Nao classificada (qualquer outra): 3 entregas (`FixedBackOff(100 ms, 2)`) e DLT `unprocessable_event`, para que um
+ *   defeito deterministico nao bloqueie a particao para sempre.
  *
  * A publicacao no DLT e sincrona (`waitForSendResultTimeout`, `max.block.ms`, `acks=all`, idempotencia). Se ela falhar, o
- * recoverer lanca, o offset NAO e confirmado e o registro e reentregue (o container segue vivo); a falha e contada em
- * `balance.dlt.publish.failures`. `rejected{reason}` so e contado no `RetryListener.recovered`, isto e, depois que o DLT confirma.
- * O `DefaultErrorHandler` padrao do Spring Kafka (`FixedBackOff(0, 9)` seguido de log e skip) e exatamente o que isto substitui.
+ * recoverer lanca, o offset nao e confirmado e o registro e reentregue (o container segue vivo); a falha e contada em
+ * `balance.dlt.publish.failures`. `rejected{reason}` so e contado no `RetryListener.recovered`, isto e, depois que o DLT
+ * confirma.
  */
 @Configuration
 @EnableConfigurationProperties(DeadLetterProperties::class)
 class DeadLetterConfig {
-    /** Produtor do DLT: bytes verbatim (chave e valor), com `acks`, idempotencia e `max.block.ms` vindos de `spring.kafka.producer`. */
+    /** Produtor do DLT: bytes verbatim; `acks`, idempotencia e `max.block.ms` vem de `spring.kafka.producer`. */
     @Bean
     fun deadLetterKafkaTemplate(producerFactory: ProducerFactory<*, *>): KafkaTemplate<ByteArray, ByteArray> {
         @Suppress("UNCHECKED_CAST")
@@ -77,11 +75,7 @@ class DeadLetterConfig {
     ): CommonErrorHandler =
         deadLetterErrorHandler(deadLetterKafkaTemplate, dltTopic, properties.waitForSendResultTimeout, clock, metrics, backOff, containerPausingBackOffHandler)
 
-    /**
-     * [backOffHandler] decide o que fazer durante a espera: em producao e o `ContainerPausingBackOffHandler` (pausa o container PAI,
-     * isto e, TODAS as threads de consumo da instancia, e mantem o poll vivo); os testes informam um que so registra o intervalo,
-     * para nao esperar de verdade.
-     */
+    /** [backOffHandler] e parametro para os testes trocarem a pausa real por um que so registra o intervalo. */
     internal fun deadLetterErrorHandler(
         template: KafkaOperations<ByteArray, ByteArray>,
         dltTopic: String,
@@ -127,8 +121,8 @@ class DeadLetterConfig {
     }
 
     /**
-     * Backoff da transitoria: exponencial (multiplicador 2,0) com jitter nativo do Spring Framework 7, teto [BackOffProperties.maxMs]
-     * e SEM limite de tentativas nem de tempo (o `ExponentialBackOff` so esgota se `maxAttempts` ou `maxElapsedTime` forem limitados).
+     * Exponencial com jitter nativo do Spring Framework 7 e sem limite de tentativas nem de tempo: o `ExponentialBackOff` so
+     * esgota se `maxAttempts` ou `maxElapsedTime` forem limitados.
      */
     internal fun transientBackOff(settings: BackOffProperties): ExponentialBackOff =
         ExponentialBackOff(settings.initialMs, TRANSIENT_MULTIPLIER).apply {
@@ -149,9 +143,8 @@ class DeadLetterConfig {
         }
 
     /**
-     * Metricas e logs do ciclo de falha. NUNCA registra payload, saldo, titular nem texto de excecao: so coordenadas do
-     * registro, classe da excecao e motivo. O MDC `correlationId` (`<topic>-<partition>@<offset>`, o mesmo do listener) e posto
-     * so durante cada log e sempre removido.
+     * Nunca registra payload, saldo, titular nem texto de excecao: so coordenadas do registro, classe da excecao e motivo. O
+     * MDC `correlationId` (mesmo formato do listener) vale so durante cada log.
      */
     private class DeadLetterRetryListener(
         private val metrics: ProcessingMetrics,
@@ -166,8 +159,8 @@ class DeadLetterConfig {
                 when (failure) {
                     is BalanceStoreUnavailableException -> {
                         metrics.backpressure(failure.failureCause)
-                        // Diagnostico sem a mensagem livre do SDK nem payload. Configuracao/credencial (MISCONFIGURED) sobe a ERROR: continua
-                        // transitoria (retentada sem limite, nunca DLT), mas exige acao de quem opera.
+                        // Sem a mensagem livre do SDK nem payload. MISCONFIGURED sobe a ERROR: continua transitoria, mas exige acao
+                        // de quem opera.
                         if (failure.failureCause == StoreFailureCause.MISCONFIGURED) {
                             log.error("store unavailable, container paused for the back off {} attempt={} {}", coordinates(record), deliveryAttempt, failure.logDescription())
                         } else {

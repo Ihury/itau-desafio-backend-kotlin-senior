@@ -6,9 +6,7 @@ import org.apache.kafka.common.header.internals.RecordHeaders
 import java.time.Clock
 
 /**
- * Headers de rejeicao da mensagem no DLT (contracts/kafka-events.md secao 5): o codigo do motivo, o caminho do campo (so
- * quando atribuivel a um campo) e o instante do isolamento (ISO 8601 UTC, do [Clock] injetado). NUNCA carregam valores do
- * payload nem texto de excecao.
+ * Headers de rejeicao da mensagem no DLT. Nunca carregam valores do payload nem texto de excecao.
  */
 class RejectionHeaders(
     private val clock: Clock,

@@ -3,8 +3,8 @@ package br.com.itau.challenge.balance.adapter.output.dynamodb
 import java.time.Duration
 
 /**
- * Objetivos de nivel de servico (buckets do histograma) dos timers `balance.store.read.duration` e
- * `balance.store.write.duration` (contracts/observability.md): de 5 ms ate 2 s, cobrindo o timeout de escrita (2 s) e o de leitura.
+ * Buckets do histograma dos timers `balance.store.read.duration` e `balance.store.write.duration`; o teto de 2 s cobre o
+ * timeout de escrita.
  */
 internal object StoreLatencyObjectives {
     val OBJECTIVES: Array<Duration> =

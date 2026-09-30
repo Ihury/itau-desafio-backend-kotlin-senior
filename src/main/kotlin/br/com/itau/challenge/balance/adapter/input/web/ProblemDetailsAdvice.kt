@@ -20,11 +20,11 @@ import java.time.Duration
 import kotlin.math.ceil
 
 /**
- * Erros no formato Problem Details (RFC 9457, `application/problem+json`). `type` e uma URN estavel
- * (`urn:problem-type:consulta-saldo:<slug>`); o `detail` e uma mensagem fixa: nunca pilha, nome de infraestrutura,
- * saldo, titular nem a mensagem da excecao. Excecoes do framework (404 de rota, 405...) herdam o tratamento de
- * [ResponseEntityExceptionHandler]. Qualquer outra excecao (inclusive `IllegalStateException` de item corrompido e
- * `InvalidEventException` vinda do caso de uso) e erro interno: 500 generico, com o detalhe apenas no log.
+ * Erros em Problem Details (RFC 9457). `type` e uma URN estavel (`urn:problem-type:consulta-saldo:<slug>`); o `detail` e uma
+ * mensagem fixa: nunca pilha, nome de infraestrutura, saldo, titular nem a mensagem da excecao. Excecoes do framework (404
+ * de rota, 405...) herdam o tratamento de [ResponseEntityExceptionHandler]. Qualquer outra excecao (inclusive
+ * `IllegalStateException` de item corrompido e `InvalidEventException` vinda do caso de uso) e erro interno: 500 generico, com
+ * o detalhe apenas no log.
  */
 @RestControllerAdvice
 class ProblemDetailsAdvice(
@@ -53,9 +53,9 @@ class ProblemDetailsAdvice(
         exception: BalanceStoreUnavailableException,
         request: HttpServletRequest,
     ): ResponseEntity<ProblemDetail> {
-        // A rejeicao com o circuito aberto e esperada e ocorre por requisicao: DEBUG, sem pilha. O WARN fica para as falhas REAIS de
-        // leitura e para as transicoes de estado do breaker (`ResilienceConfig`). O diagnostico nunca traz a mensagem livre do SDK;
-        // configuracao/credencial (MISCONFIGURED) sobe a ERROR: o 503 e o mesmo, mas exige acao de quem opera.
+        // Com o circuito aberto a rejeicao e esperada e ocorre por requisicao: DEBUG, sem pilha. O WARN fica para as falhas reais
+        // de leitura e para as transicoes de estado do breaker (`ResilienceConfig`). MISCONFIGURED sobe a ERROR: o 503 e o mesmo,
+        // mas exige acao de quem opera.
         when {
             exception is BalanceStoreCircuitOpenException -> log.debug("balance read rejected: circuit breaker open")
             exception.failureCause == StoreFailureCause.MISCONFIGURED -> log.error("balance store misconfigured {}", exception.logDescription())

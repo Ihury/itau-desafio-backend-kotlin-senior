@@ -30,20 +30,19 @@ import java.nio.charset.CodingErrorAction
 import java.time.Instant
 
 /**
- * Parser estrito do evento de transacao (contracts/kafka-events.md secoes 3 e 4). Sobre a arvore JSON, sem DTO tipado nem
- * coercao silenciosa (Constitution IV). Passos, nesta ordem, e a PRIMEIRA falha determina o motivo:
+ * Parser estrito do evento de transacao, sobre a arvore JSON, sem DTO tipado nem coercao silenciosa. Passos, nesta ordem; a
+ * PRIMEIRA falha determina o motivo:
  *
  * 1. payload: nulo/vazio, > 64 KiB, UTF-8 invalido, JSON malformado, chave duplicada, tokens apos o documento, profundidade
  *    > 500, numero com > 1000 caracteres, raiz que nao e objeto, ou `transaction`/`account`/`account.balance` presentes
- *    com tipo diferente de objeto -> `malformed_payload` (sem `detail`);
+ *    com tipo diferente de objeto -> `malformed_payload` (sem `fieldPath`);
  * 2. presenca dos 12 campos obrigatorios (ausente ou `null`) -> `missing_field` com o caminho do campo;
- * 3. valores, na ordem fixa `transaction.id`, `type`, `amount`, `currency`, `status`, `timestamp`, `account.id`, `owner`,
- *    `created_at`, `status`, `balance.amount`, `balance.currency`, com o caminho do campo no `detail`.
+ * 3. valores, na ordem de [toEvent], com o caminho do campo em `fieldPath`.
  *
  * A tolerancia de timestamp futuro nao e daqui: precisa de relogio e e da camada `application`. Campos desconhecidos sao
- * ignorados. O `JsonMapper` e PRIVADO (nao e bean): um bean customizado desativaria o `JsonMapper` do Spring MVC.
+ * ignorados. O `JsonMapper` e privado (nao e bean): um bean customizado desativaria o `JsonMapper` do Spring MVC.
  *
- * Privacidade: `detail` e a mensagem nunca contem valores do payload, e a excecao de dominio nunca encadeia a causa do
+ * Privacidade: `fieldPath` e a mensagem nunca contem valores do payload, e a excecao de dominio nunca encadeia a causa do
  * parser (mensagens de parsers podem citar trechos do payload).
  */
 class TransactionEventParser(
@@ -67,7 +66,7 @@ class TransactionEventParser(
             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
             .build()
 
-    /** Converte os bytes verbatim do registro no evento de dominio ou lanca [InvalidEventException]. */
+    /** @throws InvalidEventException payload invalido */
     fun parse(bytes: ByteArray?): TransactionEvent {
         val root = readTree(bytes)
         val transaction = optionalObjectAt(root, "transaction")
@@ -75,8 +74,6 @@ class TransactionEventParser(
         val balance = account?.let { optionalObjectAt(it, "balance") }
         return toEvent(requirePresence(transaction, account, balance))
     }
-
-    // ---- passo 1: payload e estrutura
 
     private fun readTree(bytes: ByteArray?): JsonNode {
         if (bytes == null || bytes.isEmpty() || bytes.size > MAX_PAYLOAD_BYTES) throw malformedPayload()
@@ -106,8 +103,6 @@ class TransactionEventParser(
         if (!child.isObject) throw malformedPayload()
         return child
     }
-
-    // ---- passo 2: presenca
 
     private fun requirePresence(
         transaction: JsonNode?,
@@ -155,8 +150,6 @@ class TransactionEventParser(
         return node
     }
 
-    // ---- passo 3: valores, na ordem fixa
-
     private fun toEvent(nodes: RequiredNodes): TransactionEvent {
         val transactionId = atFieldPath("transaction.id") { TransactionId.parse(text(nodes.transactionId, RejectionReason.INVALID_IDENTIFIER)) }
         val type = atFieldPath("transaction.type") { TransactionType.parse(text(nodes.transactionType, RejectionReason.UNKNOWN_DOMAIN_VALUE)) }
@@ -176,7 +169,6 @@ class TransactionEventParser(
         )
     }
 
-    /** Executa a conversao de um campo e anexa o caminho a qualquer rejeicao do dominio. */
     private inline fun <T> atFieldPath(
         path: String,
         block: () -> T,
@@ -187,7 +179,7 @@ class TransactionEventParser(
             throw failure.withFieldPath(path)
         }
 
-    /** Texto do no; qualquer outro tipo JSON e rejeitado com o motivo do campo (sem coercao). */
+    /** Sem coercao: outro tipo JSON e rejeitado com [onWrongType]. */
     private fun text(
         node: JsonNode,
         onWrongType: RejectionReason,

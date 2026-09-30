@@ -17,21 +17,21 @@ import java.math.BigDecimal
 import java.util.concurrent.TimeUnit
 
 /**
- * Escrita do snapshot por UMA `UpdateItem` condicional (AP2, data-model.md 4.4): o proprio banco arbitra, de forma atomica
- * entre threads e instancias, se o evento supera o vigente pela precedencia `(lastTxTsMicros, lastTxId)`. Nunca le antes
- * (nada de read-modify-write) nem usa lock local, `BatchWriteItem` ou `TransactWriteItems`.
+ * Uma unica `UpdateItem` condicional: o proprio banco arbitra, de forma atomica entre threads e instancias, se o evento supera
+ * o vigente pela precedencia `(lastTxTsMicros, lastTxId)`. Nunca le antes (nada de read-modify-write) nem usa lock local,
+ * `BatchWriteItem` ou `TransactWriteItems`.
  *
  * - Condicao verdadeira (conta ausente ou precedencia maior) -> [ApplyResult.Applied]; todos os campos mudam juntos.
  * - `ConditionalCheckFailedException` nao e erro: o vigente tem precedencia maior ou igual. O item vigente vem na propria
  *   excecao (`ALL_OLD`, sem leitura extra) e classifica o desfecho: mesma `(lastTxTsMicros, lastTxId)` -> [ApplyResult.Duplicate]
  *   (`conflicting` se dono, situacao, moeda ou saldo divergem; saldo por `compareTo`, pois o DynamoDB pode normalizar
  *   `183.10` -> `183.1`); demais casos -> [ApplyResult.Obsolete]. Se a excecao nao trouxer o item (comportamento inesperado
- *   do endpoint), uma unica `GetItem` fortemente consistente o obtem (caminho raro). Item vigente INFERIOR ao evento com a
- *   condicao falsa e uma contradicao (`IllegalStateException`, sem valores): nao e indisponibilidade, entao nao e retentada
- *   sem fim; o consumer a trata como nao classificada (3 entregas e DLT). Ja o item ausente no fallback e transitorio (a
- *   proxima tentativa cria a conta).
- * - Demais falhas do SDK sao traduzidas por [DynamoDbExceptionTranslator.translateWriteFailure] e nunca engolidas; excecoes que nao
- *   sao do SDK propagam como estao.
+ *   do endpoint), uma unica `GetItem` fortemente consistente o obtem (caminho raro); item ausente ai e transitorio (a proxima
+ *   tentativa cria a conta).
+ * - Item vigente inferior ao evento com a condicao falsa e uma contradicao ([IllegalStateException], sem valores): nao e
+ *   indisponibilidade, entao o consumer a trata como nao classificada (3 entregas e DLT).
+ * - Demais falhas do SDK sao traduzidas por [DynamoDbExceptionTranslator.translateWriteFailure] e nunca engolidas; excecoes que
+ *   nao sao do SDK propagam como estao.
  * - A latencia da `UpdateItem` vai para `balance.store.write.duration{result=applied|condition_failed|error}` (com histograma),
  *   inclusive quando o SDK lanca.
  *
@@ -70,7 +70,7 @@ class DynamoDbBalanceSnapshotWriter(
         try {
             client.updateItem(request)
         } catch (failure: ConditionalCheckFailedException) {
-            // Nao e erro: o vigente tem precedencia maior ou igual. O timer cobre so a chamada ao banco, nao a classificacao.
+            // O timer cobre so a chamada ao banco, nao a classificacao.
             recordDuration(CONDITION_FAILED, startedNanos)
             return classifyConflict(snapshot, failure)
         } catch (failure: RuntimeException) {
@@ -99,9 +99,9 @@ class DynamoDbBalanceSnapshotWriter(
         return when {
             currentComparedToCandidate == 0 -> ApplyResult.Duplicate(conflicting = hasDivergentContent(candidate, current))
             currentComparedToCandidate > 0 -> ApplyResult.Obsolete
-            // A condicao falhou mas o vigente e inferior ao evento: contradicao, nao indisponibilidade. Reentregar para sempre
-            // (transitoria) bloquearia a particao se a causa fosse permanente (p.ex. item gravado fora do padrao); por isso e
-            // falha interna, "nao classificada" no consumer: 3 entregas e DLT `unprocessable_event`, com log e metrica.
+            // Contradicao, nao indisponibilidade: reentregar para sempre (transitoria) bloquearia a particao se a causa fosse
+            // permanente (p.ex. item gravado fora do padrao). Por isso e falha interna, "nao classificada" no consumer: 3
+            // entregas e DLT `unprocessable_event`, com log e metrica.
             else -> throw IllegalStateException("current balance item contradicts the failed condition")
         }
     }
@@ -125,7 +125,7 @@ class DynamoDbBalanceSnapshotWriter(
         return response.item()
     }
 
-    /** Conteudo divergente de um mesmo evento (data-model 4.4): dono, situacao, moeda ou saldo (`compareTo`, nao `equals`). */
+    /** Conteudo divergente de um mesmo evento: dono, situacao, moeda ou saldo (`compareTo`, nao `equals`). */
     private fun hasDivergentContent(
         candidate: BalanceSnapshot,
         current: Map<String, AttributeValue>,
@@ -135,7 +135,7 @@ class DynamoDbBalanceSnapshotWriter(
             current.text(BalanceAttributes.BALANCE_CURRENCY) != candidate.balance.currency.value ||
             current.decimal(BalanceAttributes.BALANCE_AMOUNT).compareTo(candidate.balance.amount) != 0
 
-    /** Atributos ausentes ou ilegiveis do item vigente: falha interna sem valores na mensagem (nunca classifica no escuro). */
+    /** Atributo ausente ou ilegivel no item vigente: falha interna sem valores na mensagem (nunca classifica no escuro). */
     private fun Map<String, AttributeValue>.text(name: String): String = this[name]?.s() ?: unreadable(name)
 
     private fun Map<String, AttributeValue>.long(name: String): Long =
@@ -160,7 +160,7 @@ class DynamoDbBalanceSnapshotWriter(
         const val ERROR = "error"
         val RESULTS = listOf(APPLIED, CONDITION_FAILED, ERROR)
 
-        /** Timer com histograma (SLO de 5 ms a 2 s); as tres series nascem em zero para as consultas enxergarem a serie. */
+        /** As tres series nascem em zero para as consultas enxergarem a serie. */
         fun writeTimer(
             registry: MeterRegistry,
             result: String,

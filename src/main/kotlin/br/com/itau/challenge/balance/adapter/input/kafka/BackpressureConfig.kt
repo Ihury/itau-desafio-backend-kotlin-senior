@@ -11,9 +11,8 @@ import org.springframework.scheduling.TaskScheduler
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler
 
 /**
- * Parametros do backoff da falha transitoria (`balance.consumer.backoff.*`; variaveis `KAFKA_BACKOFF_INITIAL_MS`,
- * `KAFKA_BACKOFF_MAX_MS` e `KAFKA_BACKOFF_JITTER_MS` em `contracts/configuration.md`; os defaults vivem no `application.yaml`).
- * O multiplicador (2,0) e fixo. [jitterMs] e o jitter do intervalo inicial e escala com o multiplicador (Spring Framework 7).
+ * Parametros do backoff da falha transitoria (`balance.consumer.backoff.*`). O multiplicador (2,0) e fixo; [jitterMs] e o
+ * jitter do intervalo inicial e escala com o multiplicador (Spring Framework 7).
  */
 @ConfigurationProperties("balance.consumer.backoff")
 data class BackOffProperties(
@@ -23,14 +22,14 @@ data class BackOffProperties(
 )
 
 /**
- * Backpressure da falha transitoria (FR-028, FR-029): durante a espera do backoff o container fica PAUSADO (o poll continua
- * vivo, entao nao ha rebalance por `max.poll.interval.ms`) e a mensagem valida permanece no broker. A retomada e agendada num
- * `TaskScheduler` proprio, nunca por `Thread.sleep` no thread do poll (research.md R-08).
+ * Durante a espera do backoff o container fica pausado: o poll continua vivo (sem rebalance por `max.poll.interval.ms`) e a
+ * mensagem valida permanece no broker. A retomada e agendada num `TaskScheduler` proprio, nunca por `Thread.sleep` no thread
+ * do poll.
  */
 @Configuration
 @EnableConfigurationProperties(BackOffProperties::class)
 class BackpressureConfig {
-    /** Agenda a retomada dos containers pausados; um thread basta (cada tarefa so chama `container.resume()`). */
+    /** Um thread basta: cada tarefa so chama `container.resume()`. */
     @Bean
     fun kafkaBackOffScheduler(): ThreadPoolTaskScheduler =
         ThreadPoolTaskScheduler().apply {
@@ -41,9 +40,8 @@ class BackpressureConfig {
         }
 
     /**
-     * Pausa o container durante o backoff e o retoma ao fim dele. O `ContainerPausingBackOffHandler` recebe o container PAI
-     * (`thisOrParentContainer` do Spring Kafka 4.1, verificado no bytecode): a pausa vale para TODAS as threads de consumo da
-     * instancia, nao so para a que falhou. E o desejado: o armazenamento e compartilhado, entao todas as threads ficariam falhando.
+     * Recebe o container PAI (`thisOrParentContainer`, Spring Kafka 4.1): a pausa vale para todas as threads de consumo da
+     * instancia. E o desejado, pois o armazenamento e compartilhado e todas ficariam falhando.
      */
     @Bean
     fun containerPausingBackOffHandler(kafkaBackOffScheduler: TaskScheduler): BackOffHandler =

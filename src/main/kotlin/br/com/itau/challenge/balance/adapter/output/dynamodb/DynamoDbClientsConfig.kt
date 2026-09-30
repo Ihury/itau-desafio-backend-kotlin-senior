@@ -18,8 +18,8 @@ import java.net.URI
 import java.time.Duration
 
 /**
- * Propriedades `dynamodb.*` (contracts/configuration.md; os defaults vivem no `application.yaml`). Pertencem ao adapter: nenhuma camada pode depender do
- * pacote `config`. [endpoint] em branco significa producao (endpoint AWS e cadeia padrao de credenciais).
+ * Propriedades `dynamodb.*`. Pertencem ao adapter: nenhuma camada pode depender do pacote `config`. [endpoint] em branco
+ * significa producao (endpoint AWS e cadeia padrao de credenciais).
  */
 @ConfigurationProperties("dynamodb")
 class DynamoDbClientProperties(
@@ -31,7 +31,7 @@ class DynamoDbClientProperties(
     val read: Read,
     val write: Write,
 ) {
-    /** Cliente de leitura (API): unica camada de retry e o SDK; timeouts curtos para falhar rapido (SC-008). */
+    /** Cliente de leitura (API): a unica camada de retry e o SDK; timeouts curtos para falhar rapido. */
     class Read(
         val consistent: Boolean,
         val attemptTimeout: Duration,
@@ -41,8 +41,8 @@ class DynamoDbClientProperties(
     )
 
     /**
-     * Cliente de escrita (consumer): sem retry no SDK (uma tentativa); a unica camada de retry e o error handler do
-     * consumer (Constitution V, ADR-0009). Pool proprio, isolado do da leitura.
+     * Cliente de escrita (consumer): sem retry no SDK (uma tentativa); a unica camada de retry e o error handler do consumer.
+     * Pool proprio, isolado do da leitura.
      */
     class Write(
         val attemptTimeout: Duration,
@@ -51,7 +51,6 @@ class DynamoDbClientProperties(
     )
 }
 
-/** Valores efetivos do cliente HTTP (pool e timeouts explicitos, Constitution V). */
 internal data class HttpSettings(
     val connectTimeout: Duration,
     val acquireTimeout: Duration,
@@ -62,11 +61,7 @@ internal data class HttpSettings(
 @Configuration
 @EnableConfigurationProperties(DynamoDbClientProperties::class)
 class DynamoDbClientsConfig {
-    /**
-     * Cliente de leitura: retry `standard` do SDK com `maxAttempts` (1 retry), `apiCallAttemptTimeout` e
-     * `apiCallTimeout` explicitos, pool proprio. Com [DynamoDbClientProperties.endpoint] usa `endpointOverride` e
-     * credenciais estaticas locais; sem endpoint, a `DefaultCredentialsProvider` e o endpoint da regiao.
-     */
+    /** `maxAttempts` inclui a tentativa inicial (2 = 1 retry). */
     @Bean
     fun dynamoDbReadClient(properties: DynamoDbClientProperties): DynamoDbClient =
         buildClient(
@@ -78,9 +73,8 @@ class DynamoDbClientsConfig {
         )
 
     /**
-     * Cliente de escrita: `AwsRetryStrategy.doNotRetry()` (uma tentativa), `apiCallAttemptTimeout` e `apiCallTimeout`
-     * explicitos e pool proprio. Um cliente separado porque a estrategia de retry e por cliente (o override por requisicao
-     * so cobre timeouts) e porque uma rajada de ingestao nao pode esgotar as conexoes da API.
+     * Cliente separado: a estrategia de retry e por cliente (o override por requisicao so cobre timeouts) e uma rajada de
+     * ingestao nao pode esgotar as conexoes da API.
      */
     @Bean
     fun dynamoDbWriteClient(properties: DynamoDbClientProperties): DynamoDbClient =

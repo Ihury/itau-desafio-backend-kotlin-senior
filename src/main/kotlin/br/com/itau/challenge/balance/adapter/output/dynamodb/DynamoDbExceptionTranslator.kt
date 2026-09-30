@@ -16,14 +16,12 @@ import software.amazon.awssdk.services.dynamodb.model.ResourceNotFoundException
 import software.amazon.awssdk.services.dynamodb.model.ThrottlingException
 
 /**
- * Traduz falhas do SDK para as excecoes de dominio. Toda falha do SDK e tratada como indisponibilidade transitoria
- * (jamais "nao encontrada" nem isolamento de mensagem valida: FR-017/FR-025); a unica excecao e a
- * `ValidationException` na ESCRITA, que e uma rejeicao do armazenamento. A excecao original vai em `cause`.
+ * Toda falha do SDK e indisponibilidade transitoria (jamais "nao encontrada" nem isolamento de mensagem valida); a unica
+ * excecao e a `ValidationException` na ESCRITA, que e uma rejeicao do armazenamento. A excecao original vai em `cause`.
  * Excecoes que nao sao do SDK nao sao traduzidas (`null`).
  *
  * Tabela inexistente, acesso negado e problemas de credencial ([StoreFailureCause.MISCONFIGURED]) tambem sao transitorios (a
- * correcao e operacional e a mensagem nunca vai ao DLT); so o diagnostico muda. [StoreFailureDetails] leva ao log a classe da
- * excecao, o codigo de erro e o status HTTP, jamais a mensagem livre do SDK.
+ * correcao e operacional e a mensagem nunca vai ao DLT); so o diagnostico muda.
  */
 internal object DynamoDbExceptionTranslator {
     private val throttlingCodes = setOf("ThrottlingException", "ProvisionedThroughputExceededException", "RequestLimitExceeded")
@@ -84,7 +82,7 @@ internal object DynamoDbExceptionTranslator {
             isCredentialsFailure(failure)
     }
 
-    /** Falha de credencial do SDK: `SdkClientException` (ou uma causa dela) cuja mensagem e a da cadeia de provedores. So o inicio da mensagem e comparado. */
+    /** `SdkClientException` (ou uma causa dela) cuja mensagem e a da cadeia de provedores; so o inicio e comparado. */
     private fun isCredentialsFailure(failure: Throwable): Boolean =
         failure is SdkClientException &&
             generateSequence<Throwable>(failure) { it.cause }

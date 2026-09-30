@@ -12,10 +12,10 @@ import software.amazon.awssdk.services.dynamodb.model.GetItemRequest
 import java.util.concurrent.TimeUnit
 
 /**
- * Leitura do snapshot por `GetItem` na chave primaria (AP1), fortemente consistente por padrao (FR-027).
+ * `GetItem` na chave primaria, fortemente consistente por padrao.
  *
  * - Item ausente -> `null`; item presente -> snapshot mapeado.
- * - QUALQUER falha do SDK -> `BalanceStoreUnavailableException` (jamais `null`: nunca um falso "nao encontrada").
+ * - Qualquer falha do SDK -> `BalanceStoreUnavailableException` (jamais `null`: nunca um falso "nao encontrada").
  * - Item corrompido/legado (fora do layout ou dos limites do dominio) -> `IllegalStateException` (falha interna), com
  *   log e metrica `balance.store.read.corrupted`; nunca vira `InvalidEventException`, 404 ou dado errado.
  *
@@ -74,7 +74,7 @@ class DynamoDbBalanceSnapshotReader(
         const val ERROR = "error"
         val RESULTS = listOf(FOUND, NOT_FOUND, ERROR)
 
-        /** Timer com histograma (SLO de 5 ms a 2 s); as tres series nascem em zero para as consultas enxergarem a serie. */
+        /** As tres series nascem em zero para as consultas enxergarem a serie. */
         fun readTimer(
             registry: MeterRegistry,
             result: String,
