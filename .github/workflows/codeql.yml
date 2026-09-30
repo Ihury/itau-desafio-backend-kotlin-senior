@@ -31,13 +31,21 @@ jobs:
           distribution: temurin
           java-version: "21"
 
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      # Build manual em vez do autobuild: o autobuild roda `clean` e `testClasses` em invocacoes separadas, sem o source set
+      # `integrationTest`, e nao deixa escolher as tarefas. Aqui um unico `./gradlew` faz `clean` (sem reaproveitar saidas
+      # em cache, que o CodeQL nao extrairia) e compila main, test e integrationTest. A memoria do Gradle e do compilador
+      # Kotlin vem de `gradle.properties` (o padrao de 512 MB estourava com o extrator do CodeQL).
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
         with:
           languages: java-kotlin
+          build-mode: manual
 
-      - name: Autobuild
-        uses: github/codeql-action/autobuild@v4
+      - name: Build for analysis
+        run: ./gradlew clean classes testClasses integrationTestClasses --no-daemon --no-build-cache
 
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@v4

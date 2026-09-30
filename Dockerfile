@@ -3,7 +3,7 @@
 # Tags fixas (build reprodutivel): exigem rotina de atualizacao de patch (docs/adr/0015-empacotamento-e-operacao.md).
 FROM eclipse-temurin:21.0.12_8-jdk-noble AS base
 WORKDIR /workspace
-COPY gradlew build.gradle.kts settings.gradle.kts ./
+COPY gradlew build.gradle.kts settings.gradle.kts gradle.properties ./
 COPY gradle gradle
 RUN chmod +x gradlew
 COPY src src
