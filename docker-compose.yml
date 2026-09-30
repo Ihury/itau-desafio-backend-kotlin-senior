@@ -5,6 +5,8 @@ services:
       target: runtime
     ports:
       - "8080:8080"
+      # Gerenciamento (Actuator: health e prometheus). Publicada so no compose local; em producao NAO deve ser roteada pelo balanceador publico.
+      - "8082:8082"
     environment:
       DYNAMODB_ENDPOINT: http://dynamodb:8000
       DYNAMODB_REGION: us-east-1
@@ -12,11 +14,26 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
       BALANCE_EVENTS_TOPIC: transacoes-financeiras-processadas
       BALANCE_EVENTS_DLT_TOPIC: transacoes-financeiras-processadas.DLT
+      MANAGEMENT_SERVER_PORT: 8082
+    # O app so sobe depois que a tabela e os topicos existem (os seeds terminam com sucesso e sao idempotentes).
     depends_on:
-      - dynamodb
-      - dynamodb-seed
-      - redpanda
-      - redpanda-seed
+      dynamodb:
+        condition: service_started
+      dynamodb-seed:
+        condition: service_completed_successfully
+      redpanda:
+        condition: service_started
+      redpanda-seed:
+        condition: service_completed_successfully
+    # Maior que os 30 s de `spring.lifecycle.timeout-per-shutdown-phase`: o SIGTERM encerra de forma graciosa antes do SIGKILL.
+    stop_grace_period: 40s
+    # Prontidao do proprio processo (nunca o DynamoDB; ver ADR-0013). O HEALTHCHECK da imagem e a liveness.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8082/actuator/health/readiness"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 45s
 
   dynamodb:
     image: amazon/dynamodb-local:3.3.0
