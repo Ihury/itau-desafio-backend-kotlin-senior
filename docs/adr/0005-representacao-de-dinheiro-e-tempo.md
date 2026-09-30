@@ -41,7 +41,13 @@ zeros à direita; JSON Number não carrega escala (RFC 8259); os timestamps da o
   anteriores a 1970 têm microssegundos negativos, e o campo não entra na precedência). O máximo (`agora + tolerância`) fica na
   camada `application`, que dispõe do `Clock`.
 - `updated_at` na resposta é ISO 8601 com offset, no fuso de exibição `America/Sao_Paulo` (configurável); o instante em UTC é a
-  verdade e o offset é apresentação.
+  verdade e o offset é apresentação. O formato é o `DateTimeFormatter.ISO_OFFSET_DATE_TIME`: a fração de segundo **não tem zeros à
+  direita** (`.433`, `.433123`, `.43`) e some quando é zero. É válido em ISO 8601 e reproduz o exemplo do enunciado (`...13.433-03:00`);
+  um parser que exija exatamente 3 ou 6 dígitos precisa tolerar a fração variável. Largura fixa seria mudança de contrato e não foi
+  adotada (evolução, se um consumidor exigir).
+- Na **leitura**, os instantes persistidos são reidratados por `EventInstant.fromPersisted`, sem checagem de faixa: os mínimos
+  (`BALANCE_MIN_*`) valem para o evento que entra, e uma configuração diferente da vigente na gravação não pode transformar um
+  snapshot válido em erro 500.
 
 ## Alternativas consideradas
 

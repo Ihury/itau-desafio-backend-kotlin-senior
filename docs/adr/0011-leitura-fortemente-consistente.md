@@ -30,8 +30,8 @@ cerca de 1 s. Saldo desatualizado sem sinalização é pior que erro (Princípio
 ## Consequências
 
 - (+) A consulta reflete a última escrita efetivada em qualquer instância (FR-027), sem lógica adicional na aplicação.
-- (-) Custo de leitura 2x: 1 RCU por consulta de item com cerca de 300 B (aproximadamente 500 RCU/s na carga de referência de
-  500 consultas/s), aceito para cumprir FR-027.
+- (-) Custo de leitura 2x: 1 RCU por consulta de item com cerca de 300 B (aproximadamente 500 RCU/s na carga assumida de
+  500 consultas/s, premissa do autor), aceito para cumprir FR-027.
 - (-) A leitura forte não está disponível durante falhas de partição do DynamoDB; isso é comportamento desejado (503 explícito,
   circuit breaker da ADR-0010) e não uma regressão.
 - (-) O limite de throughput por partição (cerca de 3.000 RCU/s por chave, segundo a documentação da AWS) vale para leituras

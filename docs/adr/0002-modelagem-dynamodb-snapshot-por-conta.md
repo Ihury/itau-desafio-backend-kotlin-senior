@@ -8,8 +8,9 @@
 
 O serviço mantém, por conta, o snapshot da transação de maior precedência `(timestamp em microssegundos, transactionId)` e o
 expõe em `GET /balances/{accountId}`. Os eventos chegam por Kafka com entrega at-least-once, sem ordem e sem chave garantida; a
-arbitragem de qual evento prevalece precisa ser atômica e feita pelo banco (Constitution II). A carga de referência (a confirmar
-com o cliente) é de 1.000 eventos/s na ingestão e 500 consultas/s, sobre mais de um milhão de contas.
+arbitragem de qual evento prevalece precisa ser atômica e feita pelo banco (Constitution II). A carga
+assumida (premissa do autor; o enunciado não fixa volume) é de 1.000 eventos/s na ingestão e 500 consultas/s, sobre mais de um milhão
+de contas.
 
 Os padrões de acesso são apenas dois, ambos por conta:
 
@@ -48,7 +49,7 @@ uma única chave `(ACCOUNT#id, BALANCE)`.
 |-------------|------------------------|
 | `PK=accountId` sem prefixo e sem SK | Mais simples, mas fecha a porta para múltiplos tipos de item na partição sem migrar o *key schema* |
 | Um item por transação e "último" por `Query` (`ScanIndexForward=false`, `Limit=1`) | Leitura mais cara e escrita sem condição sobre o estado vigente, ou seja, sem arbitragem atômica (proibido pela Constitution II) |
-| Ledger `TX#` junto do snapshot na v1 | Dobra as escritas (~2 WCU por evento, cerca de +1.000 WCU/s na carga de referência), concentra o dobro de escrita na partição das contas quentes, não melhora a corretude (que depende só da condição no snapshot) e entrega um histórico que a spec não expõe |
+| Ledger `TX#` junto do snapshot na v1 | Dobra as escritas (~2 WCU por evento, cerca de +1.000 WCU/s na carga assumida), concentra o dobro de escrita na partição das contas quentes, não melhora a corretude (que depende só da condição no snapshot) e entrega um histórico que a spec não expõe |
 | GSI por titular | Nenhum padrão de acesso o justifica (Constitution VIII, YAGNI); custaria WCU adicional em toda escrita |
 | `BatchWriteItem` na ingestão | Não suporta `ConditionExpression`; inaplicável à escrita condicional do snapshot |
 | Saldo como `S` (texto) ou como `N` em unidade mínima | `S` preserva escala que o contrato não garante e não é numérico no banco; unidade mínima exigiria conversão nos dois sentidos e regra de casas por moeda. Ver `research.md` R-06 |

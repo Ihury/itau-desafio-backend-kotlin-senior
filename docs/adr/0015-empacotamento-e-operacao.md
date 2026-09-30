@@ -15,13 +15,16 @@ starter usava tags flutuantes (`eclipse-temurin:21-jdk`/`21-jre`), rodava como r
 
 - **Usuário não-root** `app` com uid/gid **10001** (`groupadd`/`useradd` de sistema, sem shell nem diretório pessoal); o `app.jar` é
   copiado com `--chown` e `USER 10001:10001` vale para o `ENTRYPOINT`. O uid numérico permite `runAsNonRoot` em Kubernetes.
-- **Heap relativa**: `JAVA_TOOL_OPTIONS="-XX:MaxRAMPercentage=75 -XX:+ExitOnOutOfMemoryError"`. Os 25% restantes cobrem metaspace,
+- **Heap relativa**: `-XX:MaxRAMPercentage=75 -XX:+ExitOnOutOfMemoryError`, passadas **no `ENTRYPOINT`** e não em `JAVA_TOOL_OPTIONS`
+  (que a imagem inicial usava): com `JAVA_TOOL_OPTIONS` a JVM imprime `Picked up JAVA_TOOL_OPTIONS: ...` na saída de erro, uma linha que
+  não é JSON e quebra o coletor de logs estruturados. O workflow `docker.yml` confere que a variável não está no `Config.Env` da
+  imagem. Os 25% restantes cobrem metaspace,
   pilhas de threads, buffers diretos (Kafka, Netty/Apache HTTP) e o próprio SO. `ExitOnOutOfMemoryError` derruba o processo em vez de
   deixar uma JVM meio viva: o orquestrador reinicia e a ingestão retoma do último offset confirmado (at-least-once).
 - **`HEALTHCHECK`** com `curl -fsS http://localhost:8082/actuator/health/liveness` (a imagem `jre-noble` traz `curl`; verificado).
   É **liveness** de propósito: só o estado do processo, nunca o DynamoDB (ADR-0013). A raiz `/actuator/health` não é usada. O
   `docker-compose.yml` usa a **readiness** na mesma porta para ordenar dependências locais.
-- **`ENTRYPOINT ["java", "-jar", "app.jar"]` em exec form**: a JVM é o PID 1, recebe o `SIGTERM` e o graceful shutdown
+- **`ENTRYPOINT ["java", "-XX:MaxRAMPercentage=75", "-XX:+ExitOnOutOfMemoryError", "-jar", "app.jar"]` em exec form**: a JVM é o PID 1, recebe o `SIGTERM` e o graceful shutdown
   (`server.shutdown=graceful`, 30 s por fase) funciona; a forma shell colocaria um `sh` na frente e o sinal nunca chegaria à JVM. O
   compose usa `stop_grace_period: 40s`, acima dos 30 s da fase de encerramento.
 - **`EXPOSE 8080 8082`**: API e gerenciamento. A 8082 (Actuator) **não deve ser roteada pelo balanceador público**.
@@ -29,7 +32,8 @@ starter usava tags flutuantes (`eclipse-temurin:21-jdk`/`21-jre`), rodava como r
   base Ubuntu noble explícita. As tags existem no Docker Hub (puxadas na implementação). O build fica reprodutível, mas a tag fixa
   **exige rotina de atualização**: revisar o patch do Temurin a cada versão de segurança (por exemplo, com Dependabot/Renovate para
   imagens Docker) e reconstruir. Sem isso a imagem congela vulnerabilidades do SO e da JRE.
-- **Imagem renomeada** de `itau-hello-world` para `consulta-saldo` (Makefile e workflow `docker.yml`).
+- **Imagem renomeada** de `itau-hello-world` para `consulta-saldo` (Makefile e workflow `docker.yml`), e o projeto Gradle
+  (`rootProject.name` e `description`), que ainda levava o nome do starter, também passou a `consulta-saldo`.
 - **`.dockerignore`** não envia `specs`, `docs`, `.specify`, `.claude`, `.github`, `infra` e `perf` ao contexto: o estágio `test` só
   precisa de `src`, do Gradle e do wrapper, então documentação não invalida o cache de build.
 - Os estágios `test` (`./gradlew check`, com gate de cobertura) e `builder` continuam no mesmo Dockerfile; `make test` roda o gate
@@ -52,5 +56,8 @@ starter usava tags flutuantes (`eclipse-temurin:21-jdk`/`21-jre`), rodava como r
   em menos de 40 s com log de encerramento).
 - (+) Build reprodutível: o mesmo commit gera a mesma base.
 - (-) Tags fixas exigem manutenção periódica; sem a rotina, a base envelhece.
+- (-) O `timeout-per-shutdown-phase` de 30 s vale **por fase** do ciclo de vida (o servidor web e o container Kafka são fases
+  distintas): o tempo total de encerramento pode passar de 30 s. Em orquestrador, `terminationGracePeriodSeconds` >= 60 s e, atrás de
+  balanceador, `preStop` e *deregistration delay* (ver "Rodando na AWS" no README).
 - (-) `MaxRAMPercentage=75` é uma heurística: cargas com muitos buffers diretos podem pedir um percentual menor ou mais memória.
 - (-) Sem `USER` root não há como instalar pacotes em runtime; qualquer ferramenta extra precisa entrar no build da imagem.

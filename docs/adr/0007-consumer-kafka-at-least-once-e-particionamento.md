@@ -20,8 +20,9 @@ instâncias consomem (a arbitragem é do banco, ADR-0003). O offset só pode ava
   que o listener retornou para todos os registros. Uma exceção do listener nunca confirma o offset do registro que falhou.
 - **Sem suposição de ordem**: nenhuma lógica depende da ordem das mensagens; duplicatas e reordenação são resolvidas pela escrita
   condicional. Por isso é seguro aumentar partições.
-- **Partições**: 12 no tópico principal e 3 no DLT (decisão proposta, sujeita a validação com o cliente), RF 1 local e 3 em
-  produção, DLT com retenção de 14 dias. 1.000 eventos/s divididos por ~150 eventos/s por thread (escrita ~5-7 ms) dá ~7
+- **Partições**: 12 no tópico principal e 3 no DLT (decisão do autor, aprovada na revisão do plano; o enunciado não fixa o número),
+  RF 1 local e 3 em produção, DLT com retenção de 14 dias. O dimensionamento parte da premissa do autor de 1.000 eventos/s, que o
+  enunciado não fixa. Com essa premissa, 1.000 eventos/s divididos por ~150 eventos/s por thread (escrita ~5-7 ms) dá ~7
   consumidores; 12 dá folga sem coordenação excessiva.
 - **`CooperativeStickyAssignor`**: rebalanceamento incremental, sem parar todo o grupo a cada mudança de membros.
 - **Concorrência e limites**: `concurrency=4` por instância (a soma entre instâncias deve ser <= partições), `max.poll.records=100`
@@ -29,11 +30,10 @@ instâncias consomem (a arbitragem é do banco, ADR-0003). O offset só pode ava
   max.poll.interval.ms` (100 x 2 s = 200 s < 300 s), para o pior caso de um poll não provocar rebalance.
 - **Parada**: `immediate-stop=true` com encerramento gracioso; o container para após o registro atual e o restante do poll é
   reentregue (é idempotente).
-- **Error handler sem descarte desde o primeiro commit com consumer**: na US2, `FailSafeErrorHandlerConfig` (backoff exponencial
-  de 500 ms a 30 s, sem limite de tentativas, recoverer que nunca confirma o offset, todas as exceções retentáveis): mensagem
-  inválida ou falha transitória ficava retida e reentregue. Na US4 ele foi substituído (mesmo bean `kafkaErrorHandler`, um único
-  `CommonErrorHandler`) pelo `DeadLetterConfig`, que classifica por exceção: inválida -> DLT imediato; transitória -> o mesmo
-  backoff ilimitado e NUNCA DLT; não classificada -> 3 entregas e DLT. A pausa do container entra na US5; ver ADR-0008.
+- **Error handler sem descarte**: um único `CommonErrorHandler` (bean `kafkaErrorHandler`, em `DeadLetterConfig`) classifica cada
+  falha por exceção: inválida -> DLT imediato; transitória -> backoff exponencial ilimitado, com o container pausado, e NUNCA DLT;
+  não classificada -> 3 entregas e DLT. O `DefaultErrorHandler` padrão do Spring Kafka, que descartaria a mensagem depois de ~10
+  falhas, nunca esteve ativo em nenhum commit com consumer. Detalhes e limites em ADR-0008.
 
 ## Alternativas consideradas
 
@@ -52,4 +52,5 @@ instâncias consomem (a arbitragem é do banco, ADR-0003). O offset só pode ava
 - (+) Escalar consumidores ou partições não afeta a corretude.
 - (-) Uma queda no meio de um poll reprocessa até 100 registros; o efeito é idempotente, mas consome capacidade de escrita
   (escritas obsoletas e duplicadas, ADR-0003).
-- (-) Até a US4 uma mensagem inválida fica retida e reentregue com backoff, bloqueando a partição, em vez de ir ao DLT.
+- (-) A concorrência por instância (4 threads) e o número de partições limitam o paralelismo: a soma de threads entre instâncias
+  acima de 12 deixa consumidores ociosos.

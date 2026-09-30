@@ -28,7 +28,8 @@ circuit breaker devolve (ADR-0010, SC-008). A documentação do Spring Boot desa
   Prometheus renova o estado mesmo que ninguém consulte o grupo `dependencies`. É a base do alerta de indisponibilidade sem tirar a
   instância de rotação.
 - **Micrometer + Prometheus**: `balance.events{outcome,reason}` com **exatamente um desfecho por mensagem** (`rejected` só é contado
-  depois que o DLT confirma a publicação); timers com histograma `balance.ingest.duration{outcome}` (SLO de 5 ms a 2,5 s),
+  depois que o DLT confirma a publicação); timers com histograma `balance.ingest.duration{outcome}` (SLO de 5 ms a 2,5 s; medido **por entrega**, não por mensagem: uma mensagem reentregue por falha
+  transitória gera uma amostra por tentativa, com `outcome=error` nas que falham),
   `balance.store.write.duration{result}` e `balance.store.read.duration{result}` (5 ms a 2 s), todos com as séries iniciadas em zero;
   `http.server.requests` com SLO de 50 ms a 2 s; métricas do circuit breaker e do listener Kafka (`spring.kafka.listener.observation-enabled`).
   p50/p99 saem de `histogram_quantile` sobre os buckets (agregável entre instâncias), nunca de percentis client-side.
@@ -36,7 +37,9 @@ circuit breaker devolve (ADR-0010, SC-008). A documentação do Spring Boot desa
   (HTTP: `X-Correlation-Id` validado ou gerado; Kafka: `<topic>-<partition>@<offset>`), `accountId` e `transactionId` (só depois do
   parse). Nunca são logados saldo, titular, payload nem mensagem de exceção de parser: a rejeição loga só o motivo e as coordenadas.
   Um teste percorre todos os caminhos com valores sentinela, e o `ArchitectureTest` proíbe `catch` que engula exceção sem log, métrica ou
-  `throw`. O banner do Spring é desligado para não quebrar o parse do coletor (uma linha, um objeto JSON).
+  `throw`. Com o circuit breaker da leitura aberto, cada rejeição loga em DEBUG (sem pilha) e o WARN sai só na transição de estado
+  do breaker e nas falhas reais de leitura (ADR-0010); falha de configuração ou credencial do DynamoDB (`cause=misconfigured`) loga
+  em ERROR com a classe da exceção do SDK, o `errorCode` e o `statusCode`, nunca a mensagem livre. O banner do Spring é desligado para não quebrar o parse do coletor (uma linha, um objeto JSON).
 - **Encerramento gracioso**: `server.shutdown=graceful`, 30 s por fase, `immediate-stop` no consumer e commit só pelo container: o que
   não foi persistido não é confirmado e é reentregue (ADR-0007), reconciliado pela idempotência.
 - **Tracing distribuído (OpenTelemetry) fica como evolução** (R-16): o `correlationId` cobre a correlação nos logs e o autorizador

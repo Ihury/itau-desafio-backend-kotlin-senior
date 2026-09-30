@@ -26,8 +26,11 @@ camada de retry (proibida pela Constitution V) e `@ConcurrencyLimit` bloqueia em
   5 chamadas de teste em HALF_OPEN.
 - Conta como falha **somente** `BalanceStoreUnavailableException`. Item encontrado, item ausente (`null`) e falhas internas
   (`IllegalStateException` de item corrompido: o banco respondeu) contam como sucesso.
-- `CallNotPermittedException` (circuito aberto) é convertida em `BalanceStoreUnavailableException`, que a API traduz em
-  **503 + `Retry-After`**. O valor de `Retry-After` é fixo e igual à espera em OPEN (`CircuitBreakerProperties.retryAfterSeconds`).
+- `CallNotPermittedException` (circuito aberto) é convertida em `BalanceStoreCircuitOpenException` (uma
+  `BalanceStoreUnavailableException`), que a API traduz em **503 + `Retry-After`**. A pilha da rejeição é desligada
+  (`writableStackTraceEnabled(false)`) e a rejeição loga em DEBUG, sem pilha; o WARN sai só nas transições de estado do breaker
+  (`ResilienceConfig`, uma linha por transição) e nas falhas reais de leitura. Assim uma rajada de requisições com o circuito aberto
+  não vira uma linha de WARN por requisição. O valor de `Retry-After` é fixo e igual à espera em OPEN (`CircuitBreakerProperties.retryAfterSeconds`).
 - As métricas `resilience4j.circuitbreaker.*` (tag `name=dynamodb-read`) são ligadas ao Micrometer por um `MeterBinder`
   (`TaggedCircuitBreakerMetrics`). A `resilience4j-micrometer` 2.4.0 é compilada contra Micrometer 1.16 e o Boot 4.1.0 usa 1.17:
   a compatibilidade é coberta por teste (`ResilienceConfigTest`).
