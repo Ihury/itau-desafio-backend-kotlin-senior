@@ -11,10 +11,14 @@ import br.com.itau.challenge.balance.domain.model.StoreFailureCause
 import br.com.itau.challenge.balance.domain.model.TransactionEventFixtures.DEFAULT_ACCOUNT_ID
 import br.com.itau.challenge.balance.domain.model.TransactionEventFixtures.transactionEvent
 import br.com.itau.challenge.balance.port.input.GetBalanceUseCase
+import ch.qos.logback.classic.Logger
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
 import org.junit.jupiter.api.Test
 import org.mockito.Mockito.doReturn
 import org.mockito.Mockito.doThrow
 import org.mockito.Mockito.verifyNoInteractions
+import org.slf4j.LoggerFactory
 import org.slf4j.MDC
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest
@@ -262,6 +266,24 @@ class BalanceControllerTest {
         mockMvc.perform(get("/balances/{id}", DEFAULT_ACCOUNT_ID))
         assertNull(MDC.get("correlationId"))
         assertNull(MDC.get("accountId"))
+    }
+
+    @Test
+    fun `the error logged by the advice still carries the account id and the correlation id`() {
+        val logger = LoggerFactory.getLogger(ProblemDetailsAdvice::class.java) as Logger
+        val appender = ListAppender<ILoggingEvent>().apply { start() }
+        logger.addAppender(appender)
+        try {
+            doThrow(RuntimeException("x")).`when`(getBalance).getBalance(accountId)
+
+            mockMvc.perform(get("/balances/{id}", DEFAULT_ACCOUNT_ID).header(CorrelationIdFilter.HEADER, "abc-1"))
+
+            val line = appender.list.single()
+            assertEquals(DEFAULT_ACCOUNT_ID, line.mdcPropertyMap["accountId"])
+            assertEquals("abc-1", line.mdcPropertyMap["correlationId"])
+        } finally {
+            logger.detachAppender(appender)
+        }
     }
 
     @Test
