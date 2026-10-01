@@ -17,12 +17,6 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
-/**
- * Propriedade de convergencia sobre o fake em memoria: para QUALQUER lista de 1 a 30 eventos,
- * qualquer permutacao, duplicacao e intercalacao entrega o mesmo snapshot final por conta, igual ao evento de maior
- * `(timestamp, transactionId minusculo)`. O conteudo do evento e derivado da chave (mesma chave, mesmo conteudo). A `seed`
- * e fixa (reprodutivel). O meta-teste prova que a MESMA propriedade reprova uma implementacao "ultimo a chegar vence".
- */
 @OptIn(ExperimentalKotest::class)
 class ConvergencePropertyTest {
     private companion object {
@@ -33,12 +27,12 @@ class ConvergencePropertyTest {
 
     private fun inMemoryScenario(): ConvergenceProperty.Scenario {
         val store = InMemoryBalanceStore()
-        return ConvergenceProperty.Scenario(StoreUnderTest(store) { store.current(it) })
+        return ConvergenceProperty.Scenario(StoreUnderTest(store) { store.peek(it) })
     }
 
     private fun naiveScenario(): ConvergenceProperty.Scenario {
         val store = NaiveLastWriteWinsStore()
-        return ConvergenceProperty.Scenario(StoreUnderTest(store) { store.current(it) })
+        return ConvergenceProperty.Scenario(StoreUnderTest(store) { store.peek(it) })
     }
 
     private class GenerationCoverage {
@@ -58,7 +52,7 @@ class ConvergencePropertyTest {
                 if (content.transactionStatus == TransactionStatus.APPROVED) approved.incrementAndGet() else declined.incrementAndGet()
                 if (it.uppercaseTransactionId) upperCase.incrementAndGet()
             }
-            val keys = specs.map { it.accountId to it.key }
+            val keys = specs.map { it.accountId to it.precedenceKey }
             if (keys.size != keys.toSet().size) duplicates.incrementAndGet()
             if (specs.groupBy { it.accountId to it.timestampMicros }.values.any { group -> group.map { it.transactionId }.toSet().size > 1 }) ties.incrementAndGet()
             if (specs.groupBy { it.transactionId }.values.any { group -> group.map { it.accountId }.toSet().size > 1 }) sameTxDifferentAccounts.incrementAndGet()
@@ -68,9 +62,8 @@ class ConvergencePropertyTest {
     private val generationCoverage = GenerationCoverage()
 
     @Test
-    fun `the oracle exercises the uuid compareTo trap`() {
+    fun `the oracle orders ids textually so ffffffff beats 00000000 at the same instant, which UUID compareTo would invert`() {
         assertTrue(ConvergenceModel.hasUuidCompareToDivergence())
-        // o oraculo escolhe pelo texto: ffffffff... supera 00000000... no mesmo instante (UUID.compareTo diria o contrario)
         val low = EventSpec(0, 0, 0, false)
         val high = EventSpec(0, 0, 1, false)
         assertEquals(high, ConvergenceModel.winnerOf(listOf(high, low)))
@@ -79,7 +72,7 @@ class ConvergencePropertyTest {
 
     @Test
     fun `any permutation, duplication and interleaving of one account converges to the highest precedence event`() {
-        val context = ConvergenceProperty.run(CONFIG, accounts = 1, onCase = generationCoverage::observe, newScenario = ::inMemoryScenario)
+        val context = ConvergenceProperty.run(CONFIG, accounts = 1, onGeneratedCase = generationCoverage::observe, newScenario = ::inMemoryScenario)
 
         assertEquals(ITERATIONS, context.attempts())
         assertTrue(generationCoverage.enabled.get() > 0 && generationCoverage.disabled.get() > 0, "ENABLED e DISABLED exercitados")
@@ -91,7 +84,7 @@ class ConvergencePropertyTest {
 
     @Test
     fun `two interleaved accounts never interfere, even with the same transaction id`() {
-        val context = ConvergenceProperty.run(CONFIG, accounts = 2, onCase = generationCoverage::observe, newScenario = ::inMemoryScenario)
+        val context = ConvergenceProperty.run(CONFIG, accounts = 2, onGeneratedCase = generationCoverage::observe, newScenario = ::inMemoryScenario)
 
         assertEquals(ITERATIONS, context.attempts())
         assertTrue(generationCoverage.sameTxDifferentAccounts.get() > 0, "mesmo transactionId em contas diferentes exercitado")
@@ -105,7 +98,6 @@ class ConvergencePropertyTest {
         val message = assertNotNull(failure.message)
         assertTrue("Property failed" in message, message)
         assertTrue("shrunk from" in message, "contraexemplo encolhido: $message")
-        println("CONTRAEXEMPLO (propriedade completa contra o store ingenuo):\n$message")
     }
 
     @Test
@@ -114,6 +106,5 @@ class ConvergencePropertyTest {
 
         val message = assertNotNull(failure.message)
         assertTrue("snapshot final" in message, message)
-        println("CONTRAEXEMPLO (somente convergencia do snapshot final contra o store ingenuo):\n$message")
     }
 }

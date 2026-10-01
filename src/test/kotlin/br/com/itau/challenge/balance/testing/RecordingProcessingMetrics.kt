@@ -8,7 +8,6 @@ import br.com.itau.challenge.balance.port.output.OutcomeMetrics
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
 
-/** Duble de [OutcomeMetrics] e [ConsumerFailureMetrics] que registra, em ordem, cada desfecho contabilizado. */
 class RecordingProcessingMetrics :
     OutcomeMetrics,
     ConsumerFailureMetrics {
@@ -16,15 +15,12 @@ class RecordingProcessingMetrics :
 
     private val dltFailures = AtomicInteger()
 
-    /** Falhas de publicacao no DLT (nao sao desfechos). */
     val dltPublishFailures: Int get() = dltFailures.get()
 
     private val backpressureLog = CopyOnWriteArrayList<StoreFailureCause>()
 
-    /** Causas de cada pausa por backpressure, na ordem (nao sao desfechos). */
     val backpressureCauses: List<StoreFailureCause> get() = backpressureLog.toList()
 
-    /** Desfechos na ordem: `processed`, `obsolete`, `duplicate`, `duplicate(conflicting)` ou `rejected(<codigo>)`. */
     val outcomes: List<String> get() = outcomeLog.toList()
 
     override fun record(result: ApplyResult) {

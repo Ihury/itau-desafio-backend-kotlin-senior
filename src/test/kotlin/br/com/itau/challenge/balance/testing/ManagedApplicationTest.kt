@@ -11,12 +11,7 @@ import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 
-/**
- * Base dos testes que precisam da aplicacao completa com servidor real e porta de gerenciamento separada (Actuator, logs,
- * encerramento). Todas as subclasses compartilham UM contexto em cache (mesma anotacao, mesmos `@MockitoBean`): os clientes
- * do SDK sao dubles, de modo que leitor, escritor, circuit breaker, health e metricas sao os beans reais sobre um DynamoDB
- * falso. Os listeners Kafka nao iniciam (perfil `test`). Os mocks sao reiniciados a cada teste.
- */
+// Subclasses compartilham UM contexto em cache: nao adicione @MockitoBean, propriedades ou anotacoes.
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = ["management.server.port=0"])
 @ActiveProfiles("test")
 abstract class ManagedApplicationTest {

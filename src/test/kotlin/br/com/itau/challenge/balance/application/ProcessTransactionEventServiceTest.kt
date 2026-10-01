@@ -10,14 +10,11 @@ import br.com.itau.challenge.balance.domain.model.TransactionStatus
 import br.com.itau.challenge.balance.testing.InMemoryBalanceStore
 import br.com.itau.challenge.balance.testing.RecordingProcessingMetrics
 import br.com.itau.challenge.balance.testing.TransactionEventFixtures.transactionEvent
+import br.com.itau.challenge.balance.testing.LogCapture
+import br.com.itau.challenge.balance.testing.TransactionEventFixtures.DEFAULT_ACCOUNT_ID
 import ch.qos.logback.classic.Level
-import ch.qos.logback.classic.Logger
-import ch.qos.logback.classic.spi.ILoggingEvent
-import ch.qos.logback.core.read.ListAppender
-import org.junit.jupiter.api.AfterEach
-import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
-import org.slf4j.LoggerFactory
+import org.junit.jupiter.api.extension.RegisterExtension
 import java.math.BigDecimal
 import java.time.Clock
 import java.time.Duration
@@ -35,28 +32,14 @@ class ProcessTransactionEventServiceTest {
     private val metrics = RecordingProcessingMetrics()
     private val service = ProcessTransactionEventService(store, metrics, Clock.fixed(Instant.parse("2026-01-01T00:00:00Z"), ZoneOffset.UTC), FutureTolerance(Duration.ofMinutes(5)))
 
-    private val accountA = "5b19c8b6-0cc4-4c72-a989-0c2ee15fa975"
+    private val accountA = DEFAULT_ACCOUNT_ID
     private val accountB = "0a7e3e1c-2a55-4b58-a8f4-4c1b6a1f3d10"
 
-    private val logs = ListAppender<ILoggingEvent>()
-    private val serviceLogger = LoggerFactory.getLogger(ProcessTransactionEventService::class.java) as Logger
-    private val previousLevel = serviceLogger.level
+    @JvmField
+    @RegisterExtension
+    val logs = LogCapture(ProcessTransactionEventService::class.java, Level.DEBUG)
 
-    @BeforeEach
-    fun captureLogs() {
-        serviceLogger.level = Level.DEBUG
-        logs.start()
-        serviceLogger.addAppender(logs)
-    }
-
-    @AfterEach
-    fun releaseLogs() {
-        serviceLogger.detachAppender(logs)
-        serviceLogger.level = previousLevel
-        logs.stop()
-    }
-
-    private fun current(account: String = accountA) = assertNotNull(store.current(AccountId.parse(account)))
+    private fun current(account: String = accountA) = assertNotNull(store.peek(AccountId.parse(account)))
 
     @Test
     fun `an event for an account without snapshot creates it with the data of the event`() {
@@ -165,8 +148,8 @@ class ProcessTransactionEventServiceTest {
                 accountCreatedAtMicros = 1600000000000000L,
             ),
         )
-        // um evento mais antigo chegando depois nao pode misturar nenhum campo
-        service.process(transactionEvent(transactionId = "55555555-b154-48b5-9f3e-553935cc4543", timestampMicros = 1751749453433001L, balanceAmount = "1.00"))
+        val olderEventArrivingLate = transactionEvent(transactionId = "55555555-b154-48b5-9f3e-553935cc4543", timestampMicros = 1751749453433001L, balanceAmount = "1.00")
+        service.process(olderEventArrivingLate)
 
         val snapshot = current()
         assertEquals(BigDecimal("300.00"), snapshot.balance.amount)
@@ -194,7 +177,7 @@ class ProcessTransactionEventServiceTest {
 
         assertSame(failure, thrown)
         assertEquals(emptyList(), metrics.outcomes)
-        assertNull(store.current(AccountId.parse(accountA)))
+        assertNull(store.peek(AccountId.parse(accountA)))
     }
 
     @Test
@@ -210,7 +193,7 @@ class ProcessTransactionEventServiceTest {
     fun `once the store recovers the same event is applied`() {
         store.failWritesWith(BalanceStoreUnavailableException(StoreFailureCause.UNAVAILABLE))
         assertFailsWith<BalanceStoreUnavailableException> { service.process(transactionEvent()) }
-        store.failWritesWith(null)
+        store.recoverWrites()
 
         assertEquals(ApplyResult.Applied, service.process(transactionEvent()))
         assertEquals(listOf("processed"), metrics.outcomes)
@@ -224,7 +207,7 @@ class ProcessTransactionEventServiceTest {
         service.process(event)
 
         assertEquals(listOf("processed", "duplicate"), metrics.outcomes)
-        assertEquals(emptyList(), logs.list.filter { it.level == Level.WARN })
+        assertEquals(emptyList(), logs.at(Level.WARN))
     }
 
     @Test
@@ -234,7 +217,7 @@ class ProcessTransactionEventServiceTest {
         service.process(transactionEvent(balanceAmount = "999.99", ownerId = "dddddddd-f4af-4cd2-b298-a449e614349a"))
 
         assertEquals(listOf("processed", "duplicate(conflicting)"), metrics.outcomes)
-        val warnings = logs.list.filter { it.level == Level.WARN }
+        val warnings = logs.at(Level.WARN)
         assertEquals(1, warnings.size)
         val text = warnings.single().formattedMessage
         assertTrue(accountA in text && "8e8ae808-b154-48b5-9f3e-553935cc4543" in text, text)
@@ -248,6 +231,6 @@ class ProcessTransactionEventServiceTest {
         service.process(transactionEvent(transactionId = "00000000-0000-4000-8000-000000000001", timestampMicros = 1751749453432999L))
 
         assertEquals(listOf("processed", "obsolete"), metrics.outcomes)
-        assertEquals(emptyList(), logs.list.filter { it.level == Level.WARN || it.level == Level.ERROR })
+        assertEquals(emptyList(), logs.events.filter { it.level == Level.WARN || it.level == Level.ERROR })
     }
 }

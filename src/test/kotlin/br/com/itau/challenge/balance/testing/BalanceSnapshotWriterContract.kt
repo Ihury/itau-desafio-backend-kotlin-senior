@@ -6,8 +6,12 @@ import br.com.itau.challenge.balance.domain.model.ApplyResult
 import br.com.itau.challenge.balance.domain.model.BalanceSnapshot
 import br.com.itau.challenge.balance.domain.model.TransactionEvent
 import br.com.itau.challenge.balance.domain.model.TransactionStatus
-import br.com.itau.challenge.balance.testing.TransactionEventFixtures.transactionEvent
 import br.com.itau.challenge.balance.port.output.BalanceSnapshotWriter
+import br.com.itau.challenge.balance.testing.TransactionEventFixtures.DEFAULT_OWNER_ID
+import br.com.itau.challenge.balance.testing.TransactionEventFixtures.DEFAULT_TIMESTAMP_MICROS
+import br.com.itau.challenge.balance.testing.TransactionEventFixtures.HIGHEST_TRANSACTION_ID
+import br.com.itau.challenge.balance.testing.TransactionEventFixtures.LOWEST_TRANSACTION_ID
+import br.com.itau.challenge.balance.testing.TransactionEventFixtures.transactionEvent
 import org.junit.jupiter.api.Test
 import java.math.BigDecimal
 import java.util.UUID
@@ -15,32 +19,23 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 
-/**
- * Contrato do [BalanceSnapshotWriter]: a MESMA suite roda contra o fake em memoria (sem infraestrutura) e contra o
- * DynamoDB Local (integracao), provando que o fake so e confiavel porque obedece ao que o banco real faz. Cada teste usa
- * uma conta aleatoria, para poder rodar contra um banco compartilhado.
- *
- * Cobre criar, substituir, obsoleto, isolamento, microssegundos, saldo exato e status e, na convergencia, a classificacao
- * de duplicado x obsoleto x anomalia (`conflicting_duplicate`) e o desempate por `transactionId`.
- */
 abstract class BalanceSnapshotWriterContract {
     protected abstract val writer: BalanceSnapshotWriter
 
-    /** Snapshot vigente da conta visto DIRETAMENTE no armazenamento (nao pelo escritor); `null` se ausente. */
-    protected abstract fun currentOf(accountId: AccountId): BalanceSnapshot?
+    protected abstract fun currentStoredSnapshotOf(accountId: AccountId): BalanceSnapshot?
 
-    private val baseTimestampMicros = 1751749453433000L
-    private val idLow = "00000000-0000-4000-8000-000000000001"
-    private val idHigh = "ffffffff-ffff-4fff-8fff-ffffffffff01"
+    private val baseTimestampMicros = DEFAULT_TIMESTAMP_MICROS
+    private val idLow = LOWEST_TRANSACTION_ID
+    private val idHigh = HIGHEST_TRANSACTION_ID
 
-    private fun newAccountId(): String = UUID.randomUUID().toString()
+    private fun uniqueAccountId(): String = UUID.randomUUID().toString()
 
     private fun event(
         accountId: String,
         timestampMicros: Long = baseTimestampMicros,
         transactionId: String = UUID.randomUUID().toString(),
         balanceAmount: String = "183.12",
-        ownerId: String = "315e3cfe-f4af-4cd2-b298-a449e614349a",
+        ownerId: String = DEFAULT_OWNER_ID,
         accountStatus: AccountStatus = AccountStatus.ENABLED,
         transactionStatus: TransactionStatus = TransactionStatus.APPROVED,
         balanceCurrency: String = "BRL",
@@ -58,11 +53,11 @@ abstract class BalanceSnapshotWriterContract {
 
     private fun applyEvent(event: TransactionEvent): ApplyResult = writer.applyIfNewer(BalanceSnapshot.from(event))
 
-    private fun storedSnapshot(accountId: String): BalanceSnapshot = assertNotNull(currentOf(AccountId.parse(accountId)))
+    private fun storedSnapshot(accountId: String): BalanceSnapshot = assertNotNull(currentStoredSnapshotOf(AccountId.parse(accountId)))
 
     @Test
     fun `an initial event creates the snapshot`() {
-        val account = newAccountId()
+        val account = uniqueAccountId()
         val initial = event(account)
 
         assertEquals(ApplyResult.Applied, applyEvent(initial))
@@ -72,7 +67,7 @@ abstract class BalanceSnapshotWriterContract {
 
     @Test
     fun `a newer event replaces every field coherently`() {
-        val account = newAccountId()
+        val account = uniqueAccountId()
         applyEvent(event(account, timestampMicros = baseTimestampMicros, balanceAmount = "100.00", ownerId = "aaaaaaaa-f4af-4cd2-b298-a449e614349a"))
         val newer = event(account, timestampMicros = baseTimestampMicros + 1, balanceAmount = "250.50", ownerId = "bbbbbbbb-f4af-4cd2-b298-a449e614349a", balanceCurrency = "USD")
 
@@ -83,7 +78,7 @@ abstract class BalanceSnapshotWriterContract {
 
     @Test
     fun `an older event is obsolete and does not change the snapshot`() {
-        val account = newAccountId()
+        val account = uniqueAccountId()
         val current = event(account, timestampMicros = baseTimestampMicros, balanceAmount = "100.00")
         applyEvent(current)
 
@@ -95,8 +90,8 @@ abstract class BalanceSnapshotWriterContract {
 
     @Test
     fun `accounts are isolated from one another`() {
-        val first = newAccountId()
-        val second = newAccountId()
+        val first = uniqueAccountId()
+        val second = uniqueAccountId()
         applyEvent(event(first, balanceAmount = "10.00"))
         applyEvent(event(second, balanceAmount = "20.00"))
 
@@ -108,12 +103,12 @@ abstract class BalanceSnapshotWriterContract {
 
     @Test
     fun `an account that was never written has no snapshot`() {
-        assertNull(currentOf(AccountId.parse(newAccountId())))
+        assertNull(currentStoredSnapshotOf(AccountId.parse(uniqueAccountId())))
     }
 
     @Test
     fun `microseconds of the event are preserved`() {
-        val account = newAccountId()
+        val account = uniqueAccountId()
 
         applyEvent(event(account, timestampMicros = 1751749453433123L))
 
@@ -123,7 +118,7 @@ abstract class BalanceSnapshotWriterContract {
     @Test
     fun `exact decimal balances read back numerically identical`() {
         listOf("12345678901234567890.123456789012345678", "0.10", "183.10", "-42.50", "0").forEach { amount ->
-            val account = newAccountId()
+            val account = uniqueAccountId()
 
             applyEvent(event(account, balanceAmount = amount))
 
@@ -133,7 +128,7 @@ abstract class BalanceSnapshotWriterContract {
 
     @Test
     fun `declined and disabled events take part in the precedence like any other`() {
-        val account = newAccountId()
+        val account = uniqueAccountId()
         applyEvent(event(account, timestampMicros = baseTimestampMicros, balanceAmount = "100.00"))
 
         val declined = event(account, timestampMicros = baseTimestampMicros + 1, transactionStatus = TransactionStatus.DECLINED, balanceAmount = "90.00")
@@ -149,7 +144,7 @@ abstract class BalanceSnapshotWriterContract {
 
     @Test
     fun `the same event delivered again is a duplicate and nothing changes`() {
-        val account = newAccountId()
+        val account = uniqueAccountId()
         val original = event(account, balanceAmount = "100.00")
         applyEvent(original)
 
@@ -168,7 +163,7 @@ abstract class BalanceSnapshotWriterContract {
                 "saldo" to { account, tx -> event(account, transactionId = tx, balanceAmount = "999.99") },
             )
         divergences.forEach { (field, divergent) ->
-            val account = newAccountId()
+            val account = uniqueAccountId()
             val tx = UUID.randomUUID().toString()
             val first = event(account, transactionId = tx, balanceAmount = "100.00")
             applyEvent(first)
@@ -181,7 +176,7 @@ abstract class BalanceSnapshotWriterContract {
 
     @Test
     fun `a balance that differs only by scale is not a divergence`() {
-        val account = newAccountId()
+        val account = uniqueAccountId()
         val tx = UUID.randomUUID().toString()
         applyEvent(event(account, transactionId = tx, balanceAmount = "100.00"))
 
@@ -191,7 +186,7 @@ abstract class BalanceSnapshotWriterContract {
 
     @Test
     fun `a redelivery of a transaction that was already superseded is obsolete`() {
-        val account = newAccountId()
+        val account = uniqueAccountId()
         val old = event(account, timestampMicros = baseTimestampMicros, balanceAmount = "100.00")
         val newer = event(account, timestampMicros = baseTimestampMicros + 10, balanceAmount = "200.00")
         applyEvent(old)
@@ -204,7 +199,7 @@ abstract class BalanceSnapshotWriterContract {
 
     @Test
     fun `on a timestamp tie the greater transaction id wins in both arrival orders`() {
-        val lowFirst = newAccountId()
+        val lowFirst = uniqueAccountId()
         val low = { account: String -> event(account, transactionId = idLow, balanceAmount = "10.00") }
         val high = { account: String -> event(account, transactionId = idHigh, balanceAmount = "20.00") }
 
@@ -212,7 +207,7 @@ abstract class BalanceSnapshotWriterContract {
         assertEquals(ApplyResult.Applied, applyEvent(high(lowFirst)))
         assertEquals(BalanceSnapshot.from(high(lowFirst)), storedSnapshot(lowFirst))
 
-        val highFirst = newAccountId()
+        val highFirst = uniqueAccountId()
         assertEquals(ApplyResult.Applied, applyEvent(high(highFirst)))
         assertEquals(ApplyResult.Obsolete, applyEvent(low(highFirst)))
         assertEquals(BalanceSnapshot.from(high(highFirst)), storedSnapshot(highFirst))
@@ -220,7 +215,7 @@ abstract class BalanceSnapshotWriterContract {
 
     @Test
     fun `the transaction id is normalized to lower case before comparing`() {
-        val account = newAccountId()
+        val account = uniqueAccountId()
         val lower = "8e8ae808-b154-48b5-9f3e-553935cc4543"
         applyEvent(event(account, transactionId = lower.uppercase(), balanceAmount = "100.00"))
 
@@ -230,8 +225,8 @@ abstract class BalanceSnapshotWriterContract {
 
     @Test
     fun `the same transaction id in different accounts does not interfere`() {
-        val first = newAccountId()
-        val second = newAccountId()
+        val first = uniqueAccountId()
+        val second = uniqueAccountId()
         val tx = UUID.randomUUID().toString()
 
         assertEquals(ApplyResult.Applied, applyEvent(event(first, transactionId = tx, balanceAmount = "10.00")))

@@ -53,7 +53,7 @@ class ConcurrentWritesIT {
 
         /** O leitor concorrente precisa de amostras suficientes para a verificacao de integridade ter valor. */
         const val MIN_CONCURRENT_READS = 50
-        val TX_COUNT = ConvergenceModel.TRANSACTION_IDS.size
+        val TX_COUNT = ConvergenceModel.TRANSACTION_IDS_WITH_UUID_COMPARE_TRAPS.size
     }
 
     /** 300 chaves distintas (50 timestamps x 6 ids: muitos empates de `timestamp`) + 100 duplicatas, em ordem definida pela semente. */
@@ -82,7 +82,7 @@ class ConcurrentWritesIT {
         val events = workload(account, seed)
         assertEquals(TOTAL, events.size)
         val expectedWinner = assertNotNull(ConvergenceModel.winnerOf(events))
-        val possible: Map<Pair<Long, String>, BalanceSnapshot> = events.associate { it.key to it.toSnapshot() }
+        val possible: Map<Pair<Long, String>, BalanceSnapshot> = events.associate { it.precedenceKey to it.toSnapshot() }
 
         val start = CountDownLatch(1)
         val done = CountDownLatch(TOTAL)
@@ -159,11 +159,11 @@ class ConcurrentWritesIT {
         assertEquals(expectedWinner.toSnapshot(), reader.find(accountId), "snapshot final == max(timestamp, txId) (seed $seed)")
         // Depois da corrida a classificacao e deterministica: o vencedor reentregue e duplicado; qualquer outro e obsoleto.
         assertEquals(ApplyResult.Duplicate(conflicting = false), writer.applyIfNewer(expectedWinner.toSnapshot()))
-        val loser = events.first { it.key != expectedWinner.key }
+        val loser = events.first { it.precedenceKey != expectedWinner.precedenceKey }
         assertEquals(ApplyResult.Obsolete, writer.applyIfNewer(loser.toSnapshot()))
         assertEquals(emptyList(), tornReads, "leituras concorrentes so veem snapshots integros (seed $seed, ${reads.get()} leituras)")
         assertTrue(reads.get() >= MIN_CONCURRENT_READS, "o leitor concorrente observou ${reads.get()} snapshots (minimo $MIN_CONCURRENT_READS): a verificacao de integridade ficaria vazia")
-        println("ConcurrentWritesIT seed=$seed threads=$THREADS escritas=$TOTAL applied=${applied.get()} obsolete=${obsolete.get()} duplicate=${duplicate.get()} leituras=${reads.get()} vencedor=${expectedWinner.key}")
+        println("ConcurrentWritesIT seed=$seed threads=$THREADS escritas=$TOTAL applied=${applied.get()} obsolete=${obsolete.get()} duplicate=${duplicate.get()} leituras=${reads.get()} vencedor=${expectedWinner.precedenceKey}")
     }
 
     @Test

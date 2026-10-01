@@ -7,10 +7,6 @@ import br.com.itau.challenge.balance.port.output.BalanceSnapshotReader
 import br.com.itau.challenge.balance.port.output.BalanceSnapshotWriter
 import java.util.concurrent.ConcurrentHashMap
 
-/**
- * Fake em memoria dos snapshots (sem infraestrutura), com a semantica do DynamoDB: a arbitragem de precedencia e atomica
- * por conta (`ConcurrentHashMap.compute`) e usa [BalanceSnapshot.supersedes].
- */
 class InMemoryBalanceStore :
     BalanceSnapshotReader,
     BalanceSnapshotWriter {
@@ -22,22 +18,26 @@ class InMemoryBalanceStore :
     @Volatile
     private var writeFailure: RuntimeException? = null
 
-    /** Grava (ou substitui) o snapshot da conta, sem arbitragem de precedencia. */
-    fun seed(snapshot: BalanceSnapshot) {
+    fun seedWithoutArbitration(snapshot: BalanceSnapshot) {
         snapshots[snapshot.accountId] = snapshot
     }
 
-    /** Snapshot vigente da conta (inspecao dos testes; nao passa pela falha injetada). */
-    fun current(accountId: AccountId): BalanceSnapshot? = snapshots[accountId]
+    fun peek(accountId: AccountId): BalanceSnapshot? = snapshots[accountId]
 
-    /** Toda leitura seguinte lanca [exception]; `null` restaura o comportamento normal. */
-    fun failReadsWith(exception: RuntimeException?) {
+    fun failReadsWith(exception: RuntimeException) {
         readFailure = exception
     }
 
-    /** Toda escrita seguinte lanca [exception]; `null` restaura o comportamento normal. */
-    fun failWritesWith(exception: RuntimeException?) {
+    fun failWritesWith(exception: RuntimeException) {
         writeFailure = exception
+    }
+
+    fun recoverReads() {
+        readFailure = null
+    }
+
+    fun recoverWrites() {
+        writeFailure = null
     }
 
     override fun find(accountId: AccountId): BalanceSnapshot? {
@@ -67,7 +67,6 @@ class InMemoryBalanceStore :
         return result
     }
 
-    /** Conteudo divergente de um mesmo evento: titular, situacao ou saldo (valor e moeda). */
     private fun hasDivergentContent(
         candidate: BalanceSnapshot,
         current: BalanceSnapshot,

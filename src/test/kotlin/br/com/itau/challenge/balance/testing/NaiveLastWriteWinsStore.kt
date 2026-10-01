@@ -6,11 +6,6 @@ import br.com.itau.challenge.balance.domain.model.BalanceSnapshot
 import br.com.itau.challenge.balance.port.output.BalanceSnapshotWriter
 import java.util.concurrent.ConcurrentHashMap
 
-/**
- * Implementacao INGENUA de [BalanceSnapshotWriter]: "o ultimo a chegar vence". Nao compara precedencia, nao detecta
- * duplicado nem obsoleto. Existe apenas para demonstrar o vermelho da propriedade de convergencia (meta-teste): uma
- * propriedade que nao consegue reprovar esta implementacao nao prova nada sobre a ordem de chegada.
- */
 class NaiveLastWriteWinsStore : BalanceSnapshotWriter {
     private val snapshots = ConcurrentHashMap<AccountId, BalanceSnapshot>()
 
@@ -19,6 +14,5 @@ class NaiveLastWriteWinsStore : BalanceSnapshotWriter {
         return ApplyResult.Applied
     }
 
-    /** Snapshot vigente da conta (inspecao dos testes). */
-    fun current(accountId: AccountId): BalanceSnapshot? = snapshots[accountId]
+    fun peek(accountId: AccountId): BalanceSnapshot? = snapshots[accountId]
 }

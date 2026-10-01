@@ -40,7 +40,7 @@ class GetBalanceServiceTest {
     @Test
     fun `returns the current snapshot when the account is enabled`() {
         val snapshot = snapshotOf()
-        store.seed(snapshot)
+        store.seedWithoutArbitration(snapshot)
 
         assertSame(snapshot, service.getBalance(accountId))
     }
@@ -54,7 +54,7 @@ class GetBalanceServiceTest {
 
     @Test
     fun `disabled snapshot raises account disabled carrying no balance data`() {
-        store.seed(snapshotOf(status = AccountStatus.DISABLED, balanceAmount = "999.99"))
+        store.seedWithoutArbitration(snapshotOf(status = AccountStatus.DISABLED, balanceAmount = "999.99"))
 
         val failure = assertFailsWith<AccountDisabledException> { service.getBalance(accountId) }
 
@@ -64,11 +64,11 @@ class GetBalanceServiceTest {
 
     @Test
     fun `a newer enabled snapshot replacing a disabled one makes the query succeed`() {
-        store.seed(snapshotOf(status = AccountStatus.DISABLED, timestampMicros = 1751749453433000L))
+        store.seedWithoutArbitration(snapshotOf(status = AccountStatus.DISABLED, timestampMicros = 1751749453433000L))
         assertFailsWith<AccountDisabledException> { service.getBalance(accountId) }
 
         val newer = snapshotOf(status = AccountStatus.ENABLED, timestampMicros = 1751749454433000L, balanceAmount = "70.00")
-        store.seed(newer)
+        store.seedWithoutArbitration(newer)
 
         assertSame(newer, service.getBalance(accountId))
     }
@@ -86,7 +86,7 @@ class GetBalanceServiceTest {
     @Test
     fun `a snapshot that came from a declined event is served normally`() {
         val snapshot = snapshotOf(transactionStatus = TransactionStatus.DECLINED, balanceAmount = "0.10")
-        store.seed(snapshot)
+        store.seedWithoutArbitration(snapshot)
 
         assertSame(snapshot, service.getBalance(accountId))
     }
