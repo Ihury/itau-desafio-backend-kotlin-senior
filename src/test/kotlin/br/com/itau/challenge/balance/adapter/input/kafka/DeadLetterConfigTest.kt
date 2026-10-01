@@ -22,6 +22,7 @@ import org.mockito.ArgumentMatchers.any
 import org.mockito.Mockito.doAnswer
 import org.mockito.Mockito.doReturn
 import org.mockito.Mockito.mock
+import org.mockito.Mockito.mockingDetails
 import org.mockito.Mockito.never
 import org.mockito.Mockito.times
 import org.mockito.Mockito.verify
@@ -160,6 +161,13 @@ class DeadLetterConfigTest {
         val outbound = singleDltRecord()
         assertEquals(dltTopic, outbound.topic())
         assertNull(outbound.partition(), "partition -1 (o padrao 'mesma particao' falharia com 12 -> 3 particoes)")
+    }
+
+    @Test
+    fun `publishing to the dlt never asks the broker for the partitions of the dlt topic`() {
+        deliver(InvalidEventException(RejectionReason.MISSING_FIELD, "account.id"))
+
+        assertTrue(mockingDetails(consumer).invocations.none { it.method.name == "partitionsFor" })
     }
 
     @Test
@@ -359,7 +367,7 @@ class DeadLetterConfigTest {
     }
 
     private inline fun <T> capturingLogs(block: (ListAppender<ILoggingEvent>) -> T): T {
-        val logger = LoggerFactory.getLogger(DeadLetterConfig::class.java) as Logger
+        val logger = LoggerFactory.getLogger(DeadLetterRetryListener::class.java) as Logger
         val appender = ListAppender<ILoggingEvent>().apply { start() }
         logger.addAppender(appender)
         try {
@@ -433,7 +441,7 @@ class DeadLetterConfigTest {
             deliver(BalanceStoreUnavailableException(StoreFailureCause.UNAVAILABLE))
             deliver(InvalidEventException(RejectionReason.MISSING_FIELD))
 
-            val correlated = logs.list.filter { it.loggerName == DeadLetterConfig::class.java.name }
+            val correlated = logs.list.filter { it.loggerName == DeadLetterRetryListener::class.java.name }
             assertTrue(correlated.size >= 3)
             correlated.forEach {
                 assertEquals("transacoes-financeiras-processadas-7@41", it.mdcPropertyMap["correlationId"], it.formattedMessage)

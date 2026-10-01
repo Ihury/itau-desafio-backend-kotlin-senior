@@ -55,7 +55,7 @@ class BackpressureConfigTest {
 
     @Test
     fun `the back off is exponential from 500 ms by two up to thirty seconds with 250 ms of jitter and no attempt or time limit`() {
-        val backOff = config.transientBackOff(settings)
+        val backOff = FailureBackOffs.transientFailure(settings)
 
         assertEquals(500L, backOff.initialInterval)
         assertEquals(2.0, backOff.multiplier)
@@ -68,7 +68,7 @@ class BackpressureConfigTest {
     @Test
     fun `the back off never runs out and every wait stays inside its jitter envelope and under the ceiling`() {
         repeat(20) {
-            val execution = config.transientBackOff(settings).start()
+            val execution = FailureBackOffs.transientFailure(settings).start()
 
             (0 until 1000).forEach { step ->
                 val wait = execution.nextBackOff()
@@ -84,7 +84,7 @@ class BackpressureConfigTest {
     @Test
     fun `the waits grow across attempts on average, and the jitter really varies them`() {
         val runs = 400
-        val samples = (0 until runs).map { config.transientBackOff(settings).start().let { execution -> (0 until 10).map { execution.nextBackOff() } } }
+        val samples = (0 until runs).map { FailureBackOffs.transientFailure(settings).start().let { execution -> (0 until 10).map { execution.nextBackOff() } } }
         val means = (0 until 10).map { step -> samples.map { it[step] }.average() }
 
         (0 until 6).forEach { step -> assertTrue(means[step] < means[step + 1], "espera media deve crescer no passo ${step + 1}: $means") }
@@ -96,7 +96,7 @@ class BackpressureConfigTest {
 
     @Test
     fun `without jitter the sequence is deterministic`() {
-        val execution = config.transientBackOff(settings.copy(jitterMs = 0)).start()
+        val execution = FailureBackOffs.transientFailure(settings.copy(jitterMs = 0)).start()
 
         assertEquals(listOf(500L, 1000L, 2000L, 4000L, 8000L, 16000L, 30000L, 30000L), (0 until 8).map { execution.nextBackOff() })
     }
@@ -104,7 +104,7 @@ class BackpressureConfigTest {
     @Test
     fun `the back off parameters come from the settings and every wait stays inside them`() {
         val custom = BackOffProperties(initialMs = 100, maxMs = 1_000, jitterMs = 50)
-        val backOff = config.transientBackOff(custom)
+        val backOff = FailureBackOffs.transientFailure(custom)
 
         assertEquals(100L, backOff.initialInterval)
         assertEquals(1_000L, backOff.maxInterval)
@@ -115,9 +115,9 @@ class BackpressureConfigTest {
 
     @Test
     fun `each failure class has its own back off, transient waits with jitter, unclassified retries fast and invalid events never retry`() {
-        assertTrue(config.backOffFor(BalanceStoreUnavailableException(StoreFailureCause.TIMEOUT), settings).start().nextBackOff() in 500..750)
-        assertEquals(100L, config.backOffFor(IllegalStateException(), settings).start().nextBackOff())
-        assertEquals(BackOffExecution.STOP, config.backOffFor(InvalidEventException(RejectionReason.INVALID_VALUE), settings).start().nextBackOff())
+        assertTrue(FailureBackOffs.forFailure(BalanceStoreUnavailableException(StoreFailureCause.TIMEOUT), settings).start().nextBackOff() in 500..750)
+        assertEquals(100L, FailureBackOffs.forFailure(IllegalStateException(), settings).start().nextBackOff())
+        assertEquals(BackOffExecution.STOP, FailureBackOffs.forFailure(InvalidEventException(RejectionReason.INVALID_VALUE), settings).start().nextBackOff())
     }
 
     private val dlt = mock(KafkaOperations::class.java)

@@ -88,7 +88,7 @@ class TransientFailureHandlingTest {
 
     @Test
     fun `the back off never runs out, grows to the ceiling and never waits past the poll interval`() {
-        val execution = config.transientBackOff(noJitter).start()
+        val execution = FailureBackOffs.transientFailure(noJitter).start()
         val waits = (1..1000).map { execution.nextBackOff() }
 
         assertTrue(waits.none { it == BackOffExecution.STOP }, "o backoff nao pode esgotar")
@@ -102,7 +102,7 @@ class TransientFailureHandlingTest {
 
     @Test
     fun `the back off has no attempt or elapsed time limit`() {
-        val backOff = config.transientBackOff(noJitter)
+        val backOff = FailureBackOffs.transientFailure(noJitter)
 
         assertEquals(500L, backOff.initialInterval)
         assertEquals(2.0, backOff.multiplier)
