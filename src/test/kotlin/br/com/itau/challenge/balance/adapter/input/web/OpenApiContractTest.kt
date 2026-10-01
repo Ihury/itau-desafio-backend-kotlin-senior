@@ -9,19 +9,16 @@ import br.com.itau.challenge.balance.domain.model.AccountId
 import br.com.itau.challenge.balance.domain.model.BalanceSnapshot
 import br.com.itau.challenge.balance.domain.model.RejectionReason
 import br.com.itau.challenge.balance.domain.model.StoreFailureCause
+import br.com.itau.challenge.balance.testing.DISPLAY_ZONE
+import br.com.itau.challenge.balance.testing.RETRY_AFTER_SECONDS
 import br.com.itau.challenge.balance.testing.TransactionEventFixtures.DEFAULT_ACCOUNT_ID
 import br.com.itau.challenge.balance.testing.TransactionEventFixtures.transactionEvent
-import br.com.itau.challenge.balance.port.input.GetBalanceUseCase
+import br.com.itau.challenge.balance.testing.toEpochMicros
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Test
 import org.mockito.Mockito.doReturn
 import org.mockito.Mockito.doThrow
-import org.springframework.beans.factory.annotation.Autowired
-import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest
-import org.springframework.context.annotation.Import
 import org.springframework.http.MediaType
-import org.springframework.test.context.bean.override.mockito.MockitoBean
-import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.MvcResult
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get
 import org.yaml.snakeyaml.Yaml
@@ -31,31 +28,20 @@ import java.math.BigDecimal
 import java.nio.file.Files
 import java.nio.file.Path
 import java.time.OffsetDateTime
-import java.time.ZoneId
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
-/**
- * Anti-drift do contrato: o documento servido (`static/openapi.yaml`, lido SOMENTE do classpath, porque o estagio `test`
- * do Dockerfile nao copia `specs/`) e verificado contra as respostas reais do controller.
- */
-@WebMvcTest(BalanceController::class)
-@Import(ProblemDetailsAdvice::class, CorrelationIdFilter::class, WebTestBeans::class)
-class OpenApiContractTest {
-    @Autowired
-    private lateinit var mockMvc: MockMvc
-
-    @MockitoBean
-    private lateinit var getBalance: GetBalanceUseCase
-
+class OpenApiContractTest : WebSliceTest() {
     private val json = JsonMapper.builder().build()
-    private val accountId = AccountId.parse(DEFAULT_ACCOUNT_ID)
-    private val snapshot = BalanceSnapshot.from(transactionEvent())
 
     private val document: Map<String, Any?> by lazy {
-        val stream = assertNotNull(javaClass.getResourceAsStream("/static/openapi.yaml"), "static/openapi.yaml ausente do classpath")
+        val stream =
+            assertNotNull(
+                javaClass.getResourceAsStream("/static/openapi.yaml"),
+                "static/openapi.yaml ausente do classpath (lido so de la porque o estagio de teste do Docker nao copia specs/)",
+            )
         @Suppress("UNCHECKED_CAST")
         stream.use { Yaml().load<Any>(it) as Map<String, Any?> }
     }
@@ -66,8 +52,7 @@ class OpenApiContractTest {
     @Suppress("UNCHECKED_CAST")
     private fun Any?.asList(): List<Any?> = this as List<Any?>
 
-    /** Segue `$ref: '#/components/...'` ate o objeto. */
-    private fun resolve(node: Any?): Map<String, Any?> {
+    private fun followRefs(node: Any?): Map<String, Any?> {
         var current = node.asMap()
         while (current.containsKey("\$ref")) {
             var target: Any? = document
@@ -95,7 +80,7 @@ class OpenApiContractTest {
 
     private fun bodyOf(result: MvcResult): JsonNode = json.readTree(result.response.contentAsString)
 
-    private fun mediaTypeOf(status: String): String = resolve(responses[status]).let { it["content"].asMap().keys.single() }
+    private fun mediaTypeOf(status: String): String = followRefs(responses[status]).let { it["content"].asMap().keys.single() }
 
     @Test
     fun `the operation documents exactly the statuses 200, 400, 404, 409, 500 and 503`() {
@@ -116,12 +101,12 @@ class OpenApiContractTest {
 
     @Test
     fun `problem responses match type, status, required properties and declare no extra properties`() {
-        val problem = resolve(mapOf("\$ref" to "#/components/schemas/Problem"))
+        val problem = followRefs(mapOf("\$ref" to "#/components/schemas/Problem"))
         val required = problem["required"].asList().map { it as String }
         val allowed = problem["properties"].asMap().keys
 
         responses.keys.filter { it != "200" }.forEach { status ->
-            val schema = resolve(resolve(responses[status])["content"].asMap()["application/problem+json"].asMap()["schema"])
+            val schema = followRefs(followRefs(responses[status])["content"].asMap()["application/problem+json"].asMap()["schema"])
             val constants = schema["allOf"].asList()[1].asMap()["properties"].asMap()
             val body = bodyOf(performRequestProducing(status))
 
@@ -135,8 +120,8 @@ class OpenApiContractTest {
 
     @Test
     fun `the 200 body matches BalanceResponse with additionalProperties false`() {
-        val schema = resolve(mapOf("\$ref" to "#/components/schemas/BalanceResponse"))
-        val money = resolve(mapOf("\$ref" to "#/components/schemas/Money"))
+        val schema = followRefs(mapOf("\$ref" to "#/components/schemas/BalanceResponse"))
+        val money = followRefs(mapOf("\$ref" to "#/components/schemas/Money"))
         assertEquals(false, schema["additionalProperties"])
         assertEquals(false, money["additionalProperties"])
 
@@ -160,27 +145,27 @@ class OpenApiContractTest {
     fun `declared response headers are present with the documented values`() {
         responses.keys.forEach { status ->
             val result = performRequestProducing(status)
-            val headers = resolve(responses[status])["headers"]?.asMap().orEmpty()
+            val headers = followRefs(responses[status])["headers"]?.asMap().orEmpty()
 
             assertTrue(headers.isNotEmpty(), "todo status declara ao menos X-Correlation-Id: $status")
             headers.forEach { (name, definition) ->
                 val value = result.response.getHeader(name)
                 assertNotNull(value, "header $name declarado e ausente em $status")
-                val schema = resolve(definition)["schema"].asMap()
+                val schema = followRefs(definition)["schema"].asMap()
                 schema["const"]?.let { assertEquals(it, value, "valor do header $name em $status") }
                 if (schema["type"] == "integer") {
                     assertTrue(value.toLong() >= (schema["minimum"] as Int).toLong(), "$name abaixo do minimo")
-                    assertEquals("10", value, "Retry-After = espera do circuit breaker")
+                    assertEquals(RETRY_AFTER_SECONDS, value, "Retry-After = espera do circuit breaker")
                 }
             }
         }
-        assertTrue("Cache-Control" in resolve(responses["200"])["headers"].asMap())
-        assertTrue("Retry-After" in resolve(responses["503"])["headers"].asMap())
+        assertTrue("Cache-Control" in followRefs(responses["200"])["headers"].asMap())
+        assertTrue("Retry-After" in followRefs(responses["503"])["headers"].asMap())
     }
 
     @Test
     fun `X-Correlation-Id is declared in every response and its pattern is the filter pattern`() {
-        responses.keys.forEach { assertTrue("X-Correlation-Id" in resolve(responses[it])["headers"].asMap(), "X-Correlation-Id em $it") }
+        responses.keys.forEach { assertTrue("X-Correlation-Id" in followRefs(responses[it])["headers"].asMap(), "X-Correlation-Id em $it") }
         val parameter = operation["parameters"].asList().map { it.asMap() }.single { it["name"] == "X-Correlation-Id" }
         val schema = parameter["schema"].asMap()
 
@@ -208,14 +193,14 @@ class OpenApiContractTest {
 
     @Test
     fun `the 200 examples of the document match the real format`() {
-        val examples = resolve(responses["200"])["content"].asMap()["application/json"].asMap()["examples"].asMap()
+        val examples = followRefs(responses["200"])["content"].asMap()["application/json"].asMap()["examples"].asMap()
         assertTrue(examples.isNotEmpty())
 
         examples.values.forEach { example ->
             val value = example.asMap()["value"].asMap()
             val balance = value["balance"].asMap()
             val instant = OffsetDateTime.parse(value["updated_at"] as String).toInstant()
-            val micros = instant.epochSecond * MICROS_PER_SECOND + instant.nano / NANOS_PER_MICRO
+            val micros = instant.toEpochMicros()
             val amount = BigDecimal(balance["amount"].toString())
             val real =
                 BalanceResponse.from(
@@ -228,7 +213,7 @@ class OpenApiContractTest {
                             timestampMicros = micros,
                         ),
                     ),
-                    ZoneId.of("America/Sao_Paulo"),
+                    DISPLAY_ZONE,
                 )
 
             assertEquals(value["id"], real.id)
@@ -242,7 +227,7 @@ class OpenApiContractTest {
     @Test
     fun `the problem examples of the document match title, detail and instance of the real responses`() {
         responses.keys.filter { it != "200" }.forEach { status ->
-            val example = resolve(responses[status])["content"].asMap()["application/problem+json"].asMap()["example"].asMap()
+            val example = followRefs(responses[status])["content"].asMap()["application/problem+json"].asMap()["example"].asMap()
             val body = bodyOf(performRequestProducing(status))
 
             assertEquals(example["type"], body["type"].asString(), "type do exemplo de $status")
@@ -257,7 +242,7 @@ class OpenApiContractTest {
     fun `an InvalidEventException escaping the use case is documented as the generic 500`() {
         doThrow(InvalidEventException(RejectionReason.INVALID_VALUE)).`when`(getBalance).getBalance(accountId)
 
-        val body = bodyOf(mockMvc.perform(get("/balances/$DEFAULT_ACCOUNT_ID")).andReturn())
+        val body = bodyOf(requestBalance().andReturn())
 
         assertEquals(500, body["status"].asInt())
     }
@@ -270,10 +255,5 @@ class OpenApiContractTest {
         val served = assertNotNull(javaClass.getResourceAsStream("/static/openapi.yaml")).use { it.readAllBytes() }
 
         assertTrue(Files.readAllBytes(contract).contentEquals(served), "static/openapi.yaml difere do contrato em specs/")
-    }
-
-    private companion object {
-        const val MICROS_PER_SECOND = 1_000_000L
-        const val NANOS_PER_MICRO = 1_000L
     }
 }

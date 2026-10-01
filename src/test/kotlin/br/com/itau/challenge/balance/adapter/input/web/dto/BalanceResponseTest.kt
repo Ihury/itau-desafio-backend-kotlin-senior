@@ -1,6 +1,8 @@
 package br.com.itau.challenge.balance.adapter.input.web.dto
 
 import br.com.itau.challenge.balance.domain.model.BalanceSnapshot
+import br.com.itau.challenge.balance.testing.DISPLAY_ZONE
+import br.com.itau.challenge.balance.testing.TransactionEventFixtures.DEFAULT_TIMESTAMP_MICROS
 import br.com.itau.challenge.balance.testing.TransactionEventFixtures.transactionEvent
 import org.junit.jupiter.api.Test
 import tools.jackson.core.StreamWriteFeature
@@ -12,18 +14,15 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class BalanceResponseTest {
-    /** Mesma configuracao do `application.yaml`: `spring.jackson.write.write-bigdecimal-as-plain=true`. */
-    private val mapper: JsonMapper = jacksonMapperBuilder().enable(StreamWriteFeature.WRITE_BIGDECIMAL_AS_PLAIN).build()
-
-    private val saoPaulo = ZoneId.of("America/Sao_Paulo")
+    private val mapperWithPlainBigDecimal: JsonMapper = jacksonMapperBuilder().enable(StreamWriteFeature.WRITE_BIGDECIMAL_AS_PLAIN).build()
 
     private fun responseJson(
         balanceAmount: String = "183.12",
         balanceCurrency: String = "BRL",
-        timestampMicros: Long = 1751749453433000L,
-        zone: ZoneId = saoPaulo,
+        timestampMicros: Long = DEFAULT_TIMESTAMP_MICROS,
+        zone: ZoneId = DISPLAY_ZONE,
     ): String =
-        mapper.writeValueAsString(
+        mapperWithPlainBigDecimal.writeValueAsString(
             BalanceResponse.from(
                 BalanceSnapshot.from(
                     transactionEvent(balanceAmount = balanceAmount, balanceCurrency = balanceCurrency, timestampMicros = timestampMicros),
@@ -70,15 +69,18 @@ class BalanceResponseTest {
     }
 
     @Test
-    fun `updated at uses the zone rules and not a fixed offset`() {
-        // 2018-01-15T12:00:00Z: horario de verao no Brasil (-02:00); 2025-07-05: sem horario de verao (-03:00)
+    fun `updated at uses the zone rules, so january is brazilian summer time at minus two hours and not a fixed offset`() {
         assertEquals("2018-01-15T10:00:00-02:00", updatedAt(1516017600000000L))
+    }
+
+    @Test
+    fun `updated at is written in the configured zone, which is Z for UTC`() {
         assertEquals("2025-07-05T21:04:13.433Z", updatedAt(1751749453433000L, ZoneId.of("UTC")))
     }
 
     @Test
     fun `ids are lowercase and the field is named updated_at`() {
-        val text = mapper.writeValueAsString(BalanceResponse.from(BalanceSnapshot.from(transactionEvent(accountId = "5B19C8B6-0CC4-4C72-A989-0C2EE15FA975")), saoPaulo))
+        val text = mapperWithPlainBigDecimal.writeValueAsString(BalanceResponse.from(BalanceSnapshot.from(transactionEvent(accountId = "5B19C8B6-0CC4-4C72-A989-0C2EE15FA975")), DISPLAY_ZONE))
 
         assertTrue(text.contains("\"id\":\"5b19c8b6-0cc4-4c72-a989-0c2ee15fa975\""))
         assertTrue(text.contains("\"updated_at\":"))
@@ -92,6 +94,6 @@ class BalanceResponseTest {
 
     private fun updatedAt(
         micros: Long,
-        zone: ZoneId = saoPaulo,
+        zone: ZoneId = DISPLAY_ZONE,
     ): String = Regex("\"updated_at\":\"([^\"]+)\"").find(responseJson(timestampMicros = micros, zone = zone))!!.groupValues[1]
 }

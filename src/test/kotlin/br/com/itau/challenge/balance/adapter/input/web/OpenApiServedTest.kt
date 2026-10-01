@@ -11,7 +11,6 @@ import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
-/** O contrato e servido em `GET /openapi.yaml` com o mesmo conteudo do arquivo do classpath. */
 @SpringBootTest
 @AutoConfigureMockMvc
 @ActiveProfiles("test")

@@ -4,45 +4,28 @@ import br.com.itau.challenge.balance.domain.exception.BalanceStoreCircuitOpenExc
 import br.com.itau.challenge.balance.domain.exception.BalanceStoreUnavailableException
 import br.com.itau.challenge.balance.domain.model.StoreFailureCause
 import br.com.itau.challenge.balance.domain.model.StoreFailureDetails
+import br.com.itau.challenge.balance.testing.LogCapture
+import br.com.itau.challenge.balance.testing.RETRY_AFTER
+import br.com.itau.challenge.balance.testing.RETRY_AFTER_SECONDS
+import br.com.itau.challenge.balance.testing.TransactionEventFixtures.DEFAULT_ACCOUNT_ID
 import ch.qos.logback.classic.Level
-import ch.qos.logback.classic.Logger
-import ch.qos.logback.classic.spi.ILoggingEvent
-import ch.qos.logback.core.read.ListAppender
-import org.junit.jupiter.api.AfterEach
-import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
-import org.slf4j.LoggerFactory
+import org.junit.jupiter.api.extension.RegisterExtension
 import org.springframework.http.HttpStatus
 import org.springframework.mock.web.MockHttpServletRequest
 import software.amazon.awssdk.core.exception.SdkClientException
-import java.time.Duration
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
-/** Logs do `503` da consulta: diagnostico do SDK sem texto livre, sem pilha e no nivel certo. */
 class ProblemDetailsAdviceLoggingTest {
-    private val advice = ProblemDetailsAdvice(Duration.ofSeconds(10))
-    private val request = MockHttpServletRequest("GET", "/balances/5b19c8b6-0cc4-4c72-a989-0c2ee15fa975")
+    private val advice = ProblemDetailsAdvice(RETRY_AFTER)
+    private val request = MockHttpServletRequest("GET", "/balances/$DEFAULT_ACCOUNT_ID")
 
-    private val logger = LoggerFactory.getLogger(ProblemDetailsAdvice::class.java) as Logger
-    private lateinit var appender: ListAppender<ILoggingEvent>
-    private var originalLevel: Level? = null
-
-    @BeforeEach
-    fun captureLogs() {
-        originalLevel = logger.level
-        appender = ListAppender<ILoggingEvent>().apply { start() }
-        logger.addAppender(appender)
-        logger.level = Level.DEBUG
-    }
-
-    @AfterEach
-    fun releaseLogs() {
-        logger.detachAppender(appender)
-        logger.level = originalLevel
-    }
+    @JvmField
+    @RegisterExtension
+    val logs = LogCapture(ProblemDetailsAdvice::class.java, Level.DEBUG)
 
     private fun storeUnavailable(
         cause: StoreFailureCause,
@@ -54,7 +37,7 @@ class ProblemDetailsAdviceLoggingTest {
         val response = advice.storeUnavailable(storeUnavailable(StoreFailureCause.UNAVAILABLE, StoreFailureDetails("software.amazon.awssdk.core.exception.SdkClientException", null, null)), request)
 
         assertEquals(HttpStatus.SERVICE_UNAVAILABLE, response.statusCode)
-        val line = appender.list.single()
+        val line = logs.events.single()
         assertEquals(Level.WARN, line.level)
         assertTrue("cause=UNAVAILABLE" in line.formattedMessage, line.formattedMessage)
         assertTrue("exception=software.amazon.awssdk.core.exception.SdkClientException" in line.formattedMessage, line.formattedMessage)
@@ -69,18 +52,18 @@ class ProblemDetailsAdviceLoggingTest {
         repeat(50) {
             val response = advice.storeUnavailable(rejection, request)
             assertEquals(HttpStatus.SERVICE_UNAVAILABLE, response.statusCode)
-            assertEquals("10", response.headers.getFirst("Retry-After"))
+            assertEquals(RETRY_AFTER_SECONDS, response.headers.getFirst("Retry-After"))
         }
 
-        assertTrue(appender.list.none { it.level.isGreaterOrEqual(Level.INFO) }, "nenhum INFO/WARN/ERROR: ${appender.list.map { it.formattedMessage }}")
-        assertTrue(appender.list.all { it.level == Level.DEBUG && it.throwableProxy == null })
+        assertTrue(logs.events.none { it.level.isGreaterOrEqual(Level.INFO) }, "nenhum INFO/WARN/ERROR: ${logs.messages}")
+        assertTrue(logs.events.all { it.level == Level.DEBUG && it.throwableProxy == null })
     }
 
     @Test
     fun `fifty real failures still log fifty warns because each one is a real read failure`() {
         repeat(50) { advice.storeUnavailable(storeUnavailable(StoreFailureCause.TIMEOUT, StoreFailureDetails("software.amazon.awssdk.core.exception.ApiCallTimeoutException")), request) }
 
-        assertEquals(50, appender.list.count { it.level == Level.WARN })
+        assertEquals(50, logs.at(Level.WARN).size)
     }
 
     @Test
@@ -90,7 +73,7 @@ class ProblemDetailsAdviceLoggingTest {
             request,
         )
 
-        val line = appender.list.single()
+        val line = logs.events.single()
         assertEquals(Level.ERROR, line.level)
         assertTrue("cause=MISCONFIGURED" in line.formattedMessage, line.formattedMessage)
         assertTrue("errorCode=UnrecognizedClientException" in line.formattedMessage && "statusCode=400" in line.formattedMessage, line.formattedMessage)
