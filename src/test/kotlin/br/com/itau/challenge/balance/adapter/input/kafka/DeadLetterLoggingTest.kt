@@ -7,6 +7,7 @@ import br.com.itau.challenge.balance.domain.model.StoreFailureCause
 import br.com.itau.challenge.balance.domain.model.StoreFailureDetails
 import br.com.itau.challenge.balance.testing.DeadLetterHarness
 import br.com.itau.challenge.balance.testing.LogCapture
+import br.com.itau.challenge.balance.testing.TRANSACTIONS_TOPIC
 import ch.qos.logback.classic.Level
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.extension.RegisterExtension
@@ -82,7 +83,7 @@ class DeadLetterLoggingTest {
         val correlated = logs.events.filter { it.loggerName == DeadLetterRetryListener::class.java.name }
         assertTrue(correlated.size >= 3)
         correlated.forEach {
-            assertEquals("transacoes-financeiras-processadas-7@41", it.mdcPropertyMap["correlationId"], it.formattedMessage)
+            assertEquals("$TRANSACTIONS_TOPIC-7@41", it.mdcPropertyMap["correlationId"], it.formattedMessage)
         }
         assertNull(MDC.get("correlationId"), "o MDC do thread do consumer e sempre limpo")
     }
