@@ -5,12 +5,7 @@ import org.springframework.boot.test.context.ConfigDataApplicationContextInitial
 import org.springframework.boot.test.context.runner.ApplicationContextRunner
 import kotlin.test.assertEquals
 
-/**
- * Os parametros do backoff da falha transiente vem das variaveis de ambiente
- * (`KAFKA_BACKOFF_INITIAL_MS`, `KAFKA_BACKOFF_MAX_MS`, `KAFKA_BACKOFF_JITTER_MS`), nao de constantes no codigo. Roda so a
- * configuracao de backpressure com o `application.yaml` real, sem contexto completo (um segundo contexto completo faria o Spring
- * pausar e religar o contexto compartilhado, iniciando os listeners Kafka nos testes sem broker).
- */
+// Sem @SpringBootTest: um contexto completo extra religa o compartilhado e inicia listeners sem broker.
 class BackpressureEnvOverrideTest {
     private val runner =
         ApplicationContextRunner()

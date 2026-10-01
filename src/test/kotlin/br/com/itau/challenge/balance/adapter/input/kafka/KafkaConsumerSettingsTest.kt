@@ -1,11 +1,13 @@
 package br.com.itau.challenge.balance.adapter.input.kafka
 
 import br.com.itau.challenge.balance.adapter.output.dynamodb.DynamoDbClientProperties
-import org.apache.kafka.clients.consumer.CooperativeStickyAssignor
 import br.com.itau.challenge.balance.domain.exception.BalanceStoreUnavailableException
 import br.com.itau.challenge.balance.domain.model.StoreFailureCause
+import br.com.itau.challenge.balance.testing.TRANSACTIONS_TOPIC
+import br.com.itau.challenge.balance.testing.aRecord
+import br.com.itau.challenge.balance.testing.listenerFailed
 import org.apache.kafka.clients.consumer.Consumer
-import org.apache.kafka.clients.consumer.ConsumerRecord
+import org.apache.kafka.clients.consumer.CooperativeStickyAssignor
 import org.apache.kafka.common.serialization.ByteArrayDeserializer
 import org.apache.kafka.common.serialization.ByteArraySerializer
 import org.junit.jupiter.api.Test
@@ -21,7 +23,6 @@ import org.springframework.kafka.listener.CommonErrorHandler
 import org.springframework.kafka.listener.ConcurrentMessageListenerContainer
 import org.springframework.kafka.listener.ContainerProperties
 import org.springframework.kafka.listener.DefaultErrorHandler
-import org.springframework.kafka.listener.ListenerExecutionFailedException
 import org.springframework.kafka.listener.MessageListenerContainer
 import org.springframework.kafka.support.KafkaUtils
 import org.springframework.test.context.ActiveProfiles
@@ -31,7 +32,6 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
-/** Configuracao efetiva do consumer no contexto Spring completo (perfil test: nenhum container inicia). */
 @SpringBootTest
 @ActiveProfiles("test")
 class KafkaConsumerSettingsTest {
@@ -116,16 +116,15 @@ class KafkaConsumerSettingsTest {
         assertEquals(BackOffProperties(initialMs = 500, maxMs = 30_000, jitterMs = 250), backOffProperties)
         val maxPollIntervalMs = consumerProperties["max.poll.interval.ms"].toString().toLong()
 
-        // a pausa nao bloqueia o poll, mas nenhuma espera pode passar do intervalo de poll nem se o operador aumentar o teto
-        assertTrue(backOffProperties.maxMs < maxPollIntervalMs, "KAFKA_BACKOFF_MAX_MS deve ser menor que max.poll.interval.ms")
+        assertTrue(backOffProperties.maxMs < maxPollIntervalMs, "KAFKA_BACKOFF_MAX_MS deve ser menor que max.poll.interval.ms, mesmo que o operador aumente o teto")
     }
 
     @Test
     fun `the real error handler pauses the container during the back off of a transient failure`() {
         val container = mock(MessageListenerContainer::class.java)
         val consumer = mock(Consumer::class.java)
-        val record = ConsumerRecord<Any, Any>("transacoes-financeiras-processadas", 0, 5L, null, ByteArray(0))
-        val failure = ListenerExecutionFailedException("x", BalanceStoreUnavailableException(StoreFailureCause.UNAVAILABLE))
+        val record = aRecord(ByteArray(0), partition = 0, offset = 5L)
+        val failure = listenerFailed(BalanceStoreUnavailableException(StoreFailureCause.UNAVAILABLE))
 
         (errorHandler as DefaultErrorHandler).handleOne(failure, record, consumer, container)
 
@@ -155,19 +154,20 @@ class KafkaConsumerSettingsTest {
     private fun serializerName(value: Any?): String = if (value is Class<*>) value.name else value.toString()
 
     @Test
-    fun `the synchronous dlt publication waits five seconds at most and the producer configuration is valid`() {
+    fun `the synchronous dlt publication waits five seconds at most because the send timeout is the larger of the delivery timeout and the wait with a zero buffer`() {
         val producerProperties = deadLetterTemplate.producerFactory.configurationProperties
 
         assertEquals(Duration.ofSeconds(5), deadLetterProperties.waitForSendResultTimeout)
-        // o Spring espera max(delivery.timeout.ms + buffer, waitForSendResultTimeout); o buffer e zerado no recoverer
         assertEquals(5000L, KafkaUtils.determineSendTimeout(producerProperties, 0, deadLetterProperties.waitForSendResultTimeout.toMillis()).toMillis())
-        // delivery.timeout.ms >= linger.ms + request.timeout.ms: o Kafka valida na criacao do produtor (nao conecta ao broker)
+    }
+
+    @Test
+    fun `the dlt producer configuration is valid because kafka checks it when the producer is created, without reaching the broker`() {
         deadLetterTemplate.producerFactory.createProducer().close()
     }
 
     @Test
-    fun `there is exactly one common error handler in the context`() {
-        // Um segundo CommonErrorHandler tornaria a escolha do container imprevisivel.
+    fun `there is exactly one common error handler so the container choice is unambiguous`() {
         assertEquals(listOf("kafkaErrorHandler"), applicationContext.getBeansOfType(CommonErrorHandler::class.java).keys.toList())
     }
 
@@ -179,6 +179,6 @@ class KafkaConsumerSettingsTest {
     @Test
     fun `topics come from the configuration`() {
         val topics = listenerContainer().containerProperties.topics
-        assertEquals(listOf("transacoes-financeiras-processadas"), topics?.toList())
+        assertEquals(listOf(TRANSACTIONS_TOPIC), topics?.toList())
     }
 }

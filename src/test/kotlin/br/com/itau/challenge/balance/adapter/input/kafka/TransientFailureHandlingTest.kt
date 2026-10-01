@@ -2,23 +2,27 @@ package br.com.itau.challenge.balance.adapter.input.kafka
 
 import br.com.itau.challenge.balance.domain.exception.BalanceStoreUnavailableException
 import br.com.itau.challenge.balance.domain.model.StoreFailureCause
+import br.com.itau.challenge.balance.testing.NO_JITTER_BACK_OFF
+import br.com.itau.challenge.balance.testing.RecordingBackOffHandler
+import br.com.itau.challenge.balance.testing.RecordingProcessingMetrics
+import br.com.itau.challenge.balance.testing.aRecord
+import br.com.itau.challenge.balance.testing.isRedeliverySignal
+import br.com.itau.challenge.balance.testing.listenerFailed
+import br.com.itau.challenge.balance.testing.mockKafkaOperations
+import br.com.itau.challenge.balance.testing.newDeadLetterErrorHandler
 import org.apache.kafka.clients.consumer.Consumer
-import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.apache.kafka.common.TopicPartition
 import org.junit.jupiter.api.Test
 import org.mockito.ArgumentMatchers.anyMap
 import org.mockito.Mockito.mock
+import org.mockito.Mockito.mockingDetails
 import org.mockito.Mockito.never
 import org.mockito.Mockito.times
 import org.mockito.Mockito.verify
-import org.mockito.Mockito.mockingDetails
-import br.com.itau.challenge.balance.testing.RecordingProcessingMetrics
-import org.springframework.kafka.core.KafkaOperations
+import org.springframework.core.NestedRuntimeException
 import org.springframework.kafka.listener.BackOffHandler
 import org.springframework.kafka.listener.DefaultErrorHandler
-import org.springframework.kafka.listener.ListenerExecutionFailedException
 import org.springframework.kafka.listener.MessageListenerContainer
-import org.springframework.core.NestedRuntimeException
 import org.springframework.util.backoff.BackOffExecution
 import java.time.Clock
 import java.time.Duration
@@ -27,68 +31,32 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
-/**
- * Prova que a falha TRANSIENTE nunca descarta mensagem: com o armazenamento indisponivel o error handler nunca confirma o
- * offset nem aciona o recoverer do DLT (a mensagem valida fica no broker), e a espera entre reentregas cresce ate um teto e
- * nunca se esgota. As falhas permanentes e nao classificadas vao ao DLT (`DeadLetterConfigTest`); aqui o `KafkaOperations`
- * do DLT e um mock que NAO PODE ser usado. O handler e chamado diretamente, sem broker.
- */
 class TransientFailureHandlingTest {
-    /** `BackOffHandler` que so registra o intervalo pedido, para nao dormir de verdade em mil iteracoes. */
-    private class RecordingBackOffHandler : BackOffHandler {
-        val intervals = mutableListOf<Long>()
-
-        override fun onNextBackOff(
-            container: MessageListenerContainer?,
-            exception: Exception?,
-            nextBackOff: Long,
-        ) {
-            intervals += nextBackOff
-        }
-
-        override fun onNextBackOff(
-            container: MessageListenerContainer,
-            partition: TopicPartition,
-            nextBackOff: Long,
-        ) {
-            intervals += nextBackOff
-        }
-    }
-
-    @Suppress("UNCHECKED_CAST")
-    private val dlt = mock(KafkaOperations::class.java) as KafkaOperations<ByteArray, ByteArray>
+    private val dlt = mockKafkaOperations()
     private val metrics = RecordingProcessingMetrics()
-    private val config = DeadLetterConfig()
-
-    /** Sem jitter, para as esperas serem exatas (o jitter e coberto por `BackpressureConfigTest`). */
-    private val noJitter = BackOffProperties(initialMs = 500, maxMs = 30_000, jitterMs = 0)
 
     private fun errorHandlerWith(backOffHandler: BackOffHandler) =
-        config.deadLetterErrorHandler(dlt, "transacoes-financeiras-processadas.DLT", Duration.ofSeconds(5), Clock.systemUTC(), metrics, noJitter, backOffHandler)
+        newDeadLetterErrorHandler(dlt, metrics, backOffHandler, waitForSendResultTimeout = Duration.ofSeconds(5), clock = Clock.systemUTC())
 
-    private val record = ConsumerRecord<Any, Any>("transacoes-financeiras-processadas", 2, 41L, null, ByteArray(0))
+    private val record = aRecord(ByteArray(0), partition = 2)
     private val partition = TopicPartition(record.topic(), record.partition())
 
-    /** `RecordInRetryException` (package-private no Spring Kafka) e o sinal de que o registro sera reentregue, nao pulado. */
     private fun assertRedelivery(block: () -> Unit) {
         val signal = assertFailsWith<NestedRuntimeException> { block() }
-        assertEquals("RecordInRetryException", signal.javaClass.simpleName)
+        assertTrue(isRedeliverySignal(signal), "esperado o sinal de reentrega, veio ${signal.javaClass.simpleName}")
     }
 
-    private fun listenerFailure(cause: Exception) = ListenerExecutionFailedException("Listener failed", cause)
-
-    /** Falhas transientes do armazenamento, com cada causa, embrulhadas como o container as entrega e sem embrulho. */
     private val transientFailureFactories: Map<String, () -> Exception> =
         StoreFailureCause.entries.flatMap { cause ->
             listOf(
-                "store unavailable ($cause)" to { listenerFailure(BalanceStoreUnavailableException(cause)) },
+                "store unavailable ($cause)" to { listenerFailed(BalanceStoreUnavailableException(cause)) },
                 "store unavailable ($cause), not wrapped" to { BalanceStoreUnavailableException(cause) as Exception },
             )
         }.toMap()
 
     @Test
     fun `the back off never runs out, grows to the ceiling and never waits past the poll interval`() {
-        val execution = FailureBackOffs.transientFailure(noJitter).start()
+        val execution = FailureBackOffs.transientFailure(NO_JITTER_BACK_OFF).start()
         val waits = (1..1000).map { execution.nextBackOff() }
 
         assertTrue(waits.none { it == BackOffExecution.STOP }, "o backoff nao pode esgotar")
@@ -96,13 +64,13 @@ class TransientFailureHandlingTest {
         assertEquals(waits.sorted(), waits, "crescente (jitter zerado neste teste)")
         assertEquals(30_000L, waits.max(), "teto de 30 s")
         assertEquals(30_000L, waits.last())
-        assertTrue(waits.all { it < 300_000L }, "nenhuma espera pode chegar ao max.poll.interval.ms")
+        assertTrue(waits.all { it < MAX_POLL_INTERVAL_MS }, "nenhuma espera pode chegar ao max.poll.interval.ms")
         assertEquals(listOf(500L, 1000L, 2000L, 4000L, 8000L, 16000L, 30000L), waits.take(7))
     }
 
     @Test
     fun `the back off has no attempt or elapsed time limit`() {
-        val backOff = FailureBackOffs.transientFailure(noJitter)
+        val backOff = FailureBackOffs.transientFailure(NO_JITTER_BACK_OFF)
 
         assertEquals(500L, backOff.initialInterval)
         assertEquals(2.0, backOff.multiplier)
@@ -184,8 +152,12 @@ class TransientFailureHandlingTest {
         val container = mock(MessageListenerContainer::class.java)
 
         val recoveredAt =
-            (1..20).firstOrNull { standard.handleOne(listenerFailure(IllegalStateException("x")), record, consumer, container) }
+            (1..20).firstOrNull { standard.handleOne(listenerFailed(IllegalStateException("x")), record, consumer, container) }
 
         assertTrue(recoveredAt != null && recoveredAt <= 10, "o padrao descarta apos ~10 tentativas: $recoveredAt")
+    }
+
+    private companion object {
+        const val MAX_POLL_INTERVAL_MS = 300_000L
     }
 }

@@ -1,5 +1,6 @@
 package br.com.itau.challenge.balance.adapter.input.kafka
 
+import br.com.itau.challenge.balance.adapter.input.MdcKeys
 import br.com.itau.challenge.balance.adapter.output.metrics.MicrometerProcessingMetrics
 import br.com.itau.challenge.balance.domain.exception.BalanceStoreUnavailableException
 import br.com.itau.challenge.balance.domain.exception.InvalidEventException
@@ -8,16 +9,19 @@ import br.com.itau.challenge.balance.domain.model.RejectionReason
 import br.com.itau.challenge.balance.domain.model.StoreFailureCause
 import br.com.itau.challenge.balance.domain.model.TransactionEvent
 import br.com.itau.challenge.balance.port.input.ProcessTransactionEventUseCase
+import br.com.itau.challenge.balance.testing.LogCapture
+import br.com.itau.challenge.balance.testing.TRANSACTIONS_TOPIC
+import br.com.itau.challenge.balance.testing.TransactionEventFixtures.DEFAULT_ACCOUNT_ID
+import br.com.itau.challenge.balance.testing.TransactionEventFixtures.DEFAULT_TRANSACTION_ID
+import br.com.itau.challenge.balance.testing.TransactionPayloads
 import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.Logger
-import ch.qos.logback.classic.spi.ILoggingEvent
-import ch.qos.logback.core.read.ListAppender
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry
 import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
-import org.slf4j.LoggerFactory
+import org.junit.jupiter.api.extension.RegisterExtension
 import org.slf4j.MDC
 import org.springframework.kafka.annotation.KafkaListener
 import java.time.Instant
@@ -32,11 +36,7 @@ import kotlin.test.assertTrue
 class TransactionEventListenerTest {
     private val parser = TransactionEventParser(Instant.parse("2000-01-01T00:00:00Z"), Instant.parse("1900-01-01T00:00:00Z"))
 
-    private val validPayload =
-        """{"transaction":{"id":"8e8ae808-b154-48b5-9f3e-553935cc4543","type":"CREDIT","amount":97.07,"currency":"BRL",""" +
-            """"status":"APPROVED","timestamp":1751641364589998},"account":{"id":"5b19c8b6-0cc4-4c72-a989-0c2ee15fa975",""" +
-            """"owner":"315e3cfe-f4af-4cd2-b298-a449e614349a","created_at":1634874339000000,"status":"ENABLED",""" +
-            """"balance":{"amount":183.12,"currency":"BRL"}}}"""
+    private val validPayload = TransactionPayloads.json()
 
     private class RecordingUseCase(
         private val behavior: (TransactionEvent) -> ApplyResult = { ApplyResult.Applied },
@@ -46,7 +46,7 @@ class TransactionEventListenerTest {
 
         override fun process(event: TransactionEvent): ApplyResult {
             events += event
-            mdcDuringCall += listOf("accountId", "transactionId", "correlationId").associateWith { MDC.get(it) }
+            mdcDuringCall += currentMdc()
             return behavior(event)
         }
     }
@@ -57,36 +57,28 @@ class TransactionEventListenerTest {
 
     private fun ingestTimer(outcome: String) = meters.find("balance.ingest.duration").tag("outcome", outcome).timer()
 
-    private lateinit var appender: ListAppender<ILoggingEvent>
-    private val rootLogger = LoggerFactory.getLogger(Logger.ROOT_LOGGER_NAME) as Logger
-    private var originalLevel: Level? = null
+    @JvmField
+    @RegisterExtension
+    val logs = LogCapture(Logger.ROOT_LOGGER_NAME, Level.DEBUG)
 
     @BeforeEach
-    fun captureLogs() {
+    fun clearMdcBeforeTest() {
         MDC.clear()
-        originalLevel = rootLogger.level
-        appender = ListAppender<ILoggingEvent>().apply { start() }
-        rootLogger.addAppender(appender)
-        rootLogger.level = Level.DEBUG
     }
 
     @AfterEach
-    fun releaseLogs() {
-        rootLogger.detachAppender(appender)
-        rootLogger.level = originalLevel
+    fun clearMdcAfterTest() {
         MDC.clear()
     }
 
     private fun record(
         value: ByteArray?,
-        topic: String = "transacoes-financeiras-processadas",
+        topic: String = TRANSACTIONS_TOPIC,
         partition: Int = 7,
         offset: Long = 1234,
     ) = ConsumerRecord<ByteArray?, ByteArray?>(topic, partition, offset, null, value)
 
-    private val emptyMdc = mapOf("accountId" to null, "transactionId" to null, "correlationId" to null)
-
-    private fun currentMdc(): Map<String, String?> = listOf("accountId", "transactionId", "correlationId").associateWith { MDC.get(it) }
+    private val emptyMdc = MDC_KEYS.associateWith { null }
 
     @Test
     fun `valid bytes are parsed and the use case is invoked once with the event`() {
@@ -106,9 +98,9 @@ class TransactionEventListenerTest {
 
         assertEquals(
             mapOf(
-                "accountId" to "5b19c8b6-0cc4-4c72-a989-0c2ee15fa975",
-                "transactionId" to "8e8ae808-b154-48b5-9f3e-553935cc4543",
-                "correlationId" to "t-3@99",
+                MdcKeys.ACCOUNT_ID to DEFAULT_ACCOUNT_ID,
+                MdcKeys.TRANSACTION_ID to DEFAULT_TRANSACTION_ID,
+                MdcKeys.CORRELATION_ID to "t-3@99",
             ),
             useCase.mdcDuringCall.single(),
         )
@@ -170,7 +162,7 @@ class TransactionEventListenerTest {
         runCatching { listener.onMessage(record("{\"x\":\"$secret\"".toByteArray())) }
         runCatching { listener.onMessage(record(validPayload.toByteArray())) }
 
-        val logged = appender.list.joinToString("\n") { it.formattedMessage + it.throwableProxy?.message.orEmpty() }
+        val logged = logs.events.joinToString("\n") { it.formattedMessage + it.throwableProxy?.message.orEmpty() }
         assertTrue(secret !in logged, "payload vazou para o log: $logged")
         assertTrue("183.12" !in logged && "315e3cfe" !in logged, "saldo/titular vazaram para o log")
     }
@@ -217,3 +209,7 @@ class TransactionEventListenerTest {
         assertEquals(setOf("outcome"), meters.find("balance.ingest.duration").timers().flatMap { t -> t.id.tags.map { it.key } }.toSet())
     }
 }
+
+private val MDC_KEYS = listOf(MdcKeys.ACCOUNT_ID, MdcKeys.TRANSACTION_ID, MdcKeys.CORRELATION_ID)
+
+private fun currentMdc(): Map<String, String?> = MDC_KEYS.associateWith { MDC.get(it) }

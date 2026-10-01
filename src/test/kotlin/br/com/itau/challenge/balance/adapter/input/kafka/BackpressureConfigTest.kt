@@ -6,8 +6,11 @@ import br.com.itau.challenge.balance.domain.exception.InvalidEventException
 import br.com.itau.challenge.balance.domain.model.RejectionReason
 import br.com.itau.challenge.balance.domain.model.StoreFailureCause
 import br.com.itau.challenge.balance.testing.RecordingProcessingMetrics
+import br.com.itau.challenge.balance.testing.aRecord
+import br.com.itau.challenge.balance.testing.listenerFailed
+import br.com.itau.challenge.balance.testing.mockKafkaOperations
+import br.com.itau.challenge.balance.testing.newDeadLetterErrorHandler
 import org.apache.kafka.clients.consumer.Consumer
-import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.junit.jupiter.api.Test
 import org.mockito.ArgumentCaptor
 import org.mockito.Mockito.doAnswer
@@ -16,10 +19,8 @@ import org.mockito.Mockito.mockingDetails
 import org.mockito.Mockito.never
 import org.mockito.Mockito.times
 import org.mockito.Mockito.verify
-import org.springframework.kafka.core.KafkaOperations
 import org.springframework.kafka.listener.ContainerPausingBackOffHandler
 import org.springframework.kafka.listener.DefaultErrorHandler
-import org.springframework.kafka.listener.ListenerExecutionFailedException
 import org.springframework.kafka.listener.MessageListenerContainer
 import org.springframework.scheduling.TaskScheduler
 import org.springframework.util.backoff.BackOffExecution
@@ -33,20 +34,16 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
-/**
- * Backpressure da falha transiente: `ExponentialBackOff` com jitter nativo e sem esgotar, pausa do container
- * durante a espera (o poll continua vivo) e `balance.consumer.backpressure{cause}`. O handler e chamado diretamente, sem broker.
- */
 class BackpressureConfigTest {
     private val settings = BackOffProperties(initialMs = 500, maxMs = 30_000, jitterMs = 250)
-    private val config = DeadLetterConfig()
     private val backpressureConfig = BackpressureConfig()
+    private val dlt = mockKafkaOperations()
+    private val metrics = RecordingProcessingMetrics()
+    private val scheduler = mock(TaskScheduler::class.java)
+    private val record = aRecord(ByteArray(0), partition = 2)
+    private val consumer = mock(Consumer::class.java)
 
-    /**
-     * Faixa do n-esimo intervalo (0-based) do `ExponentialBackOff` do Spring Framework 7: o jitter escala com o multiplicador
-     * (`jitter x intervalo / inicial`), o piso e o intervalo inicial e o teto e o maximo.
-     */
-    private fun envelope(step: Int): LongRange {
+    private fun jitterEnvelopeAtStep(step: Int): LongRange {
         var base = settings.initialMs
         repeat(step) { base = min((base * 2.0).toLong(), settings.maxMs) }
         val scaledJitter = settings.jitterMs * (base / settings.initialMs)
@@ -74,7 +71,7 @@ class BackpressureConfigTest {
                 val wait = execution.nextBackOff()
 
                 assertTrue(wait != BackOffExecution.STOP, "o backoff nao pode esgotar (passo ${step + 1})")
-                val expected = envelope(step.coerceAtMost(20))
+                val expected = jitterEnvelopeAtStep(step.coerceAtMost(20))
                 assertTrue(wait in expected, "passo ${step + 1}: $wait fora de $expected")
                 assertTrue(wait <= 30_000L, "nunca acima do teto de 30 s")
             }
@@ -120,27 +117,17 @@ class BackpressureConfigTest {
         assertEquals(BackOffExecution.STOP, FailureBackOffs.forFailure(InvalidEventException(RejectionReason.INVALID_VALUE), settings).start().nextBackOff())
     }
 
-    private val dlt = mock(KafkaOperations::class.java)
-    private val metrics = RecordingProcessingMetrics()
-    private val scheduler = mock(TaskScheduler::class.java)
-
-    @Suppress("UNCHECKED_CAST")
     private fun handler(): DefaultErrorHandler =
-        config.deadLetterErrorHandler(
-            dlt as KafkaOperations<ByteArray, ByteArray>,
-            "transacoes-financeiras-processadas.DLT",
-            Duration.ofSeconds(5),
-            Clock.systemUTC(),
+        newDeadLetterErrorHandler(
+            dlt,
             metrics,
-            settings,
             backpressureConfig.containerPausingBackOffHandler(scheduler),
+            backOff = settings,
+            waitForSendResultTimeout = Duration.ofSeconds(5),
+            clock = Clock.systemUTC(),
         )
 
-    private val record = ConsumerRecord<Any, Any>("transacoes-financeiras-processadas", 2, 41L, null, ByteArray(0))
-    private val consumer = mock(Consumer::class.java)
-
-    /** Container com o estado de pausa de verdade: `pause()` liga, `resume()` desliga e `isPauseRequested()` reflete. */
-    private fun statefulContainer(): Pair<MessageListenerContainer, AtomicBoolean> {
+    private fun containerWithRealPauseState(): Pair<MessageListenerContainer, AtomicBoolean> {
         val paused = AtomicBoolean(false)
         val container = mock(MessageListenerContainer::class.java)
         doAnswer { paused.set(true) }.`when`(container).pause()
@@ -149,13 +136,12 @@ class BackpressureConfigTest {
         return container to paused
     }
 
-    private fun transientFailure(cause: StoreFailureCause = StoreFailureCause.UNAVAILABLE) =
-        ListenerExecutionFailedException("Listener failed", BalanceStoreUnavailableException(cause))
+    private fun transientFailure(cause: StoreFailureCause = StoreFailureCause.UNAVAILABLE) = listenerFailed(BalanceStoreUnavailableException(cause))
 
     @Test
     fun `the error handler pauses the container for the back off instead of sleeping in the poll thread`() {
         val handler = handler()
-        val (container, paused) = statefulContainer()
+        val (container, paused) = containerWithRealPauseState()
         val before = Instant.now()
 
         handler.handleOne(transientFailure(), record, consumer, container)
@@ -165,7 +151,6 @@ class BackpressureConfigTest {
         val resumeAt = ArgumentCaptor.forClass(Instant::class.java)
         val resume = ArgumentCaptor.forClass(Runnable::class.java)
         verify(scheduler).schedule(resume.capture(), resumeAt.capture())
-        // primeiro intervalo: 500 ms a 750 ms (jitter escalado); a retomada e agendada, nao dormida
         val waited = Duration.between(before, resumeAt.value)
         assertTrue(waited >= Duration.ofMillis(400) && waited <= Duration.ofMillis(1_100), "retomada agendada em ~500..750 ms: $waited")
 
@@ -178,7 +163,7 @@ class BackpressureConfigTest {
     @Test
     fun `the pause is longer at each redelivery until the ceiling`() {
         val handler = handler()
-        val (container, _) = statefulContainer()
+        val (container, _) = containerWithRealPauseState()
         val delays = mutableListOf<Duration>()
         val resumeAt = ArgumentCaptor.forClass(Instant::class.java)
         val resume = ArgumentCaptor.forClass(Runnable::class.java)
@@ -199,7 +184,7 @@ class BackpressureConfigTest {
     @Test
     fun `fifty transient failures never reach the recoverer and never touch the dlt`() {
         val handler = handler()
-        val (container, _) = statefulContainer()
+        val (container, _) = containerWithRealPauseState()
 
         repeat(50) {
             val recovered = handler.handleOne(transientFailure(StoreFailureCause.entries[it % 3]), record, consumer, container)
@@ -225,7 +210,7 @@ class BackpressureConfigTest {
     @Test
     fun `every failed delivery of a transient failure counts backpressure with the cause of the store failure`() {
         val handler = handler()
-        val (container, _) = statefulContainer()
+        val (container, _) = containerWithRealPauseState()
 
         StoreFailureCause.entries.forEach { cause ->
             handler.handleOne(transientFailure(cause), record, consumer, container)
@@ -243,12 +228,12 @@ class BackpressureConfigTest {
     @Test
     fun `an unwrapped transient failure counts too, and other failures never count backpressure`() {
         val handler = handler()
-        val (container, _) = statefulContainer()
+        val (container, _) = containerWithRealPauseState()
 
         handler.handleOne(BalanceStoreUnavailableException(StoreFailureCause.TIMEOUT), record, consumer, container)
         resumeIfPaused(container)
-        handler.handleOne(ListenerExecutionFailedException("x", IllegalStateException()), record, consumer, container)
-        handler.handleOne(ListenerExecutionFailedException("x", BalanceStoreRejectedException()), record, consumer, container)
+        handler.handleOne(listenerFailed(IllegalStateException()), record, consumer, container)
+        handler.handleOne(listenerFailed(BalanceStoreRejectedException()), record, consumer, container)
 
         assertEquals(listOf(StoreFailureCause.TIMEOUT), metrics.backpressureCauses)
     }
