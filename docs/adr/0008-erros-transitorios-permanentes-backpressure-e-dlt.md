@@ -28,7 +28,7 @@ verificado no bytecode), então a pausa vale para **todas as threads de consumo 
 continua vivo, então esperas maiores que `max.poll.interval.ms` não provocam rebalance; o registro falho é reposicionado (`seek`) e reentregue na retomada, e a
 mensagem nunca é confirmada até ser persistida. Cada entrega que falha conta `balance.consumer.backpressure{cause}`
 (`throttled|unavailable|timeout|misconfigured`, a `StoreFailureCause` da exceção; `misconfigured` cobre tabela inexistente, acesso negado
-e credencial ausente, inválida ou expirada: só muda o diagnóstico, o tratamento continua transitório e a falha é logada em ERROR). O jitter é o nativo do `ExponentialBackOff` do Spring Framework 7
+e credencial ausente, inválida ou expirada: só muda o diagnóstico, o tratamento continua transitório, com reentrega sem limite e nunca DLT, pois a correção é operacional e a mensagem válida não pode ser descartada, e a falha é logada em ERROR). O jitter é o nativo do `ExponentialBackOff` do Spring Framework 7
 (`setJitter`): o intervalo varia entre `intervalo - jitter` e `intervalo + jitter`, com o jitter escalado pelo multiplicador, e nunca
 passa do máximo. Os parâmetros vêm de `KAFKA_BACKOFF_INITIAL_MS`, `KAFKA_BACKOFF_MAX_MS` e `KAFKA_BACKOFF_JITTER_MS`
 (`contracts/configuration.md`).

@@ -1,9 +1,5 @@
 package br.com.itau.challenge.balance.domain.model
 
-/**
- * Catalogo estavel dos motivos de rejeicao de uma mensagem. O [code] e o valor publicado no header `x-rejection-reason` e na
- * tag `reason` das metricas: nunca deve mudar.
- */
 enum class RejectionReason(
     val code: String,
 ) {

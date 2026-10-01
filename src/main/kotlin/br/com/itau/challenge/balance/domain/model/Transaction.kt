@@ -3,10 +3,6 @@ package br.com.itau.challenge.balance.domain.model
 import br.com.itau.challenge.balance.domain.exception.InvalidEventException
 import java.math.BigDecimal
 
-/**
- * [amount] e validado (>= 0, mesmas regras de precisao e escala de [Money]), mas nao e persistido: nao ha padrao de acesso que
- * o justifique.
- */
 data class Transaction(
     val id: TransactionId,
     val type: TransactionType,
@@ -19,11 +15,9 @@ data class Transaction(
         validatedTransactionAmount(amount)
     }
 
-    /** Nunca expoe o valor: valores monetarios nao podem vazar em logs. */
     override fun toString(): String = "Transaction(id=$id, type=$type, status=$status)"
 
     companion object {
-        /** Exposta para que a borda valide na ordem documentada dos campos. */
         fun validatedTransactionAmount(amount: BigDecimal): BigDecimal {
             val normalized = validatedAmount(amount)
             if (normalized.signum() < 0) throw InvalidEventException(RejectionReason.INVALID_VALUE)

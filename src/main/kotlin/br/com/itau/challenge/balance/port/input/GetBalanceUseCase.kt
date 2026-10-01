@@ -4,10 +4,5 @@ import br.com.itau.challenge.balance.domain.model.AccountId
 import br.com.itau.challenge.balance.domain.model.BalanceSnapshot
 
 interface GetBalanceUseCase {
-    /**
-     * @throws br.com.itau.challenge.balance.domain.exception.AccountNotFoundException conta sem snapshot
-     * @throws br.com.itau.challenge.balance.domain.exception.AccountDisabledException snapshot vigente DISABLED
-     * @throws br.com.itau.challenge.balance.domain.exception.BalanceStoreUnavailableException armazenamento indisponivel
-     */
     fun getBalance(accountId: AccountId): BalanceSnapshot
 }

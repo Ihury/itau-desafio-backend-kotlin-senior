@@ -2,10 +2,6 @@ package br.com.itau.challenge.balance.domain.exception
 
 import br.com.itau.challenge.balance.domain.model.RejectionReason
 
-/**
- * Evento invalido, com o [reason] do catalogo. [fieldPath] e, quando aplicavel, o caminho do campo (ex.:
- * `transaction.currency`); nunca recebe valores do payload. A mensagem e somente o codigo do motivo.
- */
 class InvalidEventException(
     val reason: RejectionReason,
     val fieldPath: String? = null,

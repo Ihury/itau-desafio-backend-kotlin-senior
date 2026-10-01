@@ -3,7 +3,6 @@ package br.com.itau.challenge.balance.domain.model
 import br.com.itau.challenge.balance.domain.exception.InvalidEventException
 import java.util.Currency
 
-/** Codigo de moeda ISO 4217: tres letras maiusculas conhecidas por [Currency]. */
 @JvmInline
 value class CurrencyCode private constructor(
     private val code: String,
