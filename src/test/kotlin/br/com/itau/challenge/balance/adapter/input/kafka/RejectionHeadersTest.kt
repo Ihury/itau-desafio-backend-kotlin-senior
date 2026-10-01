@@ -17,7 +17,7 @@ class RejectionHeadersTest {
 
     @Test
     fun `the reason header carries the stable code and the detail carries only the field path`() {
-        val headers = rejectionHeaders.of(RejectionReason.INVALID_CURRENCY, "transaction.currency")
+        val headers = rejectionHeaders.of(Rejection(RejectionReason.INVALID_CURRENCY, "transaction.currency"))
 
         assertEquals("invalid_currency", headers.text("x-rejection-reason"))
         assertEquals("transaction.currency", headers.text("x-rejection-detail"))
@@ -25,7 +25,7 @@ class RejectionHeadersTest {
 
     @Test
     fun `the detail header is absent when there is no field path`() {
-        val headers = rejectionHeaders.of(RejectionReason.MALFORMED_PAYLOAD, null)
+        val headers = rejectionHeaders.of(Rejection(RejectionReason.MALFORMED_PAYLOAD, null))
 
         assertEquals("malformed_payload", headers.text("x-rejection-reason"))
         assertNull(headers.lastHeader("x-rejection-detail"))
@@ -33,14 +33,14 @@ class RejectionHeadersTest {
 
     @Test
     fun `the rejection instant is ISO 8601 UTC from the injected clock`() {
-        val headers = rejectionHeaders.of(RejectionReason.UNPROCESSABLE_EVENT, null)
+        val headers = rejectionHeaders.of(Rejection(RejectionReason.UNPROCESSABLE_EVENT, null))
 
         assertEquals("2026-06-01T12:34:56.789Z", headers.text("x-rejected-at"))
     }
 
     @Test
     fun `there is exactly one header of each kind and nothing else`() {
-        val headers = rejectionHeaders.of(RejectionReason.MISSING_FIELD, "account.id")
+        val headers = rejectionHeaders.of(Rejection(RejectionReason.MISSING_FIELD, "account.id"))
 
         assertEquals(listOf("x-rejection-reason", "x-rejection-detail", "x-rejected-at"), headers.map { it.key() })
     }
@@ -48,7 +48,7 @@ class RejectionHeadersTest {
     @Test
     fun `every reason of the catalog is published by its code`() {
         RejectionReason.entries.forEach { reason ->
-            assertEquals(reason.code, rejectionHeaders.of(reason, null).text("x-rejection-reason"))
+            assertEquals(reason.code, rejectionHeaders.of(Rejection(reason, null)).text("x-rejection-reason"))
         }
     }
 }

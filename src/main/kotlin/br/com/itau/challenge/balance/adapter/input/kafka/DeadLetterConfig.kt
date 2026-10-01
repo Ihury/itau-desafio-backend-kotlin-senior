@@ -105,10 +105,7 @@ class DeadLetterConfig {
     ): DeadLetterPublishingRecoverer {
         // Particao -1: o particionador escolhe (o padrao "mesma particao" falharia com 12 -> 3 particoes).
         val recoverer = DeadLetterPublishingRecoverer(template) { _, _ -> TopicPartition(dltTopic, -1) }
-        recoverer.setHeadersFunction { _, failure ->
-            val rejection = FailureClassifier.rejectionOf(failure)
-            rejectionHeaders.of(rejection.reason, rejection.fieldPath)
-        }
+        recoverer.setHeadersFunction { _, failure -> rejectionHeaders.of(FailureClassifier.rejectionOf(failure)) }
         // Mensagens de excecao de parsers podem conter trechos do payload: o DLT nao amplia essa superficie.
         recoverer.excludeHeader(HeadersToAdd.EXCEPTION, HeadersToAdd.EX_CAUSE, HeadersToAdd.EX_MSG, HeadersToAdd.EX_STACKTRACE)
         // Com particao nao definida nao ha o que verificar (e a verificacao consultaria os metadados de um topico ausente).
