@@ -13,16 +13,10 @@ import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient
-import software.amazon.awssdk.services.dynamodb.model.GetItemRequest
 import java.math.BigDecimal
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 
-/**
- * O escritor real obedece ao mesmo contrato do fake: a suite [BalanceSnapshotWriterContract] roda contra o DynamoDB Local
- * (`make integration-test`; conta aleatoria por teste). Alem do contrato, prova que uma eventual
- * normalizacao de escala do `N` (`183.10` -> `183.1`) nao quebra a igualdade numerica.
- */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class DynamoDbBalanceSnapshotWriterContractIT : BalanceSnapshotWriterContract() {
     private val writeClient: DynamoDbClient = DynamoDbTestSupport.writeClient()
@@ -46,15 +40,12 @@ class DynamoDbBalanceSnapshotWriterContractIT : BalanceSnapshotWriterContract() 
 
         assertEquals(ApplyResult.Applied, writer.applyIfNewer(BalanceSnapshot.from(event)))
 
-        val rawAmount =
-            raw
-                .getItem(GetItemRequest.builder().tableName(DynamoDbTestSupport.tableName).key(DynamoDbTestSupport.key(account)).consistentRead(true).build())
-                .item()
-                .getValue("balanceAmount")
-                .n()
-        // O DynamoDB pode normalizar a escala do `N` (`183.10` -> `183.1`); o DynamoDB Local 3.3.0 preserva
-        // `183.10` quando o valor vem de uma expressao de `UpdateItem`. O contrato e o VALOR, nao a escala armazenada.
-        assertEquals(0, BigDecimal("183.10").compareTo(BigDecimal(rawAmount)), "valor armazenado identico, com ou sem normalizacao")
+        val rawAmount = DynamoDbTestSupport.rawBalanceAmount(raw, account)
+        assertEquals(
+            0,
+            BigDecimal("183.10").compareTo(BigDecimal(rawAmount)),
+            "valor armazenado identico, com ou sem normalizacao de escala (DynamoDB Local 3.3.0 preserva 183.10 via UpdateItem; o contrato e o valor)",
+        )
         val stored = assertNotNull(currentStoredSnapshotOf(AccountId.parse(account)))
         assertEquals(0, BigDecimal("183.10").compareTo(stored.balance.amount))
         assertEquals(BalanceSnapshot.from(event), stored, "igualdade de Money por valor numerico")

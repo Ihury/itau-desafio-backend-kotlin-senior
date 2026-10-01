@@ -3,6 +3,8 @@ package br.com.itau.challenge.balance.adapter.input.web
 import br.com.itau.challenge.balance.support.DynamoDbTestSupport
 import br.com.itau.challenge.balance.support.DynamoDbTestSupport.item
 import br.com.itau.challenge.balance.support.DynamoDbTestSupport.randomAccountId
+import br.com.itau.challenge.balance.testing.numberAttr
+import br.com.itau.challenge.balance.testing.stringAttr
 import io.micrometer.core.instrument.MeterRegistry
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
@@ -19,7 +21,6 @@ import org.springframework.test.context.bean.override.mockito.MockitoSpyBean
 import software.amazon.awssdk.core.exception.SdkClientException
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient
 import software.amazon.awssdk.services.dynamodb.model.AttributeValue
-import software.amazon.awssdk.services.dynamodb.model.DeleteItemRequest
 import software.amazon.awssdk.services.dynamodb.model.GetItemRequest
 import software.amazon.awssdk.services.dynamodb.model.PutItemRequest
 import tools.jackson.databind.json.JsonMapper
@@ -32,10 +33,6 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
-/**
- * Consulta ponta a ponta contra o DynamoDB Local real (`make integration-test`): HTTP real (porta aleatoria), controller,
- * caso de uso, circuit breaker, cliente de leitura e banco. Cada teste usa uma conta aleatoria (o item do seed e so lido).
- */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
 class BalanceQueryIT {
@@ -60,7 +57,7 @@ class BalanceQueryIT {
 
     @AfterEach
     fun tearDown() {
-        created.forEach { raw.deleteItem(DeleteItemRequest.builder().tableName(DynamoDbTestSupport.tableName).key(DynamoDbTestSupport.key(it)).build()) }
+        created.forEach { DynamoDbTestSupport.deleteAccount(raw, it) }
         raw.close()
     }
 
@@ -78,10 +75,6 @@ class BalanceQueryIT {
         val base = item(accountId)
         raw.putItem(PutItemRequest.builder().tableName(DynamoDbTestSupport.tableName).item(base + overrides).build())
     }
-
-    private fun s(value: String): AttributeValue = AttributeValue.builder().s(value).build()
-
-    private fun n(value: String): AttributeValue = AttributeValue.builder().n(value).build()
 
     private fun get(
         path: String,
@@ -112,7 +105,7 @@ class BalanceQueryIT {
 
     @Test
     fun `a balance stored as 183 point 1 is answered with the currency scale completed`() {
-        val id = newAccount("balanceAmount" to n("183.10"))
+        val id = newAccount("balanceAmount" to numberAttr("183.10"))
 
         val body = get("/balances/$id").body()
 
@@ -121,7 +114,7 @@ class BalanceQueryIT {
 
     @Test
     fun `a disabled account is a 409 with no balance fields`() {
-        val id = newAccount("accountStatus" to s("DISABLED"), "balanceAmount" to n("999.99"))
+        val id = newAccount("accountStatus" to stringAttr("DISABLED"), "balanceAmount" to numberAttr("999.99"))
 
         val response = get("/balances/$id")
 
@@ -155,15 +148,15 @@ class BalanceQueryIT {
 
     @Test
     fun `a disabled snapshot replaced by a newer enabled one makes the query succeed`() {
-        val id = newAccount("accountStatus" to s("DISABLED"))
+        val id = newAccount("accountStatus" to stringAttr("DISABLED"))
         assertEquals(409, get("/balances/$id").statusCode())
 
         store(
             id,
-            "accountStatus" to s("ENABLED"),
-            "balanceAmount" to n("70"),
-            "lastTxTsMicros" to n("1751749454433000"),
-            "lastTxId" to s("00000000-0000-4000-8000-000000000032"),
+            "accountStatus" to stringAttr("ENABLED"),
+            "balanceAmount" to numberAttr("70"),
+            "lastTxTsMicros" to numberAttr("1751749454433000"),
+            "lastTxId" to stringAttr("00000000-0000-4000-8000-000000000032"),
         )
         val response = get("/balances/$id")
 
@@ -173,14 +166,14 @@ class BalanceQueryIT {
 
     @Test
     fun `microseconds of the event are preserved in updated_at`() {
-        val id = newAccount("lastTxTsMicros" to n("1751749453433123"))
+        val id = newAccount("lastTxTsMicros" to numberAttr("1751749453433123"))
 
         assertTrue(""""updated_at":"2025-07-05T18:04:13.433123-03:00"""" in get("/balances/$id").body())
     }
 
     @Test
     fun `the balance currency is exposed as stored without conversion`() {
-        val id = newAccount("balanceCurrency" to s("USD"), "balanceAmount" to n("25.00"))
+        val id = newAccount("balanceCurrency" to stringAttr("USD"), "balanceAmount" to numberAttr("25.00"))
 
         assertTrue(""""balance":{"amount":25.00,"currency":"USD"}""" in get("/balances/$id").body())
     }
@@ -195,7 +188,7 @@ class BalanceQueryIT {
 
     @Test
     fun `a corrupted item is an internal error with no data and is counted`() {
-        val id = newAccount("accountStatus" to s("SUSPENDED"), "balanceAmount" to n("98765.43"))
+        val id = newAccount("accountStatus" to stringAttr("SUSPENDED"), "balanceAmount" to numberAttr("98765.43"))
         val before = meterRegistry.counter("balance.store.read.corrupted").count()
 
         val response = get("/balances/$id")

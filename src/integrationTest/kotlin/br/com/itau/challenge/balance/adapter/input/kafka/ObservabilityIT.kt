@@ -1,12 +1,12 @@
 package br.com.itau.challenge.balance.adapter.input.kafka
 
-import br.com.itau.challenge.balance.domain.model.ApplyResult
-import br.com.itau.challenge.balance.domain.model.BalanceSnapshot
-import br.com.itau.challenge.balance.port.output.BalanceSnapshotWriter
+import br.com.itau.challenge.balance.support.DefectiveWriter
+import br.com.itau.challenge.balance.support.DefectiveWriterConfig
 import br.com.itau.challenge.balance.support.EventPayloads
 import br.com.itau.challenge.balance.support.KafkaITBase
 import br.com.itau.challenge.balance.support.PrometheusSample
 import br.com.itau.challenge.balance.support.TopicSet
+import br.com.itau.challenge.balance.support.TopicSet.Companion.SAME_PARTITION_KEY
 import br.com.itau.challenge.balance.support.histogramQuantile
 import br.com.itau.challenge.balance.support.singleValue
 import br.com.itau.challenge.balance.support.sumOfSamples
@@ -15,92 +15,63 @@ import org.awaitility.kotlin.untilAsserted
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.extension.ExtendWith
 import org.springframework.beans.factory.annotation.Autowired
-import org.springframework.beans.factory.annotation.Qualifier
-import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.boot.test.system.CapturedOutput
 import org.springframework.boot.test.system.OutputCaptureExtension
-import org.springframework.context.annotation.Bean
-import org.springframework.context.annotation.Primary
+import org.springframework.context.annotation.Import
 import org.springframework.test.context.DynamicPropertyRegistry
 import org.springframework.test.context.DynamicPropertySource
 import tools.jackson.databind.JsonNode
 import java.time.Duration
-import java.util.concurrent.ConcurrentHashMap
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
-/**
- * Observabilidade ponta a ponta contra Redpanda e DynamoDB Local reais: um lote com TODOS os desfechos (processado, obsoleto,
- * duplicado e um rejeitado de cada motivo do catalogo) reconcilia com o total consumido, lido em `/actuator/prometheus` na
- * porta de gerenciamento; as metricas do contrato (histogramas, circuit breaker) existem e as razoes de rejeitados e obsoletos
- * saem das consultas PromQL do contrato; os logs do container real (inclusive o do Spring Kafka para `RecordInRetryException`)
- * sao JSON e nao carregam valores do payload; saude e Actuator ficam so na porta de gerenciamento. Contexto e topicos proprios.
- */
 @ExtendWith(OutputCaptureExtension::class)
+@Import(DefectiveWriterConfig::class)
 class ObservabilityIT : KafkaITBase() {
     override val topics: TopicSet
         get() = topicSet
 
-    /** Escritor que lanca um defeito interno para as contas marcadas (`unprocessable_event`); as demais vao ao DynamoDB real. */
-    class DefectiveWriter(
-        private val delegate: BalanceSnapshotWriter,
-    ) : BalanceSnapshotWriter {
-        val poisoned: MutableSet<String> = ConcurrentHashMap.newKeySet()
-
-        override fun applyIfNewer(snapshot: BalanceSnapshot): ApplyResult {
-            if (snapshot.accountId.value in poisoned) throw IllegalStateException("defeito simulado")
-            return delegate.applyIfNewer(snapshot)
-        }
-    }
-
-    @TestConfiguration
-    class Config {
-        @Bean
-        @Primary
-        fun defectiveWriter(
-            @Qualifier("balanceSnapshotWriter") delegate: BalanceSnapshotWriter,
-        ): DefectiveWriter = DefectiveWriter(delegate)
-    }
-
     @Autowired
     private lateinit var writer: DefectiveWriter
-
-    private val balanceSentinel = "98765.43"
-    private val ownerSentinel = "0b5e1c2d-aaaa-4bbb-8ccc-1234567890ab"
-    private val textSentinel = "SEGREDO-OBS-999"
-    private val allRejectionReasons =
-        listOf("malformed_payload", "missing_field", "invalid_identifier", "invalid_value", "invalid_currency", "invalid_timestamp", "unknown_domain_value", "unprocessable_event")
 
     private fun eventsTotal(
         samples: List<PrometheusSample>,
         vararg labels: Pair<String, String>,
     ) = samples.sumOfSamples("balance_events_total", *labels)
 
-    private fun JsonNode.text(field: String): String? = this[field]?.asString()
+    private fun delta(
+        before: List<PrometheusSample>,
+        after: List<PrometheusSample>,
+        vararg labels: Pair<String, String>,
+    ) = eventsTotal(after, *labels) - eventsTotal(before, *labels)
 
-    /** Publica o lote: 3 processados (2 na conta A e 1 na B), 1 obsoleto, 1 duplicado e 8 rejeitados (um por motivo do catalogo). */
-    private fun publishBatch(): Int {
+    private fun JsonNode.stringOrNull(field: String): String? = this[field]?.asString()
+
+    private fun publishProcessedObsoleteAndDuplicate() {
         val accountA = newAccount()
         val accountB = newAccount()
-        val olderTransactionId = "11111111-1111-4111-8111-111111111111"
-        val newerTransactionId = "22222222-2222-4222-8222-222222222222"
-        val olderEvent = EventPayloads.transaction(accountA, timestampMicros = EventPayloads.BASE_TIMESTAMP_MICROS, transactionId = olderTransactionId, balanceAmount = "10.00")
-        val newerEvent = EventPayloads.transaction(accountA, timestampMicros = EventPayloads.BASE_TIMESTAMP_MICROS + 1_000, transactionId = newerTransactionId, balanceAmount = "20.00")
-        // mesma chave = mesma particao = ordem de publicacao: processado, processado, obsoleto (o vigente e mais novo) e duplicado
-        listOf(olderEvent, newerEvent, olderEvent, newerEvent).forEach { topics.publishKeyed("obs-a", it) }
+        val olderEvent =
+            EventPayloads.transaction(accountA, timestampMicros = EventPayloads.BASE_TIMESTAMP_MICROS, transactionId = OLDER_TRANSACTION_ID, balanceAmount = "10.00")
+        val newerEvent =
+            EventPayloads.transaction(accountA, timestampMicros = EventPayloads.BASE_TIMESTAMP_MICROS + 1_000, transactionId = NEWER_TRANSACTION_ID, balanceAmount = "20.00")
+        listOf(olderEvent, newerEvent, olderEvent, newerEvent).forEach { topics.publishInPartitionOf(SAME_PARTITION_KEY, it) }
         topics.publish(EventPayloads.transaction(accountB, balanceAmount = "30.00"))
+    }
 
+    private fun publishOneRejectionOfEachReason() {
         val poisonedAccount = newAccount()
         writer.poisoned += poisonedAccount
-        val payloadWithSentinels = { balance: String -> EventPayloads.transaction(newAccount(), balanceAmount = balance, ownerId = ownerSentinel) }
-        val malformedPayload = """{"account":{"owner":"$ownerSentinel","balance":{"amount":$balanceSentinel,"note":"$textSentinel""""
-        val missingFieldPayload = payloadWithSentinels(balanceSentinel).replace(""""owner":"$ownerSentinel",""", "")
-        val invalidIdentifierPayload = EventPayloads.transaction(newAccount(), transactionId = "1-1-1-1-1", balanceAmount = balanceSentinel, ownerId = ownerSentinel)
-        val invalidValuePayload = EventPayloads.transaction(newAccount(), balanceAmount = "\"$balanceSentinel\"", ownerId = ownerSentinel)
-        val invalidCurrencyPayload = EventPayloads.transaction(newAccount(), currency = "brl", balanceAmount = balanceSentinel, ownerId = ownerSentinel)
-        val invalidTimestampPayload = EventPayloads.transaction(newAccount(), timestampMicros = 1751749453433L, balanceAmount = balanceSentinel, ownerId = ownerSentinel)
-        val unknownDomainValuePayload = EventPayloads.transaction(newAccount(), transactionType = "TRANSFER", balanceAmount = balanceSentinel, ownerId = ownerSentinel)
-        val unprocessableEventPayload = EventPayloads.transaction(poisonedAccount, balanceAmount = balanceSentinel, ownerId = ownerSentinel)
+        val malformedPayload = """{"account":{"owner":"$OWNER_SENTINEL","balance":{"amount":$BALANCE_SENTINEL,"note":"$TEXT_SENTINEL""""
+        val missingFieldPayload =
+            EventPayloads
+                .transaction(newAccount(), balanceAmount = BALANCE_SENTINEL, ownerId = OWNER_SENTINEL)
+                .replace(""""owner":"$OWNER_SENTINEL",""", "")
+        val invalidIdentifierPayload = EventPayloads.transaction(newAccount(), transactionId = "1-1-1-1-1", balanceAmount = BALANCE_SENTINEL, ownerId = OWNER_SENTINEL)
+        val invalidValuePayload = EventPayloads.transaction(newAccount(), balanceAmount = "\"$BALANCE_SENTINEL\"", ownerId = OWNER_SENTINEL)
+        val invalidCurrencyPayload = EventPayloads.transaction(newAccount(), currency = "brl", balanceAmount = BALANCE_SENTINEL, ownerId = OWNER_SENTINEL)
+        val invalidTimestampPayload = EventPayloads.transaction(newAccount(), timestampMicros = 1751749453433L, balanceAmount = BALANCE_SENTINEL, ownerId = OWNER_SENTINEL)
+        val unknownDomainValuePayload = EventPayloads.transaction(newAccount(), transactionType = "TRANSFER", balanceAmount = BALANCE_SENTINEL, ownerId = OWNER_SENTINEL)
+        val unprocessableEventPayload = EventPayloads.transaction(poisonedAccount, balanceAmount = BALANCE_SENTINEL, ownerId = OWNER_SENTINEL)
         listOf(
             malformedPayload,
             missingFieldPayload,
@@ -111,7 +82,79 @@ class ObservabilityIT : KafkaITBase() {
             unknownDomainValuePayload,
             unprocessableEventPayload,
         ).forEach { topics.publish(it) }
-        return 4 + 1 + 8
+    }
+
+    private fun publishBatch() {
+        publishProcessedObsoleteAndDuplicate()
+        publishOneRejectionOfEachReason()
+    }
+
+    private fun assertOutcomesReconcileWithTotalConsumed(
+        before: List<PrometheusSample>,
+        after: List<PrometheusSample>,
+    ) {
+        assertEquals(EXPECTED_PROCESSED.toDouble(), delta(before, after, "outcome" to "processed"), "processados")
+        assertEquals(EXPECTED_OBSOLETE.toDouble(), delta(before, after, "outcome" to "obsolete"), "obsoletos")
+        assertEquals(EXPECTED_DUPLICATE.toDouble(), delta(before, after, "outcome" to "duplicate"), "duplicados")
+        assertEquals(EXPECTED_REJECTED.toDouble(), delta(before, after, "outcome" to "rejected"), "rejeitados")
+        ALL_REJECTION_REASONS.forEach { assertEquals(1.0, delta(before, after, "outcome" to "rejected", "reason" to it), "rejeitado por $it") }
+        assertEquals(PUBLISHED_MESSAGES.toDouble(), delta(before, after), "a soma dos desfechos e igual ao total consumido")
+    }
+
+    private fun assertRatiosMatchPromQlOfTheContract(
+        before: List<PrometheusSample>,
+        after: List<PrometheusSample>,
+    ) {
+        val rejectedRatio = delta(before, after, "outcome" to "rejected") / delta(before, after)
+        val obsoleteRatio = delta(before, after, "outcome" to "obsolete") / delta(before, after)
+        assertEquals(EXPECTED_REJECTED.toDouble() / PUBLISHED_MESSAGES, rejectedRatio, 1e-9)
+        assertEquals(EXPECTED_OBSOLETE.toDouble() / PUBLISHED_MESSAGES, obsoleteRatio, 1e-9)
+    }
+
+    private fun assertIngestTimerCountsEveryDeliveryByOutcome(
+        before: List<PrometheusSample>,
+        after: List<PrometheusSample>,
+    ) {
+        fun ingested(outcome: String) =
+            after.sumOfSamples("balance_ingest_duration_seconds_count", "outcome" to outcome) -
+                before.sumOfSamples("balance_ingest_duration_seconds_count", "outcome" to outcome)
+        assertEquals(
+            mapOf("processed" to 3.0, "obsolete" to 1.0, "duplicate" to 1.0, "rejected" to 7.0),
+            listOf("processed", "obsolete", "duplicate", "rejected").associateWith(::ingested),
+        )
+        assertTrue(
+            ingested("error") >= 3.0,
+            "o defeito interno tem no minimo 3 entregas (rebalance reinicia a contagem do DefaultErrorHandler e reentrega; ver UnclassifiedFailureIT), " +
+                "mas rejected{unprocessable_event} segue exato: ${ingested("error")}",
+        )
+    }
+
+    private fun assertLogsAreJsonAndLeakNothingFromThePayload(emittedLogs: String) {
+        val emitted = emittedLogs.lines().filter { it.isNotBlank() }
+        val records = emitted.map { line -> runCatching { json.readTree(line) }.getOrElse { throw AssertionError("linha que nao e JSON: $line") } }
+        val text = emitted.joinToString("\n")
+        listOf(BALANCE_SENTINEL, OWNER_SENTINEL, TEXT_SENTINEL, "97.07", "1751749453433").forEach { assertTrue(it !in text, "'$it' vazou para os logs") }
+        assertTrue(records.any { it.stringOrNull("message") == "Record in retry and not yet recovered" }, "o retry da falha interna passa pelo Spring Kafka")
+        records.filter { it.stringOrNull("logger_name") == "org.springframework.kafka.listener.KafkaMessageListenerContainer" }.forEach {
+            assertTrue(it["stack_trace"] == null, "sem pilha (e sem a causa) nos logs do container: $it")
+        }
+        val isolated = records.filter { it.stringOrNull("message")?.startsWith("message isolated in the dlt") == true }
+        assertEquals(EXPECTED_REJECTED, isolated.size)
+        isolated.forEach { assertTrue(it.stringOrNull("correlationId")?.contains("@") == true, "correlacao topico-particao@offset: $it") }
+        val applied = records.filter { it.stringOrNull("message")?.startsWith("event applied") == true }
+        assertEquals(EXPECTED_PROCESSED, applied.size)
+        applied.forEach {
+            assertTrue(
+                it.stringOrNull("accountId") != null && it.stringOrNull("transactionId") != null && it.stringOrNull("correlationId") != null,
+                "contexto na ingestao: $it",
+            )
+        }
+    }
+
+    private fun awaitHttpTimerRegisteredAfterResponse() {
+        await.atMost(HTTP_TIMER_REGISTRATION_TIMEOUT).untilAsserted {
+            assertTrue(scrape().any { it.name == "http_server_requests_seconds_count" && it.labels["uri"] == "/balances/{accountId}" }, "serie http da consulta")
+        }
     }
 
     @Test
@@ -119,50 +162,14 @@ class ObservabilityIT : KafkaITBase() {
         val logOffset = output.all.length
         val before = scrape()
 
-        val published = publishBatch()
+        publishBatch()
 
-        topics.awaitGroupLagZero(Duration.ofSeconds(60))
+        topics.group.awaitLagZero(Duration.ofSeconds(60))
         val after = scrape()
-        fun delta(vararg labels: Pair<String, String>) = eventsTotal(after, *labels) - eventsTotal(before, *labels)
-        assertEquals(3.0, delta("outcome" to "processed"), "processados")
-        assertEquals(1.0, delta("outcome" to "obsolete"), "obsoletos")
-        assertEquals(1.0, delta("outcome" to "duplicate"), "duplicados")
-        assertEquals(8.0, delta("outcome" to "rejected"), "rejeitados")
-        allRejectionReasons.forEach { assertEquals(1.0, delta("outcome" to "rejected", "reason" to it), "rejeitado por $it") }
-        assertEquals(published.toDouble(), delta(), "a soma dos desfechos e igual ao total consumido")
-
-        // razoes calculadas como as consultas PromQL do contrato, sobre os deltas do periodo
-        val rejectedRatio = delta("outcome" to "rejected") / delta()
-        val obsoleteRatio = delta("outcome" to "obsolete") / delta()
-        assertEquals(8.0 / published, rejectedRatio, 1e-9)
-        assertEquals(1.0 / published, obsoleteRatio, 1e-9)
-
-        // o timer de ingestao registra cada ENTREGA por desfecho. Os de entrega unica tem contagem exata. O defeito interno
-        // tem NO MINIMO 3 entregas, todas `error`: se o dono da particao sai do grupo no meio (rebalance, como no runner de 2 vCPUs
-        // do CI, que viu 5), o novo dono recomeca a contagem e reentrega (at-least-once; `UnclassifiedFailureIT` reproduz isso de
-        // forma deterministica). O DESFECHO continua exato: `rejected{unprocessable_event}` conta UMA vez, so o `recovered` conta.
-        fun ingested(outcome: String) = after.sumOfSamples("balance_ingest_duration_seconds_count", "outcome" to outcome) - before.sumOfSamples("balance_ingest_duration_seconds_count", "outcome" to outcome)
-        assertEquals(
-            mapOf("processed" to 3.0, "obsolete" to 1.0, "duplicate" to 1.0, "rejected" to 7.0),
-            listOf("processed", "obsolete", "duplicate", "rejected").associateWith(::ingested),
-        )
-        assertTrue(ingested("error") >= 3.0, "o defeito interno tem no minimo 3 entregas (podem ser mais se houver rebalance): ${ingested("error")}")
-
-        // privacidade dos logs do container real: JSON, sem valores do payload, com a mensagem do Spring Kafka para o retry
-        val emitted = output.all.substring(logOffset).lines().filter { it.isNotBlank() }
-        val records = emitted.map { line -> runCatching { json.readTree(line) }.getOrElse { throw AssertionError("linha que nao e JSON: $line") } }
-        val text = emitted.joinToString("\n")
-        listOf(balanceSentinel, ownerSentinel, textSentinel, "97.07", "1751749453433").forEach { assertTrue(it !in text, "'$it' vazou para os logs") }
-        assertTrue(records.any { it.text("message") == "Record in retry and not yet recovered" }, "o retry da falha interna passa pelo Spring Kafka")
-        records.filter { it.text("logger_name") == "org.springframework.kafka.listener.KafkaMessageListenerContainer" }.forEach {
-            assertTrue(it["stack_trace"] == null, "sem pilha (e sem a causa) nos logs do container: $it")
-        }
-        val isolated = records.filter { it.text("message")?.startsWith("message isolated in the dlt") == true }
-        assertEquals(8, isolated.size)
-        isolated.forEach { assertTrue(it.text("correlationId")?.contains("@") == true, "correlacao topico-particao@offset: $it") }
-        val applied = records.filter { it.text("message")?.startsWith("event applied") == true }
-        assertEquals(3, applied.size)
-        applied.forEach { assertTrue(it.text("accountId") != null && it.text("transactionId") != null && it.text("correlationId") != null, "contexto na ingestao: $it") }
+        assertOutcomesReconcileWithTotalConsumed(before, after)
+        assertRatiosMatchPromQlOfTheContract(before, after)
+        assertIngestTimerCountsEveryDeliveryByOutcome(before, after)
+        assertLogsAreJsonAndLeakNothingFromThePayload(output.all.substring(logOffset))
     }
 
     @Test
@@ -170,14 +177,13 @@ class ObservabilityIT : KafkaITBase() {
         val account = newAccount()
         publish(EventPayloads.transaction(account, balanceAmount = "44.00"))
         awaitBalance(account, "44.00")
-        // o timer HTTP e registrado depois da resposta: espera a serie aparecer
-        await.atMost(Duration.ofSeconds(10)).untilAsserted {
-            assertTrue(scrape().any { it.name == "http_server_requests_seconds_count" && it.labels["uri"] == "/balances/{accountId}" }, "serie http da consulta")
-        }
+        awaitHttpTimerRegisteredAfterResponse()
         val samples = scrape()
 
-        fun bounds(metric: String, vararg labels: Pair<String, String>) =
-            samples.filter { it.name == "${metric}_bucket" && labels.all { (key, value) -> it.labels[key] == value } }.map { it.labels.getValue("le") }.toSet()
+        fun bounds(
+            metric: String,
+            vararg labels: Pair<String, String>,
+        ) = samples.filter { it.name == "${metric}_bucket" && labels.all { (key, value) -> it.labels[key] == value } }.map { it.labels.getValue("le") }.toSet()
 
         listOf(0.05, 0.1, 0.3, 1.0, 2.0).forEach { slo ->
             assertTrue(bounds("http_server_requests_seconds", "uri" to "/balances/{accountId}").filter { it != "+Inf" }.map { it.toDouble() }.contains(slo), "SLO $slo s da API")
@@ -209,6 +215,20 @@ class ObservabilityIT : KafkaITBase() {
     }
 
     companion object {
+        private const val BALANCE_SENTINEL = "98765.43"
+        private const val OWNER_SENTINEL = "0b5e1c2d-aaaa-4bbb-8ccc-1234567890ab"
+        private const val TEXT_SENTINEL = "SEGREDO-OBS-999"
+        private const val OLDER_TRANSACTION_ID = "11111111-1111-4111-8111-111111111111"
+        private const val NEWER_TRANSACTION_ID = "22222222-2222-4222-8222-222222222222"
+        private val ALL_REJECTION_REASONS =
+            listOf("malformed_payload", "missing_field", "invalid_identifier", "invalid_value", "invalid_currency", "invalid_timestamp", "unknown_domain_value", "unprocessable_event")
+        private const val EXPECTED_PROCESSED = 3
+        private const val EXPECTED_OBSOLETE = 1
+        private const val EXPECTED_DUPLICATE = 1
+        private val EXPECTED_REJECTED = ALL_REJECTION_REASONS.size
+        private val PUBLISHED_MESSAGES = EXPECTED_PROCESSED + EXPECTED_OBSOLETE + EXPECTED_DUPLICATE + EXPECTED_REJECTED
+        private val HTTP_TIMER_REGISTRATION_TIMEOUT: Duration = Duration.ofSeconds(10)
+
         private val topicSet = TopicSet("it-obs")
 
         @JvmStatic

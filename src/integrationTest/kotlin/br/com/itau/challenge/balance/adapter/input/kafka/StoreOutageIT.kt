@@ -5,8 +5,11 @@ import br.com.itau.challenge.balance.support.DynamoDbTestSupport
 import br.com.itau.challenge.balance.support.EventPayloads
 import br.com.itau.challenge.balance.support.KafkaITBase
 import br.com.itau.challenge.balance.support.TopicSet
+import br.com.itau.challenge.balance.support.backpressureCount
+import br.com.itau.challenge.balance.support.backpressureTotal
 import br.com.itau.challenge.balance.support.singleValue
 import io.github.resilience4j.circuitbreaker.CircuitBreaker
+import org.apache.kafka.common.TopicPartition
 import org.awaitility.kotlin.await
 import org.awaitility.kotlin.until
 import org.awaitility.kotlin.untilAsserted
@@ -21,9 +24,6 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.test.context.DynamicPropertyRegistry
 import org.springframework.test.context.DynamicPropertySource
-import software.amazon.awssdk.services.dynamodb.model.BatchGetItemRequest
-import software.amazon.awssdk.services.dynamodb.model.KeysAndAttributes
-import java.math.BigDecimal
 import java.net.http.HttpResponse
 import java.time.Duration
 import java.util.concurrent.Callable
@@ -31,12 +31,6 @@ import java.util.concurrent.Executors
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
-/**
- * Indisponibilidade REAL do armazenamento (`docker compose pause dynamodb`): a API falha rapido com 503 e `Retry-After`, a
- * ingestao segura as mensagens no broker (nunca DLT, nunca perda) e, apos o `unpause`, o backlog drena sozinho e o circuito
- * fecha. O `unpause` SEMPRE roda (`finally`, `@AfterEach` e `@AfterAll`). Pulado quando o Docker CLI ou o servico `dynamodb`
- * deste projeto compose nao estao disponiveis. Contexto e topicos proprios.
- */
 @Tag("chaos")
 class StoreOutageIT : KafkaITBase() {
     override val topics: TopicSet
@@ -47,41 +41,57 @@ class StoreOutageIT : KafkaITBase() {
     private lateinit var circuitBreaker: CircuitBreaker
 
     @BeforeEach
-    fun requireDockerAndDynamoDb() {
+    fun requireDockerOnCiElseSkip() {
         val available = ComposeControl.isRunning(DYNAMODB_SERVICE)
         val message = "Docker CLI e servico $DYNAMODB_SERVICE do compose deste projeto necessarios"
-        // No CI (variavel `CI` definida) a indisponibilidade do Docker/compose FALHA o teste: pular em silencio esconderia a perda
-        // da cobertura de caos. Localmente continua pulando para nao exigir Docker de quem so roda os ITs sem o teste de caos.
-        if (runningOnCi()) assertTrue(available, "CI: $message") else assumeTrue(available, message)
+        if (runningOnCi()) {
+            assertTrue(available, "CI: $message (pular em silencio esconderia a perda da cobertura de caos)")
+        } else {
+            assumeTrue(available, message)
+        }
     }
 
     private fun runningOnCi(): Boolean = !System.getenv("CI").isNullOrBlank()
 
+    // unpause SEMPRE: finally + @AfterEach + @AfterAll + shutdown hook. Nao remover nenhum.
     @AfterEach
     fun alwaysUnpause() {
-        ComposeControl.unpause(DYNAMODB_SERVICE)
+        ComposeControl.unpauseIgnoringFailure(DYNAMODB_SERVICE)
     }
 
-    private fun backpressureTotal(): Double = meterRegistry.find("balance.consumer.backpressure").counters().sumOf { it.count() }
-
-    private fun backpressure(cause: String): Double = meterRegistry.get("balance.consumer.backpressure").tag("cause", cause).counter().count()
+    private fun backpressureTimeoutPlusUnavailable(): Double = meterRegistry.backpressureCount("timeout") + meterRegistry.backpressureCount("unavailable")
 
     private fun dependencyUp(): Double = scrape().singleValue("balance_dependency_up", "dependency" to "dynamodb")
 
     private fun healthStatus(group: String): Int = management("/actuator/health/$group").statusCode()
 
-    /** Saude com o DynamoDB fora: so `dependencies` cai; a instancia continua em rotacao (liveness e readiness 200). */
+    private fun awaitDependenciesHealthStatus(
+        expected: Int,
+        atMost: Duration,
+        message: String,
+    ) {
+        await.atMost(atMost).pollInterval(HEALTH_POLL_INTERVAL).untilAsserted { assertEquals(expected, healthStatus("dependencies"), message) }
+    }
+
     private fun assertHealthDuringOutage(knownAccount: String) {
-        // o probe tem timeout curto e o resultado fica em cache por 5 s: dentro de 5 s + cache o grupo cai
-        await.atMost(Duration.ofSeconds(15)).pollInterval(Duration.ofMillis(500)).untilAsserted { assertEquals(503, healthStatus("dependencies"), "dependencies") }
+        awaitDependenciesHealthStatus(503, HEALTH_CONVERGENCE_TIMEOUT, "dependencies")
         assertEquals("""{"status":"DOWN"}""", management("/actuator/health/dependencies").body(), "show-details=never")
         assertEquals(200, healthStatus("readiness"), "a readiness NAO depende do DynamoDB (a instancia continua em rotacao)")
         assertEquals("""{"status":"UP"}""", management("/actuator/health/readiness").body())
         assertEquals(200, healthStatus("liveness"), "a liveness independe do banco")
         assertEquals("""{"status":"UP"}""", management("/actuator/health/liveness").body())
         assertEquals(503, management("/actuator/health").statusCode(), "a raiz agrega as dependencias: nao serve de sonda")
-        await.atMost(Duration.ofSeconds(15)).pollInterval(Duration.ofMillis(500)).untilAsserted { assertEquals(0.0, dependencyUp(), "balance_dependency_up{dependency=dynamodb}") }
+        await.atMost(HEALTH_CONVERGENCE_TIMEOUT).pollInterval(HEALTH_POLL_INTERVAL).untilAsserted { assertEquals(0.0, dependencyUp(), "balance_dependency_up{dependency=dynamodb}") }
         assertEquals(503, get(knownAccount).statusCode(), "a API segue respondendo 503 explicito")
+    }
+
+    private fun assertHealthRecoveredAfterUnpause() {
+        awaitDependenciesHealthStatus(200, Duration.ofSeconds(20), "dependencies apos o unpause")
+        assertEquals("""{"status":"UP"}""", management("/actuator/health/dependencies").body())
+        assertEquals(1.0, dependencyUp(), "balance_dependency_up apos o unpause")
+        assertEquals(200, healthStatus("readiness"))
+        assertEquals(200, healthStatus("liveness"))
+        assertEquals(200, management("/actuator/health").statusCode(), "a raiz volta a 200")
     }
 
     private data class TimedResponse(
@@ -95,156 +105,181 @@ class StoreOutageIT : KafkaITBase() {
         return TimedResponse(response, Duration.ofNanos(System.nanoTime() - started).toMillis())
     }
 
-    private fun storedAccountIds(accounts: List<String>): Set<String> =
-        accounts
-            .chunked(100)
-            .flatMap { chunk ->
-                val keys = chunk.map { DynamoDbTestSupport.key(it) }
-                val request = BatchGetItemRequest.builder().requestItems(mapOf(DynamoDbTestSupport.tableName to KeysAndAttributes.builder().keys(keys).consistentRead(true).build())).build()
-                raw.batchGetItem(request).responses()[DynamoDbTestSupport.tableName].orEmpty().map { it["pk"]!!.s().removePrefix("ACCOUNT#") }
-            }.toSet()
+    private fun storedAccountIds(accounts: List<String>): Set<String> = DynamoDbTestSupport.storedBalances(raw, accounts).keys
+
+    private fun awaitAfterUnpause(
+        atMost: Duration,
+        pollInterval: Duration? = null,
+        assertion: () -> Unit,
+    ) {
+        val awaiting = await.atMost(atMost).ignoreExceptions()
+        (pollInterval?.let { awaiting.pollInterval(it) } ?: awaiting).untilAsserted(assertion)
+    }
+
+    private fun assertServiceUnavailableAndFast(
+        timed: TimedResponse,
+        queryNumber: Int,
+    ) {
+        assertEquals(503, timed.response.statusCode(), "consulta $queryNumber: nunca 404 nem saldo antigo")
+        assertEquals("10", timed.response.headers().firstValue("Retry-After").orElse(null), "consulta $queryNumber: Retry-After")
+        assertTrue(
+            timed.response.headers().firstValue("Content-Type").orElse("").startsWith("application/problem+json"),
+            "consulta $queryNumber: Problem Details",
+        )
+        val body = json.readTree(timed.response.body())
+        assertEquals("urn:problem-type:consulta-saldo:servico-indisponivel", body["type"].asString())
+        assertTrue(body["balance"] == null && body["owner"] == null, "consulta $queryNumber: sem saldo")
+        assertTrue(timed.millis <= MAX_FAST_FAILURE_MS, "consulta $queryNumber: ${timed.millis} ms > $MAX_FAST_FAILURE_MS ms")
+    }
+
+    private fun assertSuccessiveQueriesFailFastWith503(account: String) {
+        (1..QUERIES_DURING_OUTAGE).map { timedGet(account) }.forEachIndexed { index, timed -> assertServiceUnavailableAndFast(timed, index + 1) }
+    }
+
+    private fun burstUntilCircuitOpens(account: String) {
+        val pool = Executors.newFixedThreadPool(BURST_THREADS)
+        try {
+            pool.invokeAll((1..BURST_QUERIES).map { Callable { timedGet(account) } }).forEach { assertEquals(503, it.get().response.statusCode()) }
+        } finally {
+            pool.shutdownNow()
+        }
+        assertEquals(CircuitBreaker.State.OPEN, circuitBreaker.state, "circuit breaker abre com a falha sustentada")
+    }
+
+    private fun assertOpenCircuitAnswersImmediately(account: String) {
+        val fast = timedGet(account)
+        assertEquals(503, fast.response.statusCode())
+        assertTrue(fast.millis < OPEN_CIRCUIT_MAX_MS, "com o circuito aberto a resposta e imediata: ${fast.millis} ms")
+    }
+
+    private fun awaitIngestionRetryingInBackpressure(
+        backpressureBefore: Double,
+        dltBefore: Map<TopicPartition, Long>,
+    ) {
+        await.atMost(Duration.ofSeconds(60)).untilAsserted {
+            assertTrue(meterRegistry.backpressureTotal() >= backpressureBefore + MIN_BACKPRESSURE_RETRIES_SINGLE_EVENT, "balance.consumer.backpressure deve crescer com a ingestao retentando")
+        }
+        assertTrue(topics.group.lag() > 0, "o evento fica no broker (lag do grupo > 0)")
+        assertEquals(0, topics.dlt.countSince(dltBefore), "DLT inalterado durante a falha")
+    }
+
+    private fun awaitStartOfNextBackoffSoUnpauseIsARealResume() {
+        val failedBefore = meterRegistry.backpressureTotal()
+        await.atMost(Duration.ofSeconds(45)).until { meterRegistry.backpressureTotal() > failedBefore }
+    }
+
+    private fun awaitItemWrittenByExpiredWriteAppliedByFrozenDynamoDbLocal(eventAccount: String) {
+        awaitAfterUnpause(Duration.ofSeconds(60)) {
+            assertEquals(
+                setOf(eventAccount),
+                storedAccountIds(listOf(eventAccount)),
+                "o DynamoDB Local congelado aplica ao voltar a escrita que o SDK deu por expirada: o item pode aparecer antes de o consumer retomar",
+            )
+        }
+    }
+
+    private fun awaitConsumerResumedAtLagZero() {
+        topics.group.awaitLagZero(Duration.ofSeconds(60))
+    }
+
+    private fun awaitCircuitClosedAfterUnpause(eventAccount: String) {
+        awaitAfterUnpause(Duration.ofSeconds(60), Duration.ofMillis(500)) {
+            get(eventAccount)
+            assertEquals(CircuitBreaker.State.CLOSED, circuitBreaker.state)
+        }
+    }
 
     @Test
     fun `during the outage the api answers 503 fast, the event stays in the broker outside the dlt and after unpause everything converges`() {
         val known = newAccount()
         publish(EventPayloads.transaction(known, balanceAmount = "10.00"))
         awaitBalance(known, "10.00")
-        val dltBefore = topics.dltEndOffsets()
-        val backpressureBefore = backpressureTotal()
-        val unavailableTimeoutBefore = backpressure("timeout") + backpressure("unavailable")
+        val dltBefore = topics.dlt.endOffsets()
+        val backpressureBefore = meterRegistry.backpressureTotal()
+        val unavailableTimeoutBefore = backpressureTimeoutPlusUnavailable()
         val eventAccount = newAccount()
 
         ComposeControl.pause(DYNAMODB_SERVICE)
         try {
             publish(EventPayloads.transaction(eventAccount, balanceAmount = "321.00"))
-            // 20 consultas sucessivas: cada uma 503 + Retry-After 10, em <= 2 s, nunca 404 nem saldo antigo
-            val queries = (1..20).map { timedGet(known) }
-            queries.forEachIndexed { index, timed ->
-                assertEquals(503, timed.response.statusCode(), "consulta ${index + 1}: nunca 404 nem saldo antigo")
-                assertEquals("10", timed.response.headers().firstValue("Retry-After").orElse(null), "consulta ${index + 1}: Retry-After")
-                assertTrue(
-                    timed.response.headers().firstValue("Content-Type").orElse("").startsWith("application/problem+json"),
-                    "consulta ${index + 1}: Problem Details",
-                )
-                val body = json.readTree(timed.response.body())
-                assertEquals("urn:problem-type:consulta-saldo:servico-indisponivel", body["type"].asString())
-                assertTrue(body["balance"] == null && body["owner"] == null, "consulta ${index + 1}: sem saldo")
-                assertTrue(timed.millis <= 2_000, "consulta ${index + 1}: ${timed.millis} ms > 2 s")
-            }
-            println("OUTAGE-503-MS=${queries.map { it.millis }}")
-
-            // rajada concorrente: as chamadas lentas somam o minimo de chamadas da janela e o circuito abre (falha rapida)
-            val pool = Executors.newFixedThreadPool(30)
-            try {
-                pool.invokeAll((1..40).map { Callable { timedGet(known) } }).forEach { assertEquals(503, it.get().response.statusCode()) }
-            } finally {
-                pool.shutdownNow()
-            }
-            assertEquals(CircuitBreaker.State.OPEN, circuitBreaker.state, "circuit breaker abre com a falha sustentada")
-            val fast = timedGet(known)
-            assertEquals(503, fast.response.statusCode())
-            assertTrue(fast.millis < 500, "com o circuito aberto a resposta e imediata: ${fast.millis} ms")
-            println("OUTAGE-503-OPEN-CIRCUIT-MS=${fast.millis}")
+            assertSuccessiveQueriesFailFastWith503(known)
+            burstUntilCircuitOpens(known)
+            assertOpenCircuitAnswersImmediately(known)
             assertHealthDuringOutage(known)
-
-            // ingestao durante a falha (o evento foi publicado logo apos o pause, junto das consultas): ele fica no broker, nada vai
-            // ao DLT e o backpressure cresce a cada tentativa, com o backoff (500 ms x2, jitter) chegando a varios segundos
-            await.atMost(Duration.ofSeconds(60)).untilAsserted {
-                assertTrue(backpressureTotal() >= backpressureBefore + 5, "balance.consumer.backpressure deve crescer com a ingestao retentando")
-            }
-            assertTrue(topics.groupLag() > 0, "o evento fica no broker (lag do grupo > 0)")
-            assertEquals(0, topics.dltCountSince(dltBefore), "DLT inalterado durante a falha")
-            // desfaz a pausa logo depois de uma nova falha: o container esta no INICIO de uma espera longa do backoff, entao o tempo de
-            // drenagem medido abaixo e o de uma retomada real (e nao o de uma tentativa que por acaso estava em voo)
-            val failedBefore = backpressureTotal()
-            await.atMost(Duration.ofSeconds(45)).until { backpressureTotal() > failedBefore }
-            println("OUTAGE-FAILED-DELIVERIES-AT-UNPAUSE=${backpressureTotal() - backpressureBefore}")
+            awaitIngestionRetryingInBackpressure(backpressureBefore, dltBefore)
+            awaitStartOfNextBackoffSoUnpauseIsARealResume()
         } finally {
-            ComposeControl.unpause(DYNAMODB_SERVICE)
+            ComposeControl.unpauseIgnoringFailure(DYNAMODB_SERVICE)
         }
-        val unpausedAt = System.nanoTime()
 
-        // retomada sem intervencao: em <= 60 s o saldo reflete o evento (lido direto do DynamoDB, independente do circuito)
-        // `ignoreExceptions`: logo apos o `unpause` o SDK ainda pode lancar (timeout/conexao) ate o DynamoDB Local responder de novo
-        await.atMost(Duration.ofSeconds(60)).ignoreExceptions().untilAsserted { assertEquals(setOf(eventAccount), storedAccountIds(listOf(eventAccount))) }
-        val drainMillis = Duration.ofNanos(System.nanoTime() - unpausedAt).toMillis()
-        println("OUTAGE-DRAIN-MS=$drainMillis")
-        assertEquals(0, topics.dltCountSince(dltBefore), "DLT segue inalterado")
-        // O item pode aparecer logo apos o unpause: a escrita que o SDK deu por expirada ficou na fila do socket do DynamoDB Local
-        // congelado e ele a aplica ao voltar (a escrita condicional e idempotente; a nova entrega sera um `duplicate`). A retomada
-        // do consumer, essa sim, so termina quando a espera do backoff acaba e o offset e confirmado: e o que se mede aqui.
-        topics.awaitGroupLagZero(Duration.ofSeconds(60))
-        println("OUTAGE-LAG-ZERO-MS=${Duration.ofNanos(System.nanoTime() - unpausedAt).toMillis()}")
+        awaitItemWrittenByExpiredWriteAppliedByFrozenDynamoDbLocal(eventAccount)
+        assertEquals(0, topics.dlt.countSince(dltBefore), "DLT segue inalterado")
+        awaitConsumerResumedAtLagZero()
 
-        await.atMost(Duration.ofSeconds(60)).pollInterval(Duration.ofMillis(500)).ignoreExceptions().untilAsserted {
-            get(eventAccount)
-            assertEquals(CircuitBreaker.State.CLOSED, circuitBreaker.state)
-        }
+        awaitCircuitClosedAfterUnpause(eventAccount)
         awaitBalance(eventAccount, "321.00")
         assertEquals(200, get(known).statusCode())
-        // a dependencia volta sozinha (cache de 5 s): dependencies 200, gauge 1; liveness e readiness nunca cairam
-        await.atMost(Duration.ofSeconds(20)).pollInterval(Duration.ofMillis(500)).untilAsserted { assertEquals(200, healthStatus("dependencies"), "dependencies apos o unpause") }
-        assertEquals("""{"status":"UP"}""", management("/actuator/health/dependencies").body())
-        assertEquals(1.0, dependencyUp(), "balance_dependency_up apos o unpause")
-        assertEquals(200, healthStatus("readiness"))
-        assertEquals(200, healthStatus("liveness"))
-        assertEquals(200, management("/actuator/health").statusCode(), "a raiz volta a 200")
+        assertHealthRecoveredAfterUnpause()
         assertTrue(
-            backpressure("timeout") + backpressure("unavailable") - unavailableTimeoutBefore >= 5,
+            backpressureTimeoutPlusUnavailable() - unavailableTimeoutBefore >= MIN_BACKPRESSURE_RETRIES_SINGLE_EVENT,
             "com o DynamoDB pausado a falha e classificada como timeout/unavailable",
-        )
-        println(
-            "OUTAGE-BACKPRESSURE throttled=${backpressure("throttled")} unavailable=${backpressure("unavailable")} timeout=${backpressure("timeout")}",
         )
     }
 
     @Test
     fun `a backlog of 200 events published during the outage is drained after unpause with no loss and no dlt`() {
-        val dltBefore = topics.dltEndOffsets()
-        val backpressureBefore = backpressureTotal()
-        val accounts = (1..200).map { newAccount() }
+        val dltBefore = topics.dlt.endOffsets()
+        val backpressureBefore = meterRegistry.backpressureTotal()
+        val accounts = (1..BACKLOG_EVENTS).map { newAccount() }
 
         ComposeControl.pause(DYNAMODB_SERVICE)
         try {
             accounts.forEachIndexed { index, account -> publish(EventPayloads.transaction(account, balanceAmount = "${index + 1}.50")) }
-            // segura a falha ate as threads de consumo retentarem varias vezes (o backoff cresce e as esperas ficam longas)
-            await.atMost(Duration.ofSeconds(60)).untilAsserted { assertTrue(backpressureTotal() >= backpressureBefore + 12, "a ingestao entrou em backpressure") }
-            assertTrue(topics.groupLag() > 0, "o backlog fica no broker")
-            assertEquals(0, topics.dltCountSince(dltBefore), "nenhum evento valido no DLT durante a falha")
+            await.atMost(Duration.ofSeconds(60)).untilAsserted {
+                assertTrue(meterRegistry.backpressureTotal() >= backpressureBefore + MIN_BACKPRESSURE_RETRIES_BACKLOG, "a ingestao entrou em backpressure")
+            }
+            assertTrue(topics.group.lag() > 0, "o backlog fica no broker")
+            assertEquals(0, topics.dlt.countSince(dltBefore), "nenhum evento valido no DLT durante a falha")
         } finally {
-            ComposeControl.unpause(DYNAMODB_SERVICE)
+            ComposeControl.unpauseIgnoringFailure(DYNAMODB_SERVICE)
         }
-        val unpausedAt = System.nanoTime()
 
-        await.atMost(Duration.ofSeconds(90)).pollInterval(Duration.ofMillis(500)).ignoreExceptions().untilAsserted { assertEquals(200, storedAccountIds(accounts).size, "itens gravados") }
-        println("BACKLOG-DRAIN-MS=${Duration.ofNanos(System.nanoTime() - unpausedAt).toMillis()}")
-        topics.awaitGroupLagZero(Duration.ofSeconds(60))
-        println("BACKLOG-LAG-ZERO-MS=${Duration.ofNanos(System.nanoTime() - unpausedAt).toMillis()}")
+        awaitAfterUnpause(Duration.ofSeconds(90), Duration.ofMillis(500)) { assertEquals(BACKLOG_EVENTS, storedAccountIds(accounts).size, "itens gravados") }
+        topics.group.awaitLagZero(Duration.ofSeconds(60))
 
-        assertEquals(accounts.toSet(), storedAccountIds(accounts), "exatamente 200 itens, 0 perdas")
-        assertEquals(0, topics.dltCountSince(dltBefore), "nenhum evento valido no DLT")
+        assertEquals(accounts.toSet(), storedAccountIds(accounts), "exatamente $BACKLOG_EVENTS itens, 0 perdas")
+        assertEquals(0, topics.dlt.countSince(dltBefore), "nenhum evento valido no DLT")
+        val balances = DynamoDbTestSupport.storedBalances(raw, accounts)
         accounts.forEachIndexed { index, account ->
-            val item = raw.getItem { it.tableName(DynamoDbTestSupport.tableName).key(DynamoDbTestSupport.key(account)).consistentRead(true) }.item()
-            assertEquals(0, BigDecimal("${index + 1}.50").compareTo(BigDecimal(item.getValue("balanceAmount").n())), "saldo da conta ${index + 1}")
+            assertEquals(0, "${index + 1}.50".toBigDecimal().compareTo(balances.getValue(account)), "saldo da conta ${index + 1}")
         }
     }
 
     companion object {
         private const val DYNAMODB_SERVICE = "dynamodb"
+        private const val QUERIES_DURING_OUTAGE = 20
+        private const val MAX_FAST_FAILURE_MS = 2_000L
+        private const val BURST_THREADS = 30
+        private const val BURST_QUERIES = 40
+        private const val OPEN_CIRCUIT_MAX_MS = 500L
+        private const val MIN_BACKPRESSURE_RETRIES_SINGLE_EVENT = 5
+        private const val MIN_BACKPRESSURE_RETRIES_BACKLOG = 12
+        private const val BACKLOG_EVENTS = 200
+        private val HEALTH_CONVERGENCE_TIMEOUT: Duration = Duration.ofSeconds(15)
+        private val HEALTH_POLL_INTERVAL: Duration = Duration.ofMillis(500)
         private val topicSet = TopicSet("it-outage")
 
         @JvmStatic
         @BeforeAll
-        fun unpauseLeftovers() {
-            // um `pause` esquecido por uma execucao anterior interrompida quebraria todos os ITs seguintes
-            if (ComposeControl.isPaused(DYNAMODB_SERVICE)) ComposeControl.unpause(DYNAMODB_SERVICE)
-            Runtime.getRuntime().addShutdownHook(Thread { ComposeControl.unpause(DYNAMODB_SERVICE) })
+        fun unpauseIfLeftPausedByPreviousRun() {
+            if (ComposeControl.isLeftPaused(DYNAMODB_SERVICE)) ComposeControl.unpauseIgnoringFailure(DYNAMODB_SERVICE)
+            Runtime.getRuntime().addShutdownHook(Thread { ComposeControl.unpauseIgnoringFailure(DYNAMODB_SERVICE) })
         }
 
         @JvmStatic
         @AfterAll
         fun unpauseAtTheEnd() {
-            ComposeControl.unpause(DYNAMODB_SERVICE)
+            ComposeControl.unpauseIgnoringFailure(DYNAMODB_SERVICE)
         }
 
         @JvmStatic

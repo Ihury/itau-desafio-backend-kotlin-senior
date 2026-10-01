@@ -2,21 +2,28 @@ package br.com.itau.challenge.balance.support
 
 import br.com.itau.challenge.balance.adapter.output.dynamodb.DynamoDbClientProperties
 import br.com.itau.challenge.balance.adapter.output.dynamodb.DynamoDbClientsConfig
+import br.com.itau.challenge.balance.testing.numberAttr
+import br.com.itau.challenge.balance.testing.stringAttr
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider
 import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient
 import software.amazon.awssdk.services.dynamodb.model.AttributeValue
+import software.amazon.awssdk.services.dynamodb.model.BatchGetItemRequest
+import software.amazon.awssdk.services.dynamodb.model.DeleteItemRequest
+import software.amazon.awssdk.services.dynamodb.model.GetItemRequest
+import software.amazon.awssdk.services.dynamodb.model.KeysAndAttributes
+import java.math.BigDecimal
 import java.net.URI
 import java.time.Duration
 import java.util.UUID
 
-/** Apoio dos testes de integracao contra o DynamoDB Local do compose (`make db-up`). */
 object DynamoDbTestSupport {
+    private const val BATCH_GET_LIMIT = 100
+
     val endpoint: String = System.getenv("DYNAMODB_ENDPOINT")?.takeIf { it.isNotBlank() } ?: "http://localhost:8000"
     val tableName: String = System.getenv("BALANCE_TABLE_NAME")?.takeIf { it.isNotBlank() } ?: "AccountBalances"
 
-    /** Cliente cru (sem retry curto nem circuit breaker) para preparar e inspecionar itens diretamente. */
     fun rawClient(): DynamoDbClient =
         DynamoDbClient
             .builder()
@@ -50,44 +57,65 @@ object DynamoDbTestSupport {
             ),
     )
 
-    /** Cliente de leitura da aplicacao, configurado como em producao (retry standard, timeouts explicitos). */
     fun readClient(properties: DynamoDbClientProperties = properties()): DynamoDbClient =
         DynamoDbClientsConfig().dynamoDbReadClient(properties)
 
-    /** Cliente de escrita da aplicacao, configurado como em producao (uma tentativa, timeouts explicitos). */
     fun writeClient(properties: DynamoDbClientProperties = properties()): DynamoDbClient =
         DynamoDbClientsConfig().dynamoDbWriteClient(properties)
 
     fun randomAccountId(): String = UUID.randomUUID().toString()
 
-    /** Item do snapshot escrito com valores literais (independe do mapper de producao). */
     @Suppress("LongParameterList")
     fun item(
         accountId: String,
         balanceAmount: String = "183.12",
         balanceCurrency: String = "BRL",
         accountStatus: String = "ENABLED",
-        ownerId: String = "315e3cfe-f4af-4cd2-b298-a449e614349a",
-        lastTxTsMicros: Long = 1751749453433000L,
-        lastTxId: String = "8e8ae808-b154-48b5-9f3e-553935cc4543",
-        accountCreatedAtMicros: Long = 1634874339000000L,
+        ownerId: String = EventPayloads.DEFAULT_OWNER,
+        lastTxTsMicros: Long = EventPayloads.BASE_TIMESTAMP_MICROS,
+        lastTxId: String = EventPayloads.DEFAULT_TRANSACTION_ID,
+        accountCreatedAtMicros: Long = EventPayloads.DEFAULT_ACCOUNT_CREATED_AT_MICROS,
     ): Map<String, AttributeValue> =
         mapOf(
-            "pk" to s("ACCOUNT#$accountId"),
-            "sk" to s("BALANCE"),
-            "schemaVersion" to n("1"),
-            "ownerId" to s(ownerId),
-            "accountStatus" to s(accountStatus),
-            "balanceAmount" to n(balanceAmount),
-            "balanceCurrency" to s(balanceCurrency),
-            "accountCreatedAtMicros" to n(accountCreatedAtMicros.toString()),
-            "lastTxTsMicros" to n(lastTxTsMicros.toString()),
-            "lastTxId" to s(lastTxId),
+            "pk" to stringAttr("ACCOUNT#$accountId"),
+            "sk" to stringAttr("BALANCE"),
+            "schemaVersion" to numberAttr("1"),
+            "ownerId" to stringAttr(ownerId),
+            "accountStatus" to stringAttr(accountStatus),
+            "balanceAmount" to numberAttr(balanceAmount),
+            "balanceCurrency" to stringAttr(balanceCurrency),
+            "accountCreatedAtMicros" to numberAttr(accountCreatedAtMicros.toString()),
+            "lastTxTsMicros" to numberAttr(lastTxTsMicros.toString()),
+            "lastTxId" to stringAttr(lastTxId),
         )
 
-    fun key(accountId: String): Map<String, AttributeValue> = mapOf("pk" to s("ACCOUNT#$accountId"), "sk" to s("BALANCE"))
+    fun key(accountId: String): Map<String, AttributeValue> = mapOf("pk" to stringAttr("ACCOUNT#$accountId"), "sk" to stringAttr("BALANCE"))
 
-    private fun s(value: String): AttributeValue = AttributeValue.builder().s(value).build()
+    fun deleteAccount(
+        client: DynamoDbClient,
+        accountId: String,
+    ) {
+        client.deleteItem(DeleteItemRequest.builder().tableName(tableName).key(key(accountId)).build())
+    }
 
-    private fun n(value: String): AttributeValue = AttributeValue.builder().n(value).build()
+    fun rawBalanceAmount(
+        client: DynamoDbClient,
+        accountId: String,
+    ): String =
+        client
+            .getItem(GetItemRequest.builder().tableName(tableName).key(key(accountId)).consistentRead(true).build())
+            .item()
+            .getValue("balanceAmount")
+            .n()
+
+    fun storedBalances(
+        client: DynamoDbClient,
+        accounts: List<String>,
+    ): Map<String, BigDecimal> =
+        accounts
+            .chunked(BATCH_GET_LIMIT)
+            .flatMap { chunk ->
+                val keys = KeysAndAttributes.builder().keys(chunk.map { key(it) }).consistentRead(true).build()
+                client.batchGetItem(BatchGetItemRequest.builder().requestItems(mapOf(tableName to keys)).build()).responses()[tableName].orEmpty()
+            }.associate { it.getValue("pk").s().removePrefix("ACCOUNT#") to BigDecimal(it.getValue("balanceAmount").n()) }
 }

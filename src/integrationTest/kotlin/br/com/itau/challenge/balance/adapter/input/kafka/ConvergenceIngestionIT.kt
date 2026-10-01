@@ -1,19 +1,13 @@
 package br.com.itau.challenge.balance.adapter.input.kafka
 
 import br.com.itau.challenge.balance.support.EventPayloads
-import br.com.itau.challenge.balance.support.IntegrationInfra
 import br.com.itau.challenge.balance.support.SharedContextKafkaITBase
+import br.com.itau.challenge.balance.support.eventCount
 import org.awaitility.kotlin.await
 import org.awaitility.kotlin.untilAsserted
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 
-/**
- * Convergencia sob desordem, duplicidade e reentrega pelo caminho real (Kafka -> listener -> DynamoDB -> consulta HTTP).
- * Os testes que contam desfechos exatos publicam COM chave (a conta), para que a ordem de chegada seja a de publicacao
- * (mesma particao); o autorizador real publica sem chave e o servico converge em qualquer ordem.
- * Os desfechos sao medidos por delta do `MeterRegistry` (`balance.events{outcome}`).
- */
 class ConvergenceIngestionIT : SharedContextKafkaITBase() {
     private data class Outcomes(
         val processed: Int,
@@ -25,23 +19,23 @@ class ConvergenceIngestionIT : SharedContextKafkaITBase() {
         operator fun minus(other: Outcomes) = Outcomes(processed - other.processed, obsolete - other.obsolete, duplicate - other.duplicate)
     }
 
-    private fun outcomes(): Outcomes {
-        fun count(outcome: String) = meterRegistry.get("balance.events").tags("outcome", outcome, "reason", "none").counter().count().toInt()
-        return Outcomes(count("processed"), count("obsolete"), count("duplicate"))
-    }
+    private fun outcomes(): Outcomes =
+        Outcomes(
+            processed = meterRegistry.eventCount("processed").toInt(),
+            obsolete = meterRegistry.eventCount("obsolete").toInt(),
+            duplicate = meterRegistry.eventCount("duplicate").toInt(),
+        )
 
-    /** Baseline dos desfechos depois de uma barreira de lag zero: nada em voo pode ser contado depois da leitura. */
-    private fun baselineOutcomes(): Outcomes {
-        topics.awaitGroupLagZero()
+    private fun baselineOutcomesAfterLagZero(): Outcomes {
+        topics.group.awaitLagZero()
         return outcomes()
     }
 
     private fun transactionId(n: Int): String = "00000000-0000-4000-8000-%012d".format(n)
 
-    /** Instante `n` segundos apos o base, com microssegundos (`...433123`). */
-    private fun instantMicros(secondsAfterBase: Int): Long = 1751749453433123L + secondsAfterBase * 1_000_000L
+    private fun instantMicros(secondsAfterBase: Int): Long = BASE_MICROS_WITH_FRACTION + secondsAfterBase * MICROS_PER_SECOND
 
-    private fun expectedUpdatedAt(secondsAfterBase: Int): String = "2025-07-05T18:04:%02d.433123-03:00".format(13 + secondsAfterBase)
+    private fun expectedUpdatedAt(secondsAfterBase: Int): String = "2025-07-05T18:04:%02d.433123-03:00".format(BASE_SECOND_OF_MINUTE + secondsAfterBase)
 
     @Suppress("LongParameterList")
     private fun publishEvent(
@@ -51,7 +45,7 @@ class ConvergenceIngestionIT : SharedContextKafkaITBase() {
         amount: String,
         accountStatus: String = "ENABLED",
         transactionStatus: String = "APPROVED",
-    ) = IntegrationInfra.publishKeyed(
+    ) = topics.publishInPartitionOf(
         account,
         EventPayloads.transaction(
             account,
@@ -66,7 +60,7 @@ class ConvergenceIngestionIT : SharedContextKafkaITBase() {
     private fun awaitOutcomeTotal(
         baseline: Outcomes,
         events: Int,
-    ) = await.atMost(SLO).untilAsserted { assertEquals(events, (outcomes() - baseline).total, "desfechos contabilizados") }
+    ) = await.atMost(PUBLISH_TO_QUERY_SLO).untilAsserted { assertEquals(events, (outcomes() - baseline).total, "desfechos contabilizados") }
 
     private fun queriedAmount(account: String): String {
         val response = get(account)
@@ -77,7 +71,7 @@ class ConvergenceIngestionIT : SharedContextKafkaITBase() {
     @Test
     fun `out of order events plus a duplicate converge to the highest instant and are counted exactly`() {
         val account = newAccount()
-        val baseline = baselineOutcomes()
+        val baseline = baselineOutcomesAfterLagZero()
 
         publishEvent(account, txNumber = 3, instant = 3, amount = "300.00")
         publishEvent(account, txNumber = 1, instant = 1, amount = "100.00")
@@ -93,7 +87,7 @@ class ConvergenceIngestionIT : SharedContextKafkaITBase() {
     @Test
     fun `redelivering the same messages changes nothing and only adds obsolete and duplicate outcomes`() {
         val account = newAccount()
-        val baseline = baselineOutcomes()
+        val baseline = baselineOutcomesAfterLagZero()
         val publishRound = {
             publishEvent(account, 3, 3, "300.00")
             publishEvent(account, 1, 1, "100.00")
@@ -107,8 +101,11 @@ class ConvergenceIngestionIT : SharedContextKafkaITBase() {
         publishRound()
 
         awaitOutcomeTotal(baseline, 8)
-        // 2a rodada: tx3 duplicado (x2), tx1 e tx2 obsoletos; nada foi aplicado de novo
-        assertEquals(Outcomes(processed = 1, obsolete = 4, duplicate = 3), outcomes() - baseline)
+        assertEquals(
+            Outcomes(processed = 1, obsolete = 4, duplicate = 3),
+            outcomes() - baseline,
+            "2a rodada: tx3 duplicado (x2), tx1 e tx2 obsoletos; nada foi aplicado de novo",
+        )
         awaitBalance(account, "300.00", updatedAt = expectedUpdatedAt(3))
     }
 
@@ -116,7 +113,7 @@ class ConvergenceIngestionIT : SharedContextKafkaITBase() {
     fun `a timestamp tie is won by the greater transaction id in both arrival orders`() {
         val account = newAccount()
         val reversedAccount = newAccount()
-        val baseline = baselineOutcomes()
+        val baseline = baselineOutcomesAfterLagZero()
 
         publishEvent(account, txNumber = 11, instant = 5, amount = "20.00")
         publishEvent(account, txNumber = 10, instant = 5, amount = "10.00")
@@ -126,8 +123,11 @@ class ConvergenceIngestionIT : SharedContextKafkaITBase() {
         awaitOutcomeTotal(baseline, 4)
         awaitBalance(account, "20.00", updatedAt = expectedUpdatedAt(5))
         awaitBalance(reversedAccount, "20.00", updatedAt = expectedUpdatedAt(5))
-        // ordem 11 -> 10: processed + obsolete; ordem 10 -> 11: processed + processed
-        assertEquals(Outcomes(processed = 3, obsolete = 1, duplicate = 0), outcomes() - baseline)
+        assertEquals(
+            Outcomes(processed = 3, obsolete = 1, duplicate = 0),
+            outcomes() - baseline,
+            "ordem 11 -> 10: processed + obsolete; ordem 10 -> 11: processed + processed",
+        )
     }
 
     @Test
@@ -160,9 +160,9 @@ class ConvergenceIngestionIT : SharedContextKafkaITBase() {
         awaitBalance(account, "50.00")
 
         publishEvent(account, txNumber = 31, instant = 2, amount = "50.00", accountStatus = "DISABLED")
-        await.atMost(SLO).untilAsserted { assertEquals(409, get(account).statusCode()) }
+        await.atMost(PUBLISH_TO_QUERY_SLO).untilAsserted { assertEquals(409, get(account).statusCode()) }
 
-        val baseline = baselineOutcomes()
+        val baseline = baselineOutcomesAfterLagZero()
         publishEvent(account, txNumber = 29, instant = 0, amount = "40.00")
         awaitOutcomeTotal(baseline, 1)
         assertEquals(Outcomes(processed = 0, obsolete = 1, duplicate = 0), outcomes() - baseline)
@@ -171,5 +171,11 @@ class ConvergenceIngestionIT : SharedContextKafkaITBase() {
         publishEvent(account, txNumber = 32, instant = 3, amount = "70.00")
         awaitBalance(account, "70.00", updatedAt = expectedUpdatedAt(3))
         assertEquals("70.00", queriedAmount(account))
+    }
+
+    private companion object {
+        const val BASE_MICROS_WITH_FRACTION = 1751749453433123L
+        const val MICROS_PER_SECOND = 1_000_000L
+        const val BASE_SECOND_OF_MINUTE = 13
     }
 }

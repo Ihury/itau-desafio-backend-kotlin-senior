@@ -14,7 +14,6 @@ import org.junit.jupiter.api.Test
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient
 import software.amazon.awssdk.services.dynamodb.model.AttributeValue
 import software.amazon.awssdk.services.dynamodb.model.DynamoDbException
-import software.amazon.awssdk.services.dynamodb.model.GetItemRequest
 import software.amazon.awssdk.services.dynamodb.model.PutItemRequest
 import java.math.BigDecimal
 import kotlin.test.assertEquals
@@ -23,9 +22,6 @@ import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 
-/**
- * Leitura do snapshot contra o DynamoDB Local real (`make integration-test`). Cada teste usa uma conta aleatoria.
- */
 class DynamoDbBalanceSnapshotReaderIT {
     private lateinit var raw: DynamoDbClient
     private lateinit var readClient: DynamoDbClient
@@ -50,18 +46,11 @@ class DynamoDbBalanceSnapshotReaderIT {
         raw.putItem(PutItemRequest.builder().tableName(DynamoDbTestSupport.tableName).item(attributes).build())
     }
 
-    private fun rawBalanceAmount(): String =
-        raw
-            .getItem(GetItemRequest.builder().tableName(DynamoDbTestSupport.tableName).key(DynamoDbTestSupport.key(accountId)).consistentRead(true).build())
-            .item()
-            .getValue("balanceAmount")
-            .n()
-
     @Test
     fun `database normalizes trailing zeros of the stored number and the reader still delivers the same value`() {
         put(item(accountId, balanceAmount = "183.10"))
 
-        assertEquals("183.1", rawBalanceAmount(), "o DynamoDB normaliza 183.10 para 183.1")
+        assertEquals("183.1", DynamoDbTestSupport.rawBalanceAmount(raw, accountId), "o DynamoDB normaliza 183.10 para 183.1")
 
         val snapshot = assertNotNull(reader.find(AccountId.parse(accountId)))
         assertEquals(0, BigDecimal("183.10").compareTo(snapshot.balance.amount))
@@ -105,13 +94,12 @@ class DynamoDbBalanceSnapshotReaderIT {
 
     @Test
     fun `an item with timestamps below the default plausibility minimums is read normally`() {
-        // gravado sob outros BALANCE_MIN_*: 1995-06-15 (< 2000) na transacao e 1850-01-01 (< 1900) na criacao da conta
-        put(item(accountId, lastTxTsMicros = 803_174_400_000_000L, accountCreatedAtMicros = -3_155_760_000_000_000L))
+        put(item(accountId, lastTxTsMicros = TX_IN_1995_MICROS, accountCreatedAtMicros = ACCOUNT_CREATED_IN_1850_MICROS))
 
         val snapshot = assertNotNull(reader.find(AccountId.parse(accountId)))
 
-        assertEquals(803_174_400_000_000L, snapshot.precedence.timestamp.micros)
-        assertEquals(-3_155_760_000_000_000L, snapshot.accountCreatedAt.micros)
+        assertEquals(TX_IN_1995_MICROS, snapshot.precedence.timestamp.micros)
+        assertEquals(ACCOUNT_CREATED_IN_1850_MICROS, snapshot.accountCreatedAt.micros)
     }
 
     @Test
@@ -142,5 +130,10 @@ class DynamoDbBalanceSnapshotReaderIT {
         val details = assertNotNull(failure.details)
         assertEquals("ResourceNotFoundException", details.errorCode)
         assertEquals(400, details.statusCode)
+    }
+
+    private companion object {
+        const val TX_IN_1995_MICROS = 803_174_400_000_000L
+        const val ACCOUNT_CREATED_IN_1850_MICROS = -3_155_760_000_000_000L
     }
 }

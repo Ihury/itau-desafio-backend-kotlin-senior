@@ -1,11 +1,13 @@
 package br.com.itau.challenge.balance.support
 
+import br.com.itau.challenge.balance.testing.TransactionEventFixtures
 import java.util.UUID
 
-/** Mensagens JSON do topico de entrada, no formato imposto pelo cliente (`transaction-event.schema.json`). */
 object EventPayloads {
-    const val DEFAULT_OWNER = "315e3cfe-f4af-4cd2-b298-a449e614349a"
-    const val BASE_TIMESTAMP_MICROS = 1751749453433000L
+    const val DEFAULT_OWNER = TransactionEventFixtures.DEFAULT_OWNER_ID
+    const val BASE_TIMESTAMP_MICROS = TransactionEventFixtures.DEFAULT_TIMESTAMP_MICROS
+    const val DEFAULT_ACCOUNT_CREATED_AT_MICROS = TransactionEventFixtures.DEFAULT_ACCOUNT_CREATED_AT_MICROS
+    const val DEFAULT_TRANSACTION_ID = TransactionEventFixtures.DEFAULT_TRANSACTION_ID
 
     @Suppress("LongParameterList")
     fun transaction(
@@ -19,7 +21,7 @@ object EventPayloads {
         transactionStatus: String = "APPROVED",
         transactionType: String = "CREDIT",
         transactionAmount: String = "97.07",
-        accountCreatedAtMicros: Long = 1634874339000000L,
+        accountCreatedAtMicros: Long = DEFAULT_ACCOUNT_CREATED_AT_MICROS,
     ): String =
         """{"transaction":{"id":"$transactionId","type":"$transactionType","amount":$transactionAmount,"currency":"$currency",""" +
             """"status":"$transactionStatus","timestamp":$timestampMicros},"account":{"id":"$accountId","owner":"$ownerId",""" +

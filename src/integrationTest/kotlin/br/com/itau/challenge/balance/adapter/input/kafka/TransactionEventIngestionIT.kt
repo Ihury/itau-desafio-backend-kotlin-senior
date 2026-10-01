@@ -8,11 +8,6 @@ import org.junit.jupiter.api.Test
 import java.util.UUID
 import kotlin.test.assertEquals
 
-/**
- * Ingestao ponta a ponta com Redpanda e DynamoDB Local reais (`make integration-test`): publica no topico exclusivo, o
- * listener real consome, o servico grava e a consulta HTTP real reflete o saldo em ate 5 s apos a publicacao.
- * Cada teste usa contas aleatorias.
- */
 class TransactionEventIngestionIT : SharedContextKafkaITBase() {
     @Test
     fun `a new account is created by the first event and reflected by the query`() {
@@ -43,9 +38,7 @@ class TransactionEventIngestionIT : SharedContextKafkaITBase() {
         awaitBalance(account, "250.50")
 
         publish(EventPayloads.transaction(account, timestampMicros = 1751749453433000L, balanceAmount = "1.00"))
-        val marker = newAccount()
-        publish(EventPayloads.transaction(marker, balanceAmount = "5.00"))
-        awaitBalance(marker, "5.00") // o marcador processado depois do evento antigo prova que ele ja foi consumido
+        topics.group.awaitLagZero()
 
         awaitBalance(account, "250.50")
     }
@@ -92,6 +85,6 @@ class TransactionEventIngestionIT : SharedContextKafkaITBase() {
 
         publish(EventPayloads.transaction(account, timestampMicros = 1751749453433001L, accountStatus = "DISABLED"))
 
-        await.atMost(SLO).untilAsserted { assertEquals(409, get(account).statusCode()) }
+        await.atMost(PUBLISH_TO_QUERY_SLO).untilAsserted { assertEquals(409, get(account).statusCode()) }
     }
 }

@@ -1,6 +1,5 @@
 package br.com.itau.challenge.balance.support
 
-/** Uma amostra do formato texto do Prometheus (`nome{rotulo="valor",...} valor`). */
 data class PrometheusSample(
     val name: String,
     val labels: Map<String, String>,
@@ -23,13 +22,11 @@ data class PrometheusSample(
     }
 }
 
-/** Soma dos valores das amostras de [name] cujos rotulos contem todos os pares de [labels]. */
 fun List<PrometheusSample>.sumOfSamples(
     name: String,
     vararg labels: Pair<String, String>,
 ): Double = filter { it.name == name && labels.all { (key, value) -> it.labels[key] == value } }.sumOf { it.value }
 
-/** Valor unico (gauge) da amostra de [name] com os [labels] dados; falha se nao houver exatamente uma. */
 fun List<PrometheusSample>.singleValue(
     name: String,
     vararg labels: Pair<String, String>,
@@ -39,10 +36,6 @@ fun List<PrometheusSample>.singleValue(
         .single()
         .value
 
-/**
- * Quantil como o `histogram_quantile` do Prometheus, a partir das amostras `<metrica>_bucket` (somadas entre as series que casam
- * com [labels]): interpolacao linear dentro do bucket que cruza o rank `q x total`.
- */
 fun List<PrometheusSample>.histogramQuantile(
     q: Double,
     metric: String,

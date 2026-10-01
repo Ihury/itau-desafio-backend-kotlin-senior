@@ -9,6 +9,8 @@ import br.com.itau.challenge.balance.support.EventPayloads
 import br.com.itau.challenge.balance.support.IntegrationInfra
 import br.com.itau.challenge.balance.support.KafkaITBase
 import br.com.itau.challenge.balance.support.TopicSet
+import br.com.itau.challenge.balance.support.TopicSet.Companion.SAME_PARTITION_KEY
+import br.com.itau.challenge.balance.support.backpressureCount
 import io.micrometer.core.instrument.MeterRegistry
 import org.awaitility.kotlin.await
 import org.awaitility.kotlin.until
@@ -43,19 +45,10 @@ import kotlin.math.min
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
-/**
- * Falhas transientes do armazenamento com as excecoes REAIS do SDK (`ProvisionedThroughputExceededException`,
- * `SdkClientException` de conexao, `ApiCallTimeoutException` e `DynamoDbException` 503), injetadas nas primeiras chamadas de
- * escrita de uma conta (o DynamoDB Local nao emula throttling). A mensagem valida NUNCA vai ao DLT, fica no broker (lag > 0) e
- * e processada quando a falha passa; o container fica PAUSADO durante a espera (o poll continua vivo: `max.poll.interval.ms`
- * de 3 s e esperas de ate 12 s, sem rebalance), a espera cresce e `balance.consumer.backpressure` conta cada falha com a
- * `cause` certa. Contexto e topicos proprios (`@TestConfiguration`).
- */
 class TransientFailureIngestionIT : KafkaITBase() {
     override val topics: TopicSet
         get() = topicSet
 
-    /** Falhas a lancar, em ordem, para a conta marcada; depois disso a escrita segue para o DynamoDB real. */
     class ScriptedFailures {
         val pendingFailures = ConcurrentLinkedQueue<RuntimeException>()
         val accounts = ConcurrentHashMap.newKeySet<String>()
@@ -68,7 +61,6 @@ class TransientFailureIngestionIT : KafkaITBase() {
         @Bean
         fun scriptedFailures(): ScriptedFailures = ScriptedFailures()
 
-        /** Escritor real sobre um cliente que lanca as excecoes do SDK nas primeiras `updateItem` da conta marcada. */
         @Bean
         @Primary
         fun failingWriter(
@@ -100,20 +92,50 @@ class TransientFailureIngestionIT : KafkaITBase() {
         }
     }
 
+    private class PausedContainerSampler(
+        private val anyContainerPaused: () -> Boolean,
+    ) {
+        private val sampling = AtomicBoolean(true)
+        private val samples = AtomicInteger()
+        val pausedSamples: Int get() = samples.get()
+
+        private val thread =
+            Thread {
+                while (sampling.get()) {
+                    if (anyContainerPaused()) samples.incrementAndGet()
+                    Thread.sleep(SAMPLING_INTERVAL_MS)
+                }
+            }.also { it.isDaemon = true }
+
+        fun start(): PausedContainerSampler = also { thread.start() }
+
+        fun stop() {
+            sampling.set(false)
+            thread.join(STOP_TIMEOUT_MS)
+        }
+
+        private companion object {
+            const val SAMPLING_INTERVAL_MS = 20L
+            const val STOP_TIMEOUT_MS = 2_000L
+        }
+    }
+
     @Autowired
     private lateinit var scriptedFailures: ScriptedFailures
 
     private fun details(code: String) = AwsErrorDetails.builder().errorCode(code).errorMessage(code).serviceName("DynamoDB").build()
 
-    /** As 5 falhas injetadas, em ordem: throttling, conexao, timeout da chamada, 503 e throttling. */
-    private fun sdkFailures(): List<RuntimeException> =
+    private fun throughputExceeded(message: String): RuntimeException =
+        ProvisionedThroughputExceededException
+            .builder()
+            .message(message)
+            .statusCode(400)
+            .awsErrorDetails(details("ProvisionedThroughputExceededException"))
+            .build()
+
+    private fun sdkFailuresThrottleConnectionTimeoutUnavailableThrottle(): List<RuntimeException> =
         listOf(
-            ProvisionedThroughputExceededException
-                .builder()
-                .message("The level of configured provisioned throughput for the table was exceeded")
-                .statusCode(400)
-                .awsErrorDetails(details("ProvisionedThroughputExceededException"))
-                .build(),
+            throughputExceeded("The level of configured provisioned throughput for the table was exceeded"),
             SdkClientException.create("Unable to execute HTTP request: Connect to localhost:8000 failed", ConnectException("Connection refused")),
             ApiCallTimeoutException.create(2_000),
             DynamoDbException
@@ -122,115 +144,112 @@ class TransientFailureIngestionIT : KafkaITBase() {
                 .statusCode(503)
                 .awsErrorDetails(details("ServiceUnavailable"))
                 .build(),
-            ProvisionedThroughputExceededException
-                .builder()
-                .message("Throughput exceeded again")
-                .statusCode(400)
-                .awsErrorDetails(details("ProvisionedThroughputExceededException"))
-                .build(),
+            throughputExceeded("Throughput exceeded again"),
         )
 
-    private fun backpressure(cause: String): Double = meterRegistry.get("balance.consumer.backpressure").tag("cause", cause).counter().count()
+    private fun backpressureByCause(): Map<String, Double> = EXPECTED_BACKPRESSURE_INCREMENT_BY_CAUSE.keys.associateWith { meterRegistry.backpressureCount(it) }
 
-    private fun listenerContainer(): ConcurrentMessageListenerContainer<*, *> = registry.getListenerContainer("transaction-event-listener") as ConcurrentMessageListenerContainer<*, *>
+    private fun anyContainerPaused(): Boolean =
+        (registry.getListenerContainer("transaction-event-listener") as ConcurrentMessageListenerContainer<*, *>).containers.any { it.isContainerPaused }
 
-    /** Ids dos membros do grupo: se um consumer estoura `max.poll.interval.ms`, sai do grupo e reentra com outro id. */
     private fun groupMembers(): Set<String> =
         IntegrationInfra.adminClient().use { admin ->
             admin
                 .describeConsumerGroups(listOf(topics.groupId))
                 .all()
-                .get(15, TimeUnit.SECONDS)
+                .get(BROKER_CALL_TIMEOUT_SECONDS, TimeUnit.SECONDS)
                 .getValue(topics.groupId)
                 .members()
                 .map { it.consumerId() }
                 .toSet()
         }
 
+    private fun backoffRangeMs(step: Int): LongRange {
+        var base = BASE_BACKOFF_MS
+        repeat(step) { base = min(base * 2, MAX_BACKOFF_MS) }
+        val jitter = JITTER_STEP_MS * (base / BASE_BACKOFF_MS)
+        return max(base - jitter, BASE_BACKOFF_MS)..min(base + jitter, MAX_BACKOFF_MS)
+    }
+
+    private fun assertBackpressureCountedWithTheRightCause(before: Map<String, Double>) {
+        EXPECTED_BACKPRESSURE_INCREMENT_BY_CAUSE.forEach { (cause, increment) ->
+            assertEquals(before.getValue(cause) + increment, meterRegistry.backpressureCount(cause), "backpressure{cause=$cause}")
+        }
+    }
+
+    private fun assertBackoffGrowsWithinJitterRange(intervalsMs: List<Long>) {
+        intervalsMs.forEachIndexed { step, waited ->
+            val range = backoffRangeMs(step)
+            assertTrue(waited >= range.first - LOWER_TOLERANCE_MS, "passo ${step + 1}: esperou $waited ms, abaixo de ${range.first} ms")
+            assertTrue(waited <= range.last + SCHEDULING_SLACK_MS, "passo ${step + 1}: esperou $waited ms, acima de ${range.last} ms")
+        }
+        assertTrue(intervalsMs[4] > intervalsMs[0] && intervalsMs[3] > intervalsMs[0], "as esperas crescem: $intervalsMs")
+    }
+
     @Test
     fun `sdk failures keep the valid message in the broker, grow the wait with the container paused, and it is processed afterwards`() {
-        val dltBefore = topics.dltEndOffsets()
+        val dltBefore = topics.dlt.endOffsets()
         val membersBefore = groupMembers()
-        assertEquals(4, membersBefore.size, "4 threads de consumo no grupo")
-        val before = mapOf("throttled" to backpressure("throttled"), "unavailable" to backpressure("unavailable"), "timeout" to backpressure("timeout"))
+        assertEquals(CONSUMER_THREADS, membersBefore.size, "$CONSUMER_THREADS threads de consumo no grupo")
+        val backpressureBefore = backpressureByCause()
         val account = newAccount()
         val neighbour = newAccount()
         scriptedFailures.accounts += account
-        scriptedFailures.pendingFailures += sdkFailures()
-
-        // amostrador: o container fica pausado durante a espera do backoff (poll vivo, sem dormir no thread do poll)
-        val sampling = AtomicBoolean(true)
-        var pausedSamples = 0
-        val sampler =
-            Thread {
-                while (sampling.get()) {
-                    if (listenerContainer().containers.any { it.isContainerPaused }) pausedSamples++
-                    Thread.sleep(20)
-                }
-            }.also {
-                it.isDaemon = true
-                it.start()
-            }
+        scriptedFailures.pendingFailures += sdkFailuresThrottleConnectionTimeoutUnavailableThrottle()
+        val sampler = PausedContainerSampler(::anyContainerPaused).start()
 
         try {
-            // mesma chave = mesma particao: a vizinha esta atras da mensagem que falha e tambem fica retida
-            topics.publishKeyed("mesma-particao", EventPayloads.transaction(account, balanceAmount = "77.70"))
-            topics.publishKeyed("mesma-particao", EventPayloads.transaction(neighbour, balanceAmount = "88.80"))
+            topics.publishInPartitionOf(SAME_PARTITION_KEY, EventPayloads.transaction(account, balanceAmount = "77.70"))
+            topics.publishInPartitionOf(SAME_PARTITION_KEY, EventPayloads.transaction(neighbour, balanceAmount = "88.80"))
 
             await.atMost(Duration.ofSeconds(10)).until { scriptedFailures.injected.get() >= 2 }
-            assertEquals(0, topics.dltCountSince(dltBefore), "falha transitoria nunca leva mensagem valida ao DLT")
-            assertTrue(topics.groupLag() > 0, "a mensagem continua no broker (nao confirmada)")
+            assertEquals(0, topics.dlt.countSince(dltBefore), "falha transitoria nunca leva mensagem valida ao DLT")
+            assertTrue(topics.group.lag() > 0, "a mensagem continua no broker (nao confirmada)")
             assertEquals(404, get(account).statusCode(), "conta ainda nao gravada")
 
             await.atMost(Duration.ofSeconds(60)).until { get(account).statusCode() == 200 && get(neighbour).statusCode() == 200 }
         } finally {
-            sampling.set(false)
-            sampler.join(2_000)
+            sampler.stop()
         }
         awaitBalance(account, "77.70")
         awaitBalance(neighbour, "88.80")
-        topics.awaitGroupLagZero()
+        topics.group.awaitLagZero()
 
-        assertEquals(5, scriptedFailures.injected.get(), "as 5 falhas injetadas foram entregues ao consumer")
-        assertEquals(0, topics.dltCountSince(dltBefore), "DLT com exatamente 0 mensagens")
+        assertEquals(EXPECTED_INJECTED_FAILURES, scriptedFailures.injected.get(), "as $EXPECTED_INJECTED_FAILURES falhas injetadas foram entregues ao consumer")
+        assertEquals(0, topics.dlt.countSince(dltBefore), "DLT com exatamente 0 mensagens")
+        assertBackpressureCountedWithTheRightCause(backpressureBefore)
 
-        // metrica: cada falha contada com a causa da classificacao (2 throttling, 1 timeout, 2 indisponibilidade)
-        assertEquals(before.getValue("throttled") + 2, backpressure("throttled"))
-        assertEquals(before.getValue("timeout") + 1, backpressure("timeout"))
-        assertEquals(before.getValue("unavailable") + 2, backpressure("unavailable"))
-
-        // as esperas crescem (500 ms x2, jitter de 250 ms escalado): 6 tentativas, 5 intervalos dentro da faixa de cada passo
         val stamps = scriptedFailures.attemptsNanos.toList()
-        assertEquals(6, stamps.size, "5 falhas + 1 sucesso")
-        val intervalsMs = stamps.zipWithNext { a, b -> (b - a) / 1_000_000 }
-        println("BACKOFF-INTERVALS-MS=$intervalsMs")
-        intervalsMs.forEachIndexed { step, waited ->
-            var base = 500L
-            repeat(step) { base = min(base * 2, 30_000L) }
-            val jitter = 250L * (base / 500L)
-            val low = max(base - jitter, 500L)
-            val high = min(base + jitter, 30_000L)
-            assertTrue(waited >= low - 100, "passo ${step + 1}: esperou $waited ms, abaixo de $low ms")
-            assertTrue(waited <= high + 2_000, "passo ${step + 1}: esperou $waited ms, acima de $high ms")
-        }
-        assertTrue(intervalsMs[4] > intervalsMs[0] && intervalsMs[3] > intervalsMs[0], "as esperas crescem: $intervalsMs")
+        assertEquals(EXPECTED_INJECTED_FAILURES + 1, stamps.size, "$EXPECTED_INJECTED_FAILURES falhas + 1 sucesso")
+        val intervalsMs = stamps.zipWithNext { a, b -> (b - a) / NANOS_PER_MILLI }
+        assertBackoffGrowsWithinJitterRange(intervalsMs)
 
-        // pausa: o container esteve pausado durante a espera e o poll seguiu vivo (esperas > max.poll.interval.ms de 3 s, sem rebalance)
-        assertTrue(pausedSamples > 0, "o container deve ficar pausado durante o backoff")
-        assertTrue(intervalsMs.max() > 3_000, "alguma espera passou de max.poll.interval.ms (3 s): $intervalsMs")
+        assertTrue(sampler.pausedSamples > 0, "o container deve ficar pausado durante o backoff")
+        assertTrue(intervalsMs.max() > MAX_POLL_INTERVAL_MS, "alguma espera passou de max.poll.interval.ms ($MAX_POLL_INTERVAL_MS ms): $intervalsMs")
         assertEquals(membersBefore, groupMembers(), "nenhum consumer saiu do grupo (o poll continuou vivo durante a pausa)")
-        println("PAUSED-SAMPLES=$pausedSamples")
     }
 
     companion object {
+        private const val CONSUMER_THREADS = 4
+        private const val EXPECTED_INJECTED_FAILURES = 5
+        private const val BASE_BACKOFF_MS = 500L
+        private const val JITTER_STEP_MS = 250L
+        private const val MAX_BACKOFF_MS = 30_000L
+        private const val LOWER_TOLERANCE_MS = 100L
+        private const val SCHEDULING_SLACK_MS = 2_000L
+        private const val NANOS_PER_MILLI = 1_000_000L
+        private const val MAX_POLL_INTERVAL_MS = 3_000L
+        private const val BROKER_CALL_TIMEOUT_SECONDS = 15L
+        private val EXPECTED_BACKPRESSURE_INCREMENT_BY_CAUSE = mapOf("throttled" to 2, "timeout" to 1, "unavailable" to 2)
+
         private val topicSet = TopicSet("it-transient")
 
         @JvmStatic
         @DynamicPropertySource
         fun properties(registry: DynamicPropertyRegistry) {
             topicSet.registerProperties(registry)
-            // Espera do backoff MAIOR que o intervalo de poll: so com o container pausado (e nao dormindo) o consumer sobrevive.
-            registry.add("spring.kafka.consumer.properties.max.poll.interval.ms") { "3000" }
+            // max.poll.interval.ms < backoff: so um container PAUSADO (nao dormindo) mantem o consumer vivo.
+            registry.add("spring.kafka.consumer.properties.max.poll.interval.ms") { MAX_POLL_INTERVAL_MS.toString() }
             registry.add("spring.kafka.listener.poll-timeout") { "1s" }
         }
     }

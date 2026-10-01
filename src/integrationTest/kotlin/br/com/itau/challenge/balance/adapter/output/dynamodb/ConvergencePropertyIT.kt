@@ -11,15 +11,9 @@ import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient
-import software.amazon.awssdk.services.dynamodb.model.DeleteItemRequest
 import java.util.Collections
 import kotlin.test.assertEquals
 
-/**
- * A MESMA propriedade de convergencia do teste unitario (`ConvergencePropertyTest`), em versao reduzida (50 iteracoes,
- * `seed` fixa), contra o DynamoDB Local real: o escritor de producao e o banco arbitram permutacoes, duplicacoes, empates,
- * `DECLINED` e `DISABLED`. Cada entrega usa contas aleatorias novas (a tabela e compartilhada entre execucoes).
- */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 @OptIn(ExperimentalKotest::class)
 class ConvergencePropertyIT {
@@ -36,7 +30,7 @@ class ConvergencePropertyIT {
 
     @AfterAll
     fun cleanUp() {
-        touched.forEach { readerClient.deleteItem(DeleteItemRequest.builder().tableName(DynamoDbTestSupport.tableName).key(DynamoDbTestSupport.key(it)).build()) }
+        touched.forEach { DynamoDbTestSupport.deleteAccount(readerClient, it) }
         writeClient.close()
         readerClient.close()
     }
