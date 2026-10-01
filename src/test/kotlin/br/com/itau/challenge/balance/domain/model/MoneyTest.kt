@@ -57,10 +57,12 @@ class MoneyTest {
     }
 
     @Test
-    fun `precision is measured on the received value, so trailing zeros count`() {
-        // Numericamente e 1, mas tem 39 digitos significativos na forma recebida: rejeitado (conservador).
+    fun `precision is measured on the received value, so one followed by 38 zeros has 39 digits and is rejected`() {
         assertInvalidValue("1." + "0".repeat(38))
-        // Com 37 zeros a direita sao 38 digitos: aceito.
+    }
+
+    @Test
+    fun `precision is measured on the received value, so one followed by 37 zeros has 38 digits and is accepted`() {
         assertEquals(38, money("1." + "0".repeat(37)).amount.precision())
     }
 

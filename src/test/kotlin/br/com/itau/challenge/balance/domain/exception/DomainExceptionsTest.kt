@@ -3,6 +3,7 @@ package br.com.itau.challenge.balance.domain.exception
 import br.com.itau.challenge.balance.domain.model.AccountId
 import br.com.itau.challenge.balance.domain.model.StoreFailureCause
 import br.com.itau.challenge.balance.domain.model.StoreFailureDetails
+import br.com.itau.challenge.balance.testing.TransactionEventFixtures.DEFAULT_ACCOUNT_ID
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -11,7 +12,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertSame
 
 class DomainExceptionsTest {
-    private val accountId = AccountId.parse("5b19c8b6-0cc4-4c72-a989-0c2ee15fa975")
+    private val accountId = AccountId.parse(DEFAULT_ACCOUNT_ID)
 
     @Test
     fun `AccountNotFoundException carries only the account id`() {

@@ -1,5 +1,9 @@
 package br.com.itau.challenge.balance.domain.model
 
+import br.com.itau.challenge.balance.testing.TransactionEventFixtures
+import br.com.itau.challenge.balance.testing.TransactionEventFixtures.DEFAULT_TIMESTAMP_MICROS
+import br.com.itau.challenge.balance.testing.TransactionEventFixtures.HIGHEST_TRANSACTION_ID
+import br.com.itau.challenge.balance.testing.TransactionEventFixtures.LOWEST_TRANSACTION_ID
 import org.junit.jupiter.api.Test
 import java.util.Random
 import java.util.UUID
@@ -9,9 +13,9 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 class PrecedenceTest {
-    private val baseMicros = 1751749453433000L
-    private val lowId = "00000000-0000-4000-8000-000000000001"
-    private val highId = "ffffffff-ffff-4fff-8fff-ffffffffff01"
+    private val baseMicros = DEFAULT_TIMESTAMP_MICROS
+    private val lowId = LOWEST_TRANSACTION_ID
+    private val highId = HIGHEST_TRANSACTION_ID
 
     private fun precedence(
         micros: Long,
@@ -46,9 +50,8 @@ class PrecedenceTest {
     }
 
     @Test
-    fun `the UUID compareTo trap - signed longs diverge from the textual order`() {
+    fun `precedence orders ids textually while java util UUID compares signed longs so ffff sorts before 0000`() {
         assertTrue(precedence(baseMicros, highId) > precedence(baseMicros, lowId))
-        // java.util.UUID compara longs COM sinal: ffff... vira negativo e ordena antes de 0000...
         assertTrue(UUID.fromString(highId) < UUID.fromString(lowId))
     }
 

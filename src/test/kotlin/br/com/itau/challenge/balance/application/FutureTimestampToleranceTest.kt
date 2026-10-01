@@ -4,9 +4,9 @@ import br.com.itau.challenge.balance.domain.exception.InvalidEventException
 import br.com.itau.challenge.balance.domain.model.AccountId
 import br.com.itau.challenge.balance.domain.model.ApplyResult
 import br.com.itau.challenge.balance.domain.model.RejectionReason
-import br.com.itau.challenge.balance.domain.model.TransactionEventFixtures.transactionEvent
 import br.com.itau.challenge.balance.testing.InMemoryBalanceStore
 import br.com.itau.challenge.balance.testing.RecordingProcessingMetrics
+import br.com.itau.challenge.balance.testing.TransactionEventFixtures.transactionEvent
 import org.junit.jupiter.api.Test
 import java.math.BigDecimal
 import java.time.Clock

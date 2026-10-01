@@ -4,8 +4,8 @@ import br.com.itau.challenge.balance.domain.exception.InvalidEventException
 import br.com.itau.challenge.balance.domain.model.AccountId
 import br.com.itau.challenge.balance.domain.model.AccountStatus
 import br.com.itau.challenge.balance.domain.model.BalanceSnapshot
-import br.com.itau.challenge.balance.domain.model.TransactionEventFixtures.DEFAULT_ACCOUNT_ID
-import br.com.itau.challenge.balance.domain.model.TransactionEventFixtures.transactionEvent
+import br.com.itau.challenge.balance.testing.TransactionEventFixtures.DEFAULT_ACCOUNT_ID
+import br.com.itau.challenge.balance.testing.TransactionEventFixtures.transactionEvent
 import org.junit.jupiter.api.Test
 import software.amazon.awssdk.services.dynamodb.model.AttributeValue
 import java.math.BigDecimal

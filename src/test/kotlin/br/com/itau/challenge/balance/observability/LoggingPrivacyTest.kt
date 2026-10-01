@@ -8,9 +8,9 @@ import br.com.itau.challenge.balance.domain.exception.BalanceStoreUnavailableExc
 import br.com.itau.challenge.balance.domain.exception.InvalidEventException
 import br.com.itau.challenge.balance.domain.model.BalanceSnapshot
 import br.com.itau.challenge.balance.domain.model.StoreFailureCause
-import br.com.itau.challenge.balance.domain.model.TransactionEventFixtures.transactionEvent
 import br.com.itau.challenge.balance.testing.ManagedApplicationTest
 import br.com.itau.challenge.balance.testing.RecordingProcessingMetrics
+import br.com.itau.challenge.balance.testing.TransactionEventFixtures.transactionEvent
 import org.apache.kafka.clients.consumer.Consumer
 import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.apache.kafka.clients.producer.ProducerRecord

@@ -6,10 +6,10 @@ import br.com.itau.challenge.balance.domain.model.AccountId
 import br.com.itau.challenge.balance.domain.model.AccountStatus
 import br.com.itau.challenge.balance.domain.model.ApplyResult
 import br.com.itau.challenge.balance.domain.model.StoreFailureCause
-import br.com.itau.challenge.balance.domain.model.TransactionEventFixtures.transactionEvent
 import br.com.itau.challenge.balance.domain.model.TransactionStatus
 import br.com.itau.challenge.balance.testing.InMemoryBalanceStore
 import br.com.itau.challenge.balance.testing.RecordingProcessingMetrics
+import br.com.itau.challenge.balance.testing.TransactionEventFixtures.transactionEvent
 import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.Logger
 import ch.qos.logback.classic.spi.ILoggingEvent

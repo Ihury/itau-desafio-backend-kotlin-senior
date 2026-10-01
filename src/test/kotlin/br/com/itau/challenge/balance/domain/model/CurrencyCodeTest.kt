@@ -1,6 +1,7 @@
 package br.com.itau.challenge.balance.domain.model
 
 import br.com.itau.challenge.balance.domain.exception.InvalidEventException
+import br.com.itau.challenge.balance.testing.boxedAsAny
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -37,6 +38,4 @@ class CurrencyCodeTest {
         assertEquals(listOf("BRL", "USD"), codes.map { it.value })
         assertEquals(listOf("BRL", "USD"), codes.boxedAsAny().map { it.toString() })
     }
-
-    private fun List<Any>.boxedAsAny(): List<Any> = this
 }

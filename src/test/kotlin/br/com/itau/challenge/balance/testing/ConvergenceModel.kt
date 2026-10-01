@@ -4,9 +4,9 @@ import br.com.itau.challenge.balance.domain.model.AccountId
 import br.com.itau.challenge.balance.domain.model.AccountStatus
 import br.com.itau.challenge.balance.domain.model.BalanceSnapshot
 import br.com.itau.challenge.balance.domain.model.TransactionEvent
-import br.com.itau.challenge.balance.domain.model.TransactionEventFixtures.transactionEvent
 import br.com.itau.challenge.balance.domain.model.TransactionStatus
 import br.com.itau.challenge.balance.port.output.BalanceSnapshotWriter
+import br.com.itau.challenge.balance.testing.TransactionEventFixtures.transactionEvent
 import io.kotest.property.Arb
 import io.kotest.property.arbitrary.boolean
 import io.kotest.property.arbitrary.bind

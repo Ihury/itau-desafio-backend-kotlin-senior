@@ -5,8 +5,8 @@ import br.com.itau.challenge.balance.domain.model.AccountStatus
 import br.com.itau.challenge.balance.domain.model.ApplyResult
 import br.com.itau.challenge.balance.domain.model.BalanceSnapshot
 import br.com.itau.challenge.balance.domain.model.TransactionEvent
-import br.com.itau.challenge.balance.domain.model.TransactionEventFixtures.transactionEvent
 import br.com.itau.challenge.balance.domain.model.TransactionStatus
+import br.com.itau.challenge.balance.testing.TransactionEventFixtures.transactionEvent
 import br.com.itau.challenge.balance.port.output.BalanceSnapshotWriter
 import org.junit.jupiter.api.Test
 import java.math.BigDecimal

@@ -1,6 +1,8 @@
 package br.com.itau.challenge.balance.domain.model
 
 import br.com.itau.challenge.balance.domain.exception.InvalidEventException
+import br.com.itau.challenge.balance.testing.TransactionEventFixtures.DEFAULT_ACCOUNT_ID
+import br.com.itau.challenge.balance.testing.boxedAsAny
 import org.junit.jupiter.api.Test
 import java.util.UUID
 import kotlin.test.assertEquals
@@ -8,7 +10,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
 
 class IdentifiersTest {
-    private val canonicalId = "5b19c8b6-0cc4-4c72-a989-0c2ee15fa975"
+    private val canonicalId = DEFAULT_ACCOUNT_ID
 
     private val parsers: Map<String, (String) -> Any> =
         mapOf(
@@ -86,6 +88,4 @@ class IdentifiersTest {
         assertEquals(listOf(canonicalId, canonicalId), owners.map { it.value })
         assertEquals(listOf(canonicalId, canonicalId), owners.boxedAsAny().map { it.toString() })
     }
-
-    private fun List<Any>.boxedAsAny(): List<Any> = this
 }

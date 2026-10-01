@@ -1,13 +1,17 @@
 package br.com.itau.challenge.balance.domain.model
 
 import br.com.itau.challenge.balance.domain.exception.InvalidEventException
-import br.com.itau.challenge.balance.domain.model.TransactionEventFixtures.transactionEvent
+import br.com.itau.challenge.balance.testing.TransactionEventFixtures.DEFAULT_ACCOUNT_CREATED_AT_MICROS
+import br.com.itau.challenge.balance.testing.TransactionEventFixtures.DEFAULT_ACCOUNT_ID
+import br.com.itau.challenge.balance.testing.TransactionEventFixtures.DEFAULT_OWNER_ID
+import br.com.itau.challenge.balance.testing.TransactionEventFixtures.DEFAULT_TIMESTAMP_MICROS
+import br.com.itau.challenge.balance.testing.TransactionEventFixtures.DEFAULT_TRANSACTION_ID
+import br.com.itau.challenge.balance.testing.TransactionEventFixtures.transactionEvent
 import org.junit.jupiter.api.Test
 import java.math.BigDecimal
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
-import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 class TransactionEventModelTest {
@@ -67,31 +71,34 @@ class TransactionEventModelTest {
     fun `the fixture event exposes the default transaction and account state`() {
         val event = transactionEvent()
 
-        assertEquals(TransactionId.parse(TransactionEventFixtures.DEFAULT_TRANSACTION_ID), event.transaction.id)
-        assertEquals(AccountId.parse(TransactionEventFixtures.DEFAULT_ACCOUNT_ID), event.account.id)
-        assertEquals(OwnerId.parse(TransactionEventFixtures.DEFAULT_OWNER_ID), event.account.owner)
+        assertEquals(TransactionId.parse(DEFAULT_TRANSACTION_ID), event.transaction.id)
+        assertEquals(AccountId.parse(DEFAULT_ACCOUNT_ID), event.account.id)
+        assertEquals(OwnerId.parse(DEFAULT_OWNER_ID), event.account.owner)
         assertEquals(AccountStatus.ENABLED, event.account.status)
         assertEquals(TransactionType.CREDIT, event.transaction.type)
         assertEquals(TransactionStatus.APPROVED, event.transaction.status)
         assertEquals(CurrencyCode.parse("BRL"), event.transaction.currency)
-        assertEquals(EventInstant.transactionTimestamp(TransactionEventFixtures.DEFAULT_TIMESTAMP_MICROS), event.transaction.timestamp)
-        assertEquals(EventInstant.accountCreatedAt(1634874339000000L), event.account.createdAt)
+        assertEquals(EventInstant.transactionTimestamp(DEFAULT_TIMESTAMP_MICROS), event.transaction.timestamp)
+        assertEquals(EventInstant.accountCreatedAt(DEFAULT_ACCOUNT_CREATED_AT_MICROS), event.account.createdAt)
     }
 
     @Test
-    fun `ApplyResult exposes applied, obsolete and duplicate outcomes`() {
+    fun `every ApplyResult outcome is covered by an exhaustive when and a duplicate remembers whether it conflicts`() {
         val outcomes: List<ApplyResult> = listOf(ApplyResult.Applied, ApplyResult.Obsolete, ApplyResult.Duplicate(conflicting = false))
 
+        val labels =
+            outcomes.map { outcome ->
+                when (outcome) {
+                    is ApplyResult.Applied -> "applied"
+                    is ApplyResult.Obsolete -> "obsolete"
+                    is ApplyResult.Duplicate -> "duplicate"
+                }
+            }
+
+        assertEquals(listOf("applied", "obsolete", "duplicate"), labels)
         assertEquals(ApplyResult.Duplicate(false), outcomes[2])
         assertFalse((outcomes[2] as ApplyResult.Duplicate).conflicting)
         assertTrue(ApplyResult.Duplicate(conflicting = true).conflicting)
-        outcomes.forEach { outcome ->
-            when (outcome) {
-                is ApplyResult.Applied -> assertIs<ApplyResult.Applied>(outcome)
-                is ApplyResult.Obsolete -> assertIs<ApplyResult.Obsolete>(outcome)
-                is ApplyResult.Duplicate -> assertIs<ApplyResult.Duplicate>(outcome)
-            }
-        }
     }
 
     @Test
@@ -103,7 +110,7 @@ class TransactionEventModelTest {
         texts.forEach { text ->
             assertFalse("97.07" in text, text)
             assertFalse("183.12" in text, text)
-            assertFalse(TransactionEventFixtures.DEFAULT_OWNER_ID in text, text)
+            assertFalse(DEFAULT_OWNER_ID in text, text)
         }
     }
 }

@@ -17,7 +17,7 @@ class InvalidEventExceptionTest {
     }
 
     @Test
-    fun `withDetail returns a copy with the path and keeps the reason`() {
+    fun `withFieldPath returns a copy with the path and keeps the reason`() {
         val original = InvalidEventException(RejectionReason.INVALID_VALUE)
         val copy = original.withFieldPath("account.balance.amount")
 

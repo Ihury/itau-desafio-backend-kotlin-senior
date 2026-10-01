@@ -1,27 +1,32 @@
 package br.com.itau.challenge.balance.domain.model
 
-import br.com.itau.challenge.balance.domain.model.TransactionEventFixtures.transactionEvent
+import br.com.itau.challenge.balance.testing.TransactionEventFixtures.DEFAULT_ACCOUNT_CREATED_AT_MICROS
+import br.com.itau.challenge.balance.testing.TransactionEventFixtures.DEFAULT_OWNER_ID
+import br.com.itau.challenge.balance.testing.TransactionEventFixtures.DEFAULT_TIMESTAMP_MICROS
+import br.com.itau.challenge.balance.testing.TransactionEventFixtures.HIGHEST_TRANSACTION_ID
+import br.com.itau.challenge.balance.testing.TransactionEventFixtures.LOWEST_TRANSACTION_ID
+import br.com.itau.challenge.balance.testing.TransactionEventFixtures.transactionEvent
 import org.junit.jupiter.api.Test
 import java.math.BigDecimal
+import kotlin.reflect.full.memberProperties
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.reflect.full.memberProperties
 import kotlin.test.assertTrue
 
 class BalanceSnapshotTest {
-    private val baseMicros = 1751749453433000L
-    private val lowId = "00000000-0000-4000-8000-000000000001"
-    private val highId = "ffffffff-ffff-4fff-8fff-ffffffffff01"
+    private val baseMicros = DEFAULT_TIMESTAMP_MICROS
+    private val lowId = LOWEST_TRANSACTION_ID
+    private val highId = HIGHEST_TRANSACTION_ID
 
     @Test
     fun `from copies owner, account status, balance and created_at from the same event`() {
         val event =
             transactionEvent(
-                ownerId = "315e3cfe-f4af-4cd2-b298-a449e614349a",
+                ownerId = DEFAULT_OWNER_ID,
                 accountStatus = AccountStatus.DISABLED,
                 balanceAmount = "183.12",
                 balanceCurrency = "BRL",
-                accountCreatedAtMicros = 1634874339000000L,
+                accountCreatedAtMicros = DEFAULT_ACCOUNT_CREATED_AT_MICROS,
             )
 
         val snapshot = BalanceSnapshot.from(event)
@@ -30,7 +35,7 @@ class BalanceSnapshotTest {
         assertEquals(event.account.owner, snapshot.ownerId)
         assertEquals(AccountStatus.DISABLED, snapshot.status)
         assertEquals(event.account.balance, snapshot.balance)
-        assertEquals(EventInstant.accountCreatedAt(1634874339000000L), snapshot.accountCreatedAt)
+        assertEquals(EventInstant.accountCreatedAt(DEFAULT_ACCOUNT_CREATED_AT_MICROS), snapshot.accountCreatedAt)
     }
 
     @Test

@@ -7,7 +7,7 @@ import br.com.itau.challenge.balance.domain.model.ApplyResult
 import br.com.itau.challenge.balance.domain.model.BalanceSnapshot
 import br.com.itau.challenge.balance.domain.model.StoreFailureCause
 import br.com.itau.challenge.balance.domain.model.TransactionEvent
-import br.com.itau.challenge.balance.domain.model.TransactionEventFixtures.transactionEvent
+import br.com.itau.challenge.balance.testing.TransactionEventFixtures.transactionEvent
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry
 import org.junit.jupiter.api.Test
 import org.mockito.ArgumentCaptor

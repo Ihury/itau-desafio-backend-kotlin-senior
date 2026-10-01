@@ -3,11 +3,11 @@ package br.com.itau.challenge.balance.adapter.output.dynamodb
 import br.com.itau.challenge.balance.domain.model.AccountId
 import br.com.itau.challenge.balance.domain.model.ApplyResult
 import br.com.itau.challenge.balance.domain.model.BalanceSnapshot
-import br.com.itau.challenge.balance.domain.model.TransactionEventFixtures.transactionEvent
 import br.com.itau.challenge.balance.port.output.BalanceSnapshotWriter
 import br.com.itau.challenge.balance.support.DynamoDbTestSupport
 import br.com.itau.challenge.balance.support.DynamoDbTestSupport.randomAccountId
 import br.com.itau.challenge.balance.testing.BalanceSnapshotWriterContract
+import br.com.itau.challenge.balance.testing.TransactionEventFixtures.transactionEvent
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry
 import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.Test

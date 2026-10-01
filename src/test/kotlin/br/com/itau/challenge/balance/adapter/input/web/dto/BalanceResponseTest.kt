@@ -1,7 +1,7 @@
 package br.com.itau.challenge.balance.adapter.input.web.dto
 
 import br.com.itau.challenge.balance.domain.model.BalanceSnapshot
-import br.com.itau.challenge.balance.domain.model.TransactionEventFixtures.transactionEvent
+import br.com.itau.challenge.balance.testing.TransactionEventFixtures.transactionEvent
 import org.junit.jupiter.api.Test
 import tools.jackson.core.StreamWriteFeature
 import tools.jackson.databind.json.JsonMapper
