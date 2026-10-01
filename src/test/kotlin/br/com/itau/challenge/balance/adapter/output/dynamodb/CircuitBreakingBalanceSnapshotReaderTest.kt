@@ -6,15 +6,16 @@ import br.com.itau.challenge.balance.domain.model.AccountId
 import br.com.itau.challenge.balance.domain.model.BalanceSnapshot
 import br.com.itau.challenge.balance.domain.model.StoreFailureCause
 import br.com.itau.challenge.balance.port.output.BalanceSnapshotReader
+import br.com.itau.challenge.balance.testing.ScriptedBalanceSnapshotReader
 import br.com.itau.challenge.balance.testing.TransactionEventFixtures.DEFAULT_ACCOUNT_ID
 import br.com.itau.challenge.balance.testing.TransactionEventFixtures.transactionEvent
+import br.com.itau.challenge.balance.testing.testCircuitBreakerProperties
 import io.github.resilience4j.circuitbreaker.CallNotPermittedException
 import io.github.resilience4j.circuitbreaker.CircuitBreaker
 import io.github.resilience4j.circuitbreaker.CircuitBreaker.State
 import org.awaitility.kotlin.await
 import org.junit.jupiter.api.Test
 import java.time.Duration
-import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
@@ -26,39 +27,12 @@ class CircuitBreakingBalanceSnapshotReaderTest {
     private val accountId = AccountId.parse(DEFAULT_ACCOUNT_ID)
     private val snapshot = BalanceSnapshot.from(transactionEvent())
 
-    private class FakeReader(
-        var behavior: () -> BalanceSnapshot? = { null },
-    ) : BalanceSnapshotReader {
-        val calls = AtomicInteger()
-
-        override fun find(accountId: AccountId): BalanceSnapshot? {
-            calls.incrementAndGet()
-            return behavior()
-        }
-    }
-
     private fun circuitBreaker(
-        minCalls: Int = 4,
-        failureRate: Float = 50f,
         slowCall: Duration = Duration.ofSeconds(5),
         slowRate: Float = 80f,
         openWait: Duration = Duration.ofSeconds(30),
-        halfOpenCalls: Int = 2,
     ): CircuitBreaker =
-        CircuitBreaker.of(
-            "test",
-            readCircuitBreakerConfig(
-                CircuitBreakerProperties(
-                    window = Duration.ofSeconds(10),
-                    minCalls = minCalls,
-                    failureRate = failureRate,
-                    slowCall = slowCall,
-                    slowRate = slowRate,
-                    openWait = openWait,
-                    halfOpenCalls = halfOpenCalls,
-                ),
-            ),
-        )
+        CircuitBreaker.of("test", readCircuitBreakerConfig(testCircuitBreakerProperties(slowCall = slowCall, slowRate = slowRate, openWait = openWait)))
 
     private fun storeUnavailable() = BalanceStoreUnavailableException(StoreFailureCause.UNAVAILABLE)
 
@@ -70,7 +44,7 @@ class CircuitBreakingBalanceSnapshotReaderTest {
     @Test
     fun `a rejection by the open circuit is a specific store unavailable without stack trace, still unavailable for the callers`() {
         val circuit = circuitBreaker()
-        val reader = CircuitBreakingBalanceSnapshotReader(FakeReader { throw storeUnavailable() }, circuit)
+        val reader = CircuitBreakingBalanceSnapshotReader(ScriptedBalanceSnapshotReader { throw storeUnavailable() }, circuit)
         findIgnoringFailures(reader, 4)
 
         val rejection = assertFailsWith<BalanceStoreCircuitOpenException> { reader.find(accountId) }
@@ -84,7 +58,7 @@ class CircuitBreakingBalanceSnapshotReaderTest {
 
     @Test
     fun `a real store failure is not reported as a circuit rejection`() {
-        val reader = CircuitBreakingBalanceSnapshotReader(FakeReader { throw storeUnavailable() }, circuitBreaker())
+        val reader = CircuitBreakingBalanceSnapshotReader(ScriptedBalanceSnapshotReader { throw storeUnavailable() }, circuitBreaker())
 
         val failure = assertFailsWith<BalanceStoreUnavailableException> { reader.find(accountId) }
 
@@ -93,7 +67,7 @@ class CircuitBreakingBalanceSnapshotReaderTest {
 
     @Test
     fun `failures above the threshold open the circuit and the next call fails fast without hitting the delegate`() {
-        val delegate = FakeReader { throw storeUnavailable() }
+        val delegate = ScriptedBalanceSnapshotReader { throw storeUnavailable() }
         val circuit = circuitBreaker()
         val reader = CircuitBreakingBalanceSnapshotReader(delegate, circuit)
 
@@ -109,14 +83,14 @@ class CircuitBreakingBalanceSnapshotReaderTest {
     @Test
     fun `the original unavailable exception passes through untouched while the circuit is closed`() {
         val original = BalanceStoreUnavailableException(StoreFailureCause.THROTTLED)
-        val reader = CircuitBreakingBalanceSnapshotReader(FakeReader { throw original }, circuitBreaker())
+        val reader = CircuitBreakingBalanceSnapshotReader(ScriptedBalanceSnapshotReader { throw original }, circuitBreaker())
 
         assertSame(original, assertFailsWith<BalanceStoreUnavailableException> { reader.find(accountId) })
     }
 
     @Test
     fun `a found snapshot and a missing account both count as successful calls`() {
-        val delegate = FakeReader()
+        val delegate = ScriptedBalanceSnapshotReader()
         val circuit = circuitBreaker()
         val reader = CircuitBreakingBalanceSnapshotReader(delegate, circuit)
 
@@ -133,7 +107,7 @@ class CircuitBreakingBalanceSnapshotReaderTest {
 
     @Test
     fun `failure rate below the threshold keeps the circuit closed`() {
-        val delegate = FakeReader()
+        val delegate = ScriptedBalanceSnapshotReader()
         val circuit = circuitBreaker()
         val reader = CircuitBreakingBalanceSnapshotReader(delegate, circuit)
 
@@ -149,7 +123,7 @@ class CircuitBreakingBalanceSnapshotReaderTest {
     fun `other exceptions do not count as failures and propagate unchanged`() {
         val corrupted = IllegalStateException("corrupted balance item: invalid attribute 'ownerId'")
         val circuit = circuitBreaker()
-        val reader = CircuitBreakingBalanceSnapshotReader(FakeReader { throw corrupted }, circuit)
+        val reader = CircuitBreakingBalanceSnapshotReader(ScriptedBalanceSnapshotReader { throw corrupted }, circuit)
 
         repeat(10) { assertSame(corrupted, assertFailsWith<IllegalStateException> { reader.find(accountId) }) }
 
@@ -159,7 +133,7 @@ class CircuitBreakingBalanceSnapshotReaderTest {
 
     @Test
     fun `slow calls in a proportion at or above the limit also open the circuit`() {
-        val delegate = FakeReader { Thread.sleep(40).let { snapshot } }
+        val delegate = ScriptedBalanceSnapshotReader { Thread.sleep(40).let { snapshot } }
         val circuit = circuitBreaker(slowCall = Duration.ofMillis(10), slowRate = 80f)
         val reader = CircuitBreakingBalanceSnapshotReader(delegate, circuit)
 
@@ -171,7 +145,7 @@ class CircuitBreakingBalanceSnapshotReaderTest {
 
     @Test
     fun `open moves to half open by itself after the wait and enough successful test calls close it`() {
-        val delegate = FakeReader { throw storeUnavailable() }
+        val delegate = ScriptedBalanceSnapshotReader { throw storeUnavailable() }
         val circuit = circuitBreaker(openWait = Duration.ofMillis(150))
         val reader = CircuitBreakingBalanceSnapshotReader(delegate, circuit)
         findIgnoringFailures(reader, 4)
@@ -186,7 +160,7 @@ class CircuitBreakingBalanceSnapshotReaderTest {
 
     @Test
     fun `a failing test call in half open reopens the circuit`() {
-        val delegate = FakeReader { throw storeUnavailable() }
+        val delegate = ScriptedBalanceSnapshotReader { throw storeUnavailable() }
         val circuit = circuitBreaker(openWait = Duration.ofMillis(150))
         val reader = CircuitBreakingBalanceSnapshotReader(delegate, circuit)
         findIgnoringFailures(reader, 4)

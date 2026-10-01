@@ -1,6 +1,7 @@
 package br.com.itau.challenge.balance.config
 
 import br.com.itau.challenge.balance.testing.ManagedApplicationTest
+import br.com.itau.challenge.balance.testing.TransactionEventFixtures.DEFAULT_ACCOUNT_ID
 import org.awaitility.kotlin.await
 import org.awaitility.kotlin.untilAsserted
 import org.junit.jupiter.api.Test
@@ -16,18 +17,18 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
-/** Metricas e Actuator na porta de gerenciamento; nada disso na porta da API. */
 class ObservabilityConfigTest : ManagedApplicationTest() {
     @Autowired
     private lateinit var listeners: KafkaListenerEndpointRegistry
 
-    private val account = "5b19c8b6-0cc4-4c72-a989-0c2ee15fa975"
-
     private fun scrapeAfterApiRequest(): String {
         doReturn(GetItemResponse.builder().build()).`when`(readClient).getItem(any(GetItemRequest::class.java))
-        api("/balances/$account")
+        api("/balances/$DEFAULT_ACCOUNT_ID")
+        return awaitHttpServerRequestsSeries()
+    }
+
+    private fun awaitHttpServerRequestsSeries(): String {
         var body = ""
-        // o Boot registra o timer HTTP depois de a resposta ser enviada: espera a serie aparecer
         await.atMost(Duration.ofSeconds(10)).untilAsserted {
             val response = management("/actuator/prometheus")
             assertEquals(200, response.statusCode())
@@ -41,8 +42,7 @@ class ObservabilityConfigTest : ManagedApplicationTest() {
         prometheusText: String,
         metric: String,
     ): Set<Double> =
-        // o valor da tag `uri` pode conter chaves (`/balances/{accountId}`): por isso `.*?` e nao `[^}]*`
-        Regex("""^${Regex.escape(metric)}_bucket\{.*?le="([^"]+)"}""", RegexOption.MULTILINE)
+        Regex("""^${Regex.escape(metric)}_bucket\{${ANY_LABELS_INCLUDING_BRACES}le="([^"]+)"}""", RegexOption.MULTILINE)
             .findAll(prometheusText)
             .map { it.groupValues[1] }
             .filter { it != "+Inf" }
@@ -107,5 +107,9 @@ class ObservabilityConfigTest : ManagedApplicationTest() {
         val container = assertNotNull(listeners.getListenerContainer("transaction-event-listener"))
 
         assertTrue(container.containerProperties.isObservationEnabled)
+    }
+
+    private companion object {
+        const val ANY_LABELS_INCLUDING_BRACES = ".*?"
     }
 }

@@ -5,10 +5,6 @@ import org.springframework.boot.test.context.ConfigDataApplicationContextInitial
 import org.springframework.boot.test.context.runner.ApplicationContextRunner
 import kotlin.test.assertEquals
 
-/**
- * Padroes do `application.yaml` real para o gerenciamento, sem contexto completo: porta 8082
- * separada da API, so `health`, `info` e `prometheus` expostos, sondas habilitadas e observacao do listener Kafka.
- */
 class ManagementPropertiesTest {
     private val runner = ApplicationContextRunner().withInitializer(ConfigDataApplicationContextInitializer())
 

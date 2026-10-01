@@ -8,13 +8,7 @@ import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
-/**
- * Arquitetura hexagonal de TODOS os contextos de negocio, descobertos como subpacotes diretos de
- * `br.com.itau.challenge`: um contexto novo entra na verificacao automaticamente. Camadas ainda vazias sao
- * toleradas; os testes de existencia de contexto evitam que as regras passem vacuosamente.
- */
 class ArchitectureTest {
-
     private val production = Konsist.scopeFromProduction()
 
     private val contexts: List<String> =
@@ -37,6 +31,17 @@ class ArchitectureTest {
 
     private fun importsOf(file: KoFileDeclaration): List<String> = file.imports.map { it.name }
 
+    private fun importsOutside(
+        context: String,
+        layer: String,
+        allowedPrefixes: List<String>,
+    ): List<String> =
+        filesOf(context, layer).flatMap { file ->
+            importsOf(file)
+                .filter { import -> allowedPrefixes.none { import.startsWith(it) } }
+                .map { "${file.path}: $it" }
+        }
+
     private fun assertNoViolations(
         rule: String,
         violations: List<String>,
@@ -45,7 +50,7 @@ class ArchitectureTest {
     @Test
     fun `hexagonal layers respect dependency direction in every context`() {
         contexts.forEach { context ->
-            val present = LAYERS_WITH_DIRECTION.filter { filesOf(context, it).isNotEmpty() }.toSet()
+            val present = HEXAGONAL_LAYERS.filter { filesOf(context, it).isNotEmpty() }.toSet()
             val layer = present.associateWith { Layer(it, "$ROOT.$context.$it..") }
             val domain = layer["domain"]
             val port = layer["port"]
@@ -66,12 +71,7 @@ class ArchitectureTest {
     fun `domain imports only kotlin, java and its own package`() {
         val violations =
             contexts.flatMap { context ->
-                val allowed = listOf("kotlin.", "java.", "$ROOT.$context.domain.")
-                filesOf(context, "domain").flatMap { file ->
-                    importsOf(file)
-                        .filter { import -> allowed.none { import.startsWith(it) } }
-                        .map { "${file.path}: $it" }
-                }
+                importsOutside(context, "domain", listOf("kotlin.", "java.", "$ROOT.$context.domain."))
             }
         assertNoViolations("domain deve ser Kotlin puro (kotlin.*, java.* e o proprio dominio)", violations)
     }
@@ -90,11 +90,7 @@ class ArchitectureTest {
                         "org.springframework.stereotype.Service",
                         "org.slf4j.",
                     )
-                filesOf(context, "application").flatMap { file ->
-                    importsOf(file)
-                        .filter { import -> allowed.none { import.startsWith(it) } }
-                        .map { "${file.path}: $it" }
-                }
+                importsOutside(context, "application", allowed)
             }
         assertNoViolations("application so depende de domain, port, @Service e slf4j", violations)
     }
@@ -141,9 +137,9 @@ class ArchitectureTest {
     fun `every context has the four hexagonal layers`() {
         val missing =
             contexts.flatMap { context ->
-                REQUIRED_LAYERS.filter { filesOf(context, it).isEmpty() }.map { "contexto '$context' sem a camada '$it'" }
+                HEXAGONAL_LAYERS.filter { filesOf(context, it).isEmpty() }.map { "contexto '$context' sem a camada '$it'" }
             }
-        assertNoViolations("todo contexto de negocio precisa de $REQUIRED_LAYERS (config e o composition root, opcional)", missing)
+        assertNoViolations("todo contexto de negocio precisa de $HEXAGONAL_LAYERS (config e o composition root, opcional)", missing)
     }
 
     @Test
@@ -155,11 +151,22 @@ class ArchitectureTest {
 
     @Test
     fun `balance domain imports nothing beyond kotlin, java and itself`() {
-        val forbidden = listOf("org.springframework", "software.amazon", "org.apache.kafka", "tools.jackson", "com.fasterxml", "io.micrometer", "io.github.resilience4j", "org.slf4j")
+        val forbidden =
+            listOf(
+                "org.springframework",
+                "software.amazon",
+                "org.apache.kafka",
+                "tools.jackson",
+                "com.fasterxml",
+                "io.micrometer",
+                "io.github.resilience4j",
+                "org.slf4j",
+            )
+        val allowed = listOf("kotlin.", "java.", "$ROOT.balance.domain.")
         val violations =
             filesOf("balance", "domain").flatMap { file ->
                 importsOf(file)
-                    .filter { import -> forbidden.any { import.startsWith(it) } || !(import.startsWith("kotlin.") || import.startsWith("java.") || import.startsWith("$ROOT.balance.domain.")) }
+                    .filter { import -> forbidden.any { import.startsWith(it) } || allowed.none { import.startsWith(it) } }
                     .map { "${file.path}: $it" }
             }
         assertNoViolations("balance.domain so pode importar kotlin.*, java.* e o proprio dominio", violations)
@@ -186,7 +193,6 @@ class ArchitectureTest {
         assertEquals(0, flagged("giveUp(e)"), "helper que nunca retorna")
     }
 
-    /** Descricao de cada `catch` de [source] que nao tem corpo util (vazio) ou nao registra log/metrica nem relanca. */
     private fun silentCatches(
         source: String,
         neverReturns: Set<String>,
@@ -225,8 +231,7 @@ class ArchitectureTest {
         val ACCOUNTED = Regex("""\bthrow\b|\blog\.\w+\(|\.increment\(|\brecord(?:Duration)?\(|\bmetrics\.""")
         val NOTHING_FUNCTION = Regex("""fun\s+(?:[\w<>?,. ]+\.)?(\w+)\([^)]*\)\s*:\s*Nothing""")
         const val ROOT = "br.com.itau.challenge"
-        val LAYERS_WITH_DIRECTION = listOf("domain", "port", "application", "adapter")
-        val REQUIRED_LAYERS = listOf("domain", "port", "application", "adapter")
+        val HEXAGONAL_LAYERS = listOf("domain", "port", "application", "adapter")
         val KNOWN_LAYERS = setOf("domain", "port", "application", "adapter", "config")
         val ADAPTER_TECHNOLOGIES = listOf("input.web", "input.kafka", "output.dynamodb", "output.metrics")
     }
