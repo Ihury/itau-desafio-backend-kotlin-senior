@@ -42,7 +42,7 @@ Decisão do orquestrador do projeto, sem emenda na Constitution: o starter-kit a
 usa SLF4J. O Princípio I é lido como **direção de dependência entre camadas** (`application` depende só de `domain` e `port`).
 Os **únicos** imports externos permitidos na `application` são `org.springframework.stereotype.Service` e `org.slf4j`, garantidos
 pela lista de permissão da regra (b). Qualquer outro import de framework na `application` (por exemplo `@Value`, Micrometer,
-AWS SDK) quebra o teste. Métricas e relógio entram por *port* (`ProcessingMetrics`) e `java.time.Clock`, então a camada continua
+AWS SDK) quebra o teste. Métricas e relógio entram por *ports* (`OutcomeMetrics`, `ConsumerFailureMetrics`, `IngestMetrics`) e `java.time.Clock`, então a camada continua
 livre de Micrometer.
 
 ## Alternativas consideradas

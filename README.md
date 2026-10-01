@@ -260,13 +260,13 @@ Código em `src/main/kotlin/br/com/itau/challenge/balance/`:
 | Camada | Conteúdo |
 |-|-|
 | `domain` | `Money` (BigDecimal exato), `EventInstant` (µs), `Precedence` (timestamp, txId), `BalanceSnapshot`, `TransactionEvent`, identificadores canônicos, `RejectionReason`, exceções |
-| `port` | `GetBalanceUseCase`, `ProcessTransactionEventUseCase` (entrada); `BalanceSnapshotReader`, `BalanceSnapshotWriter`, `ProcessingMetrics` (saída) |
+| `port` | `GetBalanceUseCase`, `ProcessTransactionEventUseCase` (entrada); `BalanceSnapshotReader`, `BalanceSnapshotWriter`, `OutcomeMetrics`, `ConsumerFailureMetrics`, `IngestMetrics` (saída) |
 | `application` | `GetBalanceService` (regra de conta desabilitada), `ProcessTransactionEventService` (tolerância de futuro, desfecho único), `FutureTolerance` |
 | `adapter/input/web` | `BalanceController`, `ProblemDetailsAdvice`, `CorrelationIdFilter`, `OpenApiController` |
-| `adapter/input/kafka` | `TransactionEventListener`, `TransactionEventParser` (estrito), `DeadLetterConfig`, `BackpressureConfig`, `FailureClassifier` |
+| `adapter/input/kafka` | `TransactionEventListener`, `TransactionEventParser` (estrito), `DeadLetterConfig`, `DeadLetterRetryListener`, `FailureBackOffs`, `BackpressureConfig`, `FailureClassifier` |
 | `adapter/output/dynamodb` | Reader e writer, `BalanceItemMapper`, clientes separados, `CircuitBreakingBalanceSnapshotReader`, `DynamoDbHealthIndicator` |
 | `adapter/output/metrics` | `MicrometerProcessingMetrics` |
-| `config` | Composition root: beans, circuit breaker, propriedades |
+| `config` | Composition root: `PersistenceConfig`, `TimeConfig`, `EventParsingConfig`, `ResilienceConfig` e `BalanceProperties` |
 
 Outros diretórios: `src/test` (unitários), `src/integrationTest` (infra real), `infra/` (seeds e scripts do compose), `http/`
 (exemplos), `docs/adr/`, `docs/metodologia-ia.md`, `specs/` e `.specify/` (artefatos do Spec Kit).

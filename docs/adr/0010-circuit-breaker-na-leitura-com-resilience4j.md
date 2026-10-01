@@ -20,7 +20,7 @@ camada de retry (proibida pela Constitution V) e `@ConcurrencyLimit` bloqueia em
 - Usar **Resilience4j 2.4.0**, apenas os módulos `resilience4j-circuitbreaker` (core, sem dependência de Spring) e
   `resilience4j-micrometer`, em **uso programático**, dentro de um decorator da porta de leitura:
   `CircuitBreakingBalanceSnapshotReader` (`adapter/output/dynamodb`) envolve o `DynamoDbBalanceSnapshotReader`. O leitor cru não é
-  um bean: só existe embrulhado (composition root em `config/BalanceBeansConfig`).
+  um bean: só existe embrulhado (composition root em `config/PersistenceConfig`).
 - Configuração (`balance.circuit-breaker.*`, `contracts/configuration.md`): janela por tempo de 10 s, mínimo de 20 chamadas,
   abre com falha >= 50% ou chamadas lentas (> 0,5 s) >= 80%; espera em OPEN de 10 s com transição automática para HALF_OPEN;
   5 chamadas de teste em HALF_OPEN.
@@ -30,7 +30,7 @@ camada de retry (proibida pela Constitution V) e `@ConcurrencyLimit` bloqueia em
   `BalanceStoreUnavailableException`), que a API traduz em **503 + `Retry-After`**. A pilha da rejeição é desligada
   (`writableStackTraceEnabled(false)`) e a rejeição loga em DEBUG, sem pilha; o WARN sai só nas transições de estado do breaker
   (`ResilienceConfig`, uma linha por transição) e nas falhas reais de leitura. Assim uma rajada de requisições com o circuito aberto
-  não vira uma linha de WARN por requisição. O valor de `Retry-After` é fixo e igual à espera em OPEN (`CircuitBreakerProperties.retryAfterSeconds`).
+  não vira uma linha de WARN por requisição. O valor de `Retry-After` é fixo e igual à espera em OPEN (`balance.circuit-breaker.open-wait`, arredondada para cima em segundos no `ProblemDetailsAdvice`).
 - As métricas `resilience4j.circuitbreaker.*` (tag `name=dynamodb-read`) são ligadas ao Micrometer por um `MeterBinder`
   (`TaggedCircuitBreakerMetrics`). A `resilience4j-micrometer` 2.4.0 é compilada contra Micrometer 1.16 e o Boot 4.1.0 usa 1.17:
   a compatibilidade é coberta por teste (`ResilienceConfigTest`).
