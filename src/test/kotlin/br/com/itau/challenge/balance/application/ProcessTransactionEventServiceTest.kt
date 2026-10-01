@@ -69,7 +69,7 @@ class ProcessTransactionEventServiceTest {
         assertEquals("315e3cfe-f4af-4cd2-b298-a449e614349a", snapshot.ownerId.value)
         assertEquals(AccountStatus.ENABLED, snapshot.status)
         assertEquals(1751749453433000L, snapshot.precedence.timestamp.micros)
-        assertEquals(listOf("applied"), metrics.outcomes)
+        assertEquals(listOf("processed"), metrics.outcomes)
     }
 
     @Test
@@ -92,7 +92,7 @@ class ProcessTransactionEventServiceTest {
         assertEquals("aaaaaaaa-f4af-4cd2-b298-a449e614349a", snapshot.ownerId.value)
         assertEquals(1751749453433001L, snapshot.precedence.timestamp.micros)
         assertEquals("9f9ae808-b154-48b5-9f3e-553935cc4543", snapshot.precedence.transactionId.value)
-        assertEquals(listOf("applied", "applied"), metrics.outcomes)
+        assertEquals(listOf("processed", "processed"), metrics.outcomes)
     }
 
     @Test
@@ -104,7 +104,7 @@ class ProcessTransactionEventServiceTest {
 
         assertEquals(ApplyResult.Obsolete, result)
         assertEquals(before, current())
-        assertEquals(listOf("applied", "obsolete"), metrics.outcomes)
+        assertEquals(listOf("processed", "obsolete"), metrics.outcomes)
     }
 
     @Test
@@ -115,7 +115,7 @@ class ProcessTransactionEventServiceTest {
         val result = service.process(event)
 
         assertEquals(ApplyResult.Duplicate(conflicting = false), result)
-        assertEquals(listOf("applied", "duplicate"), metrics.outcomes)
+        assertEquals(listOf("processed", "duplicate"), metrics.outcomes)
     }
 
     @Test
@@ -126,7 +126,7 @@ class ProcessTransactionEventServiceTest {
 
         assertEquals(ApplyResult.Duplicate(conflicting = true), result)
         assertEquals(BigDecimal("183.12"), current().balance.amount)
-        assertEquals(listOf("applied", "duplicate(conflicting)"), metrics.outcomes)
+        assertEquals(listOf("processed", "duplicate(conflicting)"), metrics.outcomes)
     }
 
     @Test
@@ -137,7 +137,7 @@ class ProcessTransactionEventServiceTest {
 
         assertEquals(BigDecimal("11.00"), current(accountA).balance.amount)
         assertEquals(BigDecimal("20.00"), current(accountB).balance.amount)
-        assertEquals(listOf("applied", "applied", "applied"), metrics.outcomes)
+        assertEquals(listOf("processed", "processed", "processed"), metrics.outcomes)
     }
 
     @Test
@@ -213,7 +213,7 @@ class ProcessTransactionEventServiceTest {
         store.failWritesWith(null)
 
         assertEquals(ApplyResult.Applied, service.process(transactionEvent()))
-        assertEquals(listOf("applied"), metrics.outcomes)
+        assertEquals(listOf("processed"), metrics.outcomes)
     }
 
     @Test
@@ -223,7 +223,7 @@ class ProcessTransactionEventServiceTest {
 
         service.process(event)
 
-        assertEquals(listOf("applied", "duplicate"), metrics.outcomes)
+        assertEquals(listOf("processed", "duplicate"), metrics.outcomes)
         assertEquals(emptyList(), logs.list.filter { it.level == Level.WARN })
     }
 
@@ -233,7 +233,7 @@ class ProcessTransactionEventServiceTest {
 
         service.process(transactionEvent(balanceAmount = "999.99", ownerId = "dddddddd-f4af-4cd2-b298-a449e614349a"))
 
-        assertEquals(listOf("applied", "duplicate(conflicting)"), metrics.outcomes)
+        assertEquals(listOf("processed", "duplicate(conflicting)"), metrics.outcomes)
         val warnings = logs.list.filter { it.level == Level.WARN }
         assertEquals(1, warnings.size)
         val text = warnings.single().formattedMessage
@@ -247,7 +247,7 @@ class ProcessTransactionEventServiceTest {
 
         service.process(transactionEvent(transactionId = "00000000-0000-4000-8000-000000000001", timestampMicros = 1751749453432999L))
 
-        assertEquals(listOf("applied", "obsolete"), metrics.outcomes)
+        assertEquals(listOf("processed", "obsolete"), metrics.outcomes)
         assertEquals(emptyList(), logs.list.filter { it.level == Level.WARN || it.level == Level.ERROR })
     }
 }

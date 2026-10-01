@@ -4,14 +4,12 @@ import br.com.itau.challenge.balance.domain.exception.InvalidEventException
 import br.com.itau.challenge.balance.domain.model.ApplyResult
 import br.com.itau.challenge.balance.domain.model.RejectionReason
 import br.com.itau.challenge.balance.port.input.ProcessTransactionEventUseCase
-import io.micrometer.core.instrument.MeterRegistry
-import io.micrometer.core.instrument.Timer
+import br.com.itau.challenge.balance.port.output.IngestMetrics
+import br.com.itau.challenge.balance.port.output.IngestOutcome
 import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.slf4j.MDC
 import org.springframework.kafka.annotation.KafkaListener
 import org.springframework.stereotype.Component
-import java.time.Duration
-import java.util.concurrent.TimeUnit
 
 /**
  * Entrada Kafka: um registro por vez, com os bytes verbatim (`ByteArrayDeserializer` nunca lanca), convertidos pelo parser
@@ -22,21 +20,19 @@ import java.util.concurrent.TimeUnit
  * O MDC leva `correlationId=<topic>-<partition>@<offset>` durante todo o processamento e `accountId`/`transactionId` somente
  * depois que o evento foi parseado; e sempre limpo em `finally`. Nunca registra payload, saldo nem titular.
  *
- * O timer `balance.ingest.duration{outcome}` e registrado por mensagem em `finally`: `processed`, `obsolete` ou `duplicate`
+ * A duracao `balance.ingest.duration{outcome}` e registrada por mensagem em `finally`: `processed`, `obsolete` ou `duplicate`
  * conforme o caso de uso, `rejected` para [InvalidEventException] e `error` para qualquer outra falha.
  */
 @Component
 class TransactionEventListener(
     private val parser: TransactionEventParser,
     private val processTransactionEvent: ProcessTransactionEventUseCase,
-    meterRegistry: MeterRegistry,
+    private val ingestMetrics: IngestMetrics,
 ) {
-    private val ingestTimers: Map<String, Timer> = OUTCOMES.associateWith { outcome -> ingestTimer(meterRegistry, outcome) }
-
     @KafkaListener(id = LISTENER_ID, idIsGroup = false, topics = ["\${balance.events.topic}"])
     fun onMessage(record: ConsumerRecord<ByteArray?, ByteArray?>) {
         val startedNanos = System.nanoTime()
-        var outcome = ERROR
+        var outcome = IngestOutcome.ERROR
         MDC.put(CORRELATION_ID, "${record.topic()}-${record.partition()}@${record.offset()}")
         try {
             val event = parser.parse(record.value() ?: throw InvalidEventException(RejectionReason.MALFORMED_PAYLOAD))
@@ -44,21 +40,21 @@ class TransactionEventListener(
             MDC.put(TRANSACTION_ID, event.transaction.id.value)
             outcome = outcomeOf(processTransactionEvent.process(event))
         } catch (invalid: InvalidEventException) {
-            outcome = REJECTED
+            outcome = IngestOutcome.REJECTED
             throw invalid
         } finally {
-            ingestTimers.getValue(outcome).record(System.nanoTime() - startedNanos, TimeUnit.NANOSECONDS)
+            ingestMetrics.ingestDuration(outcome, System.nanoTime() - startedNanos)
             MDC.remove(TRANSACTION_ID)
             MDC.remove(ACCOUNT_ID)
             MDC.remove(CORRELATION_ID)
         }
     }
 
-    private fun outcomeOf(result: ApplyResult): String =
+    private fun outcomeOf(result: ApplyResult): IngestOutcome =
         when (result) {
-            is ApplyResult.Applied -> PROCESSED
-            is ApplyResult.Obsolete -> OBSOLETE
-            is ApplyResult.Duplicate -> DUPLICATE
+            is ApplyResult.Applied -> IngestOutcome.PROCESSED
+            is ApplyResult.Obsolete -> IngestOutcome.OBSOLETE
+            is ApplyResult.Duplicate -> IngestOutcome.DUPLICATE
         }
 
     companion object {
@@ -67,25 +63,5 @@ class TransactionEventListener(
         private const val CORRELATION_ID = "correlationId"
         private const val ACCOUNT_ID = "accountId"
         private const val TRANSACTION_ID = "transactionId"
-        private const val PROCESSED = "processed"
-        private const val OBSOLETE = "obsolete"
-        private const val DUPLICATE = "duplicate"
-        private const val REJECTED = "rejected"
-        private const val ERROR = "error"
-        private val OUTCOMES = listOf(PROCESSED, OBSOLETE, DUPLICATE, REJECTED, ERROR)
-
-        private val OBJECTIVES = listOf(5L, 10L, 25L, 50L, 100L, 250L, 500L, 1_000L, 2_500L).map(Duration::ofMillis).toTypedArray()
-
-        /** As cinco series nascem em zero, para o Prometheus enxerga-las antes da primeira mensagem. */
-        private fun ingestTimer(
-            registry: MeterRegistry,
-            outcome: String,
-        ): Timer =
-            Timer
-                .builder("balance.ingest.duration")
-                .description("Parse, validacao e escrita de cada mensagem consumida")
-                .tag("outcome", outcome)
-                .serviceLevelObjectives(*OBJECTIVES)
-                .register(registry)
     }
 }

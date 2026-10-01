@@ -10,7 +10,7 @@ import br.com.itau.challenge.balance.port.input.GetBalanceUseCase
 import br.com.itau.challenge.balance.port.input.ProcessTransactionEventUseCase
 import br.com.itau.challenge.balance.port.output.BalanceSnapshotReader
 import br.com.itau.challenge.balance.port.output.BalanceSnapshotWriter
-import br.com.itau.challenge.balance.port.output.ProcessingMetrics
+import br.com.itau.challenge.balance.port.output.OutcomeMetrics
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.beans.factory.annotation.Qualifier
@@ -53,7 +53,7 @@ class ApplicationWiringTest {
     private lateinit var writer: BalanceSnapshotWriter
 
     @Autowired
-    private lateinit var processingMetrics: ProcessingMetrics
+    private lateinit var outcomeMetrics: OutcomeMetrics
 
     @Autowired
     @Qualifier("dynamoDbReadClient")
@@ -95,7 +95,7 @@ class ApplicationWiringTest {
     fun `ingestion is wired to the conditional dynamodb writer and the micrometer outcome counters`() {
         assertTrue(processEvent.javaClass.simpleName.startsWith("ProcessTransactionEventService"))
         assertTrue(writer is DynamoDbBalanceSnapshotWriter, "escritor inesperado: ${writer.javaClass}")
-        assertTrue(processingMetrics is MicrometerProcessingMetrics, "metricas inesperadas: ${processingMetrics.javaClass}")
+        assertTrue(outcomeMetrics is MicrometerProcessingMetrics, "metricas inesperadas: ${outcomeMetrics.javaClass}")
     }
 
     @Test

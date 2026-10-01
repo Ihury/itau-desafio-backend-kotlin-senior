@@ -3,7 +3,7 @@ package br.com.itau.challenge.balance.adapter.input.kafka
 import br.com.itau.challenge.balance.domain.exception.BalanceStoreUnavailableException
 import br.com.itau.challenge.balance.domain.exception.InvalidEventException
 import br.com.itau.challenge.balance.domain.model.StoreFailureCause
-import br.com.itau.challenge.balance.port.output.ProcessingMetrics
+import br.com.itau.challenge.balance.port.output.ConsumerFailureMetrics
 import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.apache.kafka.common.TopicPartition
 import org.slf4j.LoggerFactory
@@ -69,7 +69,7 @@ class DeadLetterConfig {
         @Value($$"${balance.events.dlt-topic}") dltTopic: String,
         properties: DeadLetterProperties,
         clock: Clock,
-        metrics: ProcessingMetrics,
+        metrics: ConsumerFailureMetrics,
         backOff: BackOffProperties,
         containerPausingBackOffHandler: BackOffHandler,
     ): CommonErrorHandler =
@@ -81,7 +81,7 @@ class DeadLetterConfig {
         dltTopic: String,
         waitForSendResultTimeout: Duration,
         clock: Clock,
-        metrics: ProcessingMetrics,
+        metrics: ConsumerFailureMetrics,
         backOff: BackOffProperties,
         backOffHandler: BackOffHandler,
     ): DefaultErrorHandler {
@@ -147,7 +147,7 @@ class DeadLetterConfig {
      * MDC `correlationId` (mesmo formato do listener) vale so durante cada log.
      */
     private class DeadLetterRetryListener(
-        private val metrics: ProcessingMetrics,
+        private val metrics: ConsumerFailureMetrics,
     ) : RetryListener {
         override fun failedDelivery(
             record: ConsumerRecord<*, *>,

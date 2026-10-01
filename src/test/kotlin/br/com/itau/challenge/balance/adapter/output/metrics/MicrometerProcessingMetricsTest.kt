@@ -1,5 +1,6 @@
 package br.com.itau.challenge.balance.adapter.output.metrics
 
+import br.com.itau.challenge.balance.domain.model.ApplyResult
 import br.com.itau.challenge.balance.domain.model.RejectionReason
 import br.com.itau.challenge.balance.domain.model.StoreFailureCause
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry
@@ -16,7 +17,7 @@ class MicrometerProcessingMetricsTest {
 
     @Test
     fun `applied increments only the processed outcome`() {
-        metrics.processed()
+        metrics.record(ApplyResult.Applied)
 
         assertEquals(1.0, events("processed"))
         assertEquals(0.0, events("obsolete"))
@@ -26,7 +27,7 @@ class MicrometerProcessingMetricsTest {
 
     @Test
     fun `obsolete increments only the obsolete outcome`() {
-        metrics.obsolete()
+        metrics.record(ApplyResult.Obsolete)
 
         assertEquals(1.0, events("obsolete"))
         assertEquals(0.0, events("processed"))
@@ -34,7 +35,7 @@ class MicrometerProcessingMetricsTest {
 
     @Test
     fun `a plain duplicate increments only the duplicate outcome`() {
-        metrics.duplicate(conflicting = false)
+        metrics.record(ApplyResult.Duplicate(conflicting = false))
 
         assertEquals(1.0, events("duplicate"))
         assertEquals(0.0, conflictingDuplicateAnomalies())
@@ -42,7 +43,7 @@ class MicrometerProcessingMetricsTest {
 
     @Test
     fun `a conflicting duplicate counts the outcome once as duplicate and adds the anomaly`() {
-        metrics.duplicate(conflicting = true)
+        metrics.record(ApplyResult.Duplicate(conflicting = true))
 
         assertEquals(1.0, events("duplicate"))
         assertEquals(1.0, conflictingDuplicateAnomalies())
@@ -52,10 +53,10 @@ class MicrometerProcessingMetricsTest {
 
     @Test
     fun `counters accumulate across calls`() {
-        repeat(3) { metrics.processed() }
-        repeat(2) { metrics.obsolete() }
-        metrics.duplicate(conflicting = false)
-        metrics.duplicate(conflicting = true)
+        repeat(3) { metrics.record(ApplyResult.Applied) }
+        repeat(2) { metrics.record(ApplyResult.Obsolete) }
+        metrics.record(ApplyResult.Duplicate(conflicting = false))
+        metrics.record(ApplyResult.Duplicate(conflicting = true))
 
         assertEquals(3.0, events("processed"))
         assertEquals(2.0, events("obsolete"))

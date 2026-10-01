@@ -7,7 +7,7 @@ import br.com.itau.challenge.balance.domain.model.RejectionReason
 import br.com.itau.challenge.balance.domain.model.TransactionEvent
 import br.com.itau.challenge.balance.port.input.ProcessTransactionEventUseCase
 import br.com.itau.challenge.balance.port.output.BalanceSnapshotWriter
-import br.com.itau.challenge.balance.port.output.ProcessingMetrics
+import br.com.itau.challenge.balance.port.output.OutcomeMetrics
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import java.time.Clock
@@ -24,7 +24,7 @@ import java.time.Clock
 @Service
 class ProcessTransactionEventService(
     private val writer: BalanceSnapshotWriter,
-    private val metrics: ProcessingMetrics,
+    private val metrics: OutcomeMetrics,
     private val clock: Clock,
     private val futureTolerance: FutureTolerance,
 ) : ProcessTransactionEventUseCase {
@@ -32,27 +32,27 @@ class ProcessTransactionEventService(
         rejectFutureTimestamps(event)
         val snapshot = BalanceSnapshot.from(event)
         val result = writer.applyIfNewer(snapshot)
+        metrics.record(result)
+        logOutcome(snapshot, result)
+        return result
+    }
+
+    private fun logOutcome(
+        snapshot: BalanceSnapshot,
+        result: ApplyResult,
+    ) {
         val accountId = snapshot.accountId
         val transactionId = snapshot.precedence.transactionId
         when (result) {
-            is ApplyResult.Applied -> {
-                metrics.processed()
-                log.info("event applied accountId={} transactionId={}", accountId, transactionId)
-            }
-            is ApplyResult.Obsolete -> {
-                metrics.obsolete()
-                log.debug("event obsolete accountId={} transactionId={}", accountId, transactionId)
-            }
-            is ApplyResult.Duplicate -> {
-                metrics.duplicate(result.conflicting)
+            is ApplyResult.Applied -> log.info("event applied accountId={} transactionId={}", accountId, transactionId)
+            is ApplyResult.Obsolete -> log.debug("event obsolete accountId={} transactionId={}", accountId, transactionId)
+            is ApplyResult.Duplicate ->
                 if (result.conflicting) {
                     log.warn("conflicting duplicate event accountId={} transactionId={}", accountId, transactionId)
                 } else {
                     log.debug("duplicate event accountId={} transactionId={}", accountId, transactionId)
                 }
-            }
         }
-        return result
     }
 
     /** `transaction.timestamp` e verificado antes de `account.created_at`: a ordem define o caminho quando ambos falham. */

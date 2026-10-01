@@ -1,5 +1,6 @@
 package br.com.itau.challenge.balance.adapter.input.kafka
 
+import br.com.itau.challenge.balance.adapter.output.metrics.MicrometerProcessingMetrics
 import br.com.itau.challenge.balance.domain.exception.BalanceStoreUnavailableException
 import br.com.itau.challenge.balance.domain.exception.InvalidEventException
 import br.com.itau.challenge.balance.domain.model.ApplyResult
@@ -52,7 +53,7 @@ class TransactionEventListenerTest {
 
     private val meters = SimpleMeterRegistry()
 
-    private fun listener(useCase: ProcessTransactionEventUseCase) = TransactionEventListener(parser, useCase, meters)
+    private fun listener(useCase: ProcessTransactionEventUseCase) = TransactionEventListener(parser, useCase, MicrometerProcessingMetrics(meters))
 
     private fun ingestTimer(outcome: String) = meters.find("balance.ingest.duration").tag("outcome", outcome).timer()
 
