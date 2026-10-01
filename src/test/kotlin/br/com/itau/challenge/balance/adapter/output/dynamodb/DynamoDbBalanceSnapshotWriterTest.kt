@@ -1,93 +1,16 @@
 package br.com.itau.challenge.balance.adapter.output.dynamodb
 
-import br.com.itau.challenge.balance.domain.exception.BalanceStoreRejectedException
-import br.com.itau.challenge.balance.domain.exception.BalanceStoreUnavailableException
-import br.com.itau.challenge.balance.domain.model.AccountStatus
 import br.com.itau.challenge.balance.domain.model.ApplyResult
 import br.com.itau.challenge.balance.domain.model.BalanceSnapshot
-import br.com.itau.challenge.balance.domain.model.StoreFailureCause
-import br.com.itau.challenge.balance.domain.model.TransactionEvent
+import br.com.itau.challenge.balance.testing.TransactionEventFixtures.DEFAULT_OWNER_ID
 import br.com.itau.challenge.balance.testing.TransactionEventFixtures.transactionEvent
-import io.micrometer.core.instrument.simple.SimpleMeterRegistry
+import br.com.itau.challenge.balance.testing.numberAttr
+import br.com.itau.challenge.balance.testing.stringAttr
 import org.junit.jupiter.api.Test
-import org.mockito.ArgumentCaptor
-import org.mockito.ArgumentMatchers.any
-import org.mockito.Mockito.doReturn
-import org.mockito.Mockito.doThrow
-import org.mockito.Mockito.mock
-import org.mockito.Mockito.never
-import org.mockito.Mockito.times
-import org.mockito.Mockito.verify
-import software.amazon.awssdk.awscore.exception.AwsErrorDetails
-import software.amazon.awssdk.core.exception.ApiCallAttemptTimeoutException
-import software.amazon.awssdk.core.exception.ApiCallTimeoutException
-import software.amazon.awssdk.core.exception.SdkClientException
-import software.amazon.awssdk.services.dynamodb.DynamoDbClient
-import software.amazon.awssdk.services.dynamodb.model.AttributeValue
-import software.amazon.awssdk.services.dynamodb.model.ConditionalCheckFailedException
-import software.amazon.awssdk.services.dynamodb.model.DynamoDbException
-import software.amazon.awssdk.services.dynamodb.model.GetItemRequest
-import software.amazon.awssdk.services.dynamodb.model.GetItemResponse
-import software.amazon.awssdk.services.dynamodb.model.InternalServerErrorException
-import software.amazon.awssdk.services.dynamodb.model.ProvisionedThroughputExceededException
 import software.amazon.awssdk.services.dynamodb.model.ReturnValuesOnConditionCheckFailure
-import software.amazon.awssdk.services.dynamodb.model.UpdateItemRequest
-import software.amazon.awssdk.services.dynamodb.model.UpdateItemResponse
-import java.util.concurrent.TimeUnit
 import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
-import kotlin.test.assertIs
-import kotlin.test.assertNull
-import kotlin.test.assertSame
-import kotlin.test.assertTrue
 
-class DynamoDbBalanceSnapshotWriterTest {
-    private val client = mock(DynamoDbClient::class.java)
-    private val registry = SimpleMeterRegistry()
-    private val writer = DynamoDbBalanceSnapshotWriter(client, "AccountBalances", registry)
-    private val snapshot = BalanceSnapshot.from(transactionEvent())
-
-    private fun stubUpdateSucceeds() {
-        doReturn(UpdateItemResponse.builder().build()).`when`(client).updateItem(any(UpdateItemRequest::class.java))
-    }
-
-    private fun stubUpdateFailsWith(failure: Throwable) {
-        doThrow(failure).`when`(client).updateItem(any(UpdateItemRequest::class.java))
-    }
-
-    private fun itemOf(event: TransactionEvent) = BalanceItemMapper.toItem(BalanceSnapshot.from(event))
-
-    /** Falha a condicao devolvendo o item vigente (`ALL_OLD`). */
-    private fun stubConditionFailedWithCurrentItem(current: Map<String, AttributeValue>) {
-        stubUpdateFailsWith(ConditionalCheckFailedException.builder().message("The conditional request failed").item(current).build())
-    }
-
-    private fun stubConditionFailedWithoutCurrentItem() {
-        stubUpdateFailsWith(ConditionalCheckFailedException.builder().message("The conditional request failed").build())
-    }
-
-    private fun stubGetItem(item: Map<String, AttributeValue>?) {
-        val response = if (item == null) GetItemResponse.builder().build() else GetItemResponse.builder().item(item).build()
-        doReturn(response).`when`(client).getItem(any(GetItemRequest::class.java))
-    }
-
-    private fun capturedUpdateRequest(): UpdateItemRequest {
-        val captor = ArgumentCaptor.forClass(UpdateItemRequest::class.java)
-        verify(client, times(1)).updateItem(captor.capture())
-        return captor.value
-    }
-
-    private fun serviceError(
-        status: Int,
-        code: String,
-    ): DynamoDbException =
-        DynamoDbException
-            .builder()
-            .statusCode(status)
-            .awsErrorDetails(AwsErrorDetails.builder().errorCode(code).errorMessage("detalhe interno").build())
-            .message("detalhe interno")
-            .build() as DynamoDbException
-
+class DynamoDbBalanceSnapshotWriterTest : DynamoDbWriterFixture() {
     @Test
     fun `the write is a single conditional UpdateItem with the exact update and condition expressions`() {
         stubUpdateSucceeds()
@@ -121,14 +44,14 @@ class DynamoDbBalanceSnapshotWriterTest {
             setOf(":v", ":o", ":st", ":amt", ":cur", ":cr", ":ts", ":tx"),
             values.keys,
         )
-        assertEquals(AttributeValue.builder().n("1").build(), values[":v"])
-        assertEquals(AttributeValue.builder().s("315e3cfe-f4af-4cd2-b298-a449e614349a").build(), values[":o"])
-        assertEquals(AttributeValue.builder().s("ENABLED").build(), values[":st"])
-        assertEquals(AttributeValue.builder().n("183.12").build(), values[":amt"])
-        assertEquals(AttributeValue.builder().s("BRL").build(), values[":cur"])
-        assertEquals(AttributeValue.builder().n("1634874339000000").build(), values[":cr"])
-        assertEquals(AttributeValue.builder().n("1751749453433123").build(), values[":ts"])
-        assertEquals(AttributeValue.builder().s("8e8ae808-b154-48b5-9f3e-553935cc4543").build(), values[":tx"])
+        assertEquals(numberAttr("1"), values[":v"])
+        assertEquals(stringAttr(DEFAULT_OWNER_ID), values[":o"])
+        assertEquals(stringAttr("ENABLED"), values[":st"])
+        assertEquals(numberAttr("183.12"), values[":amt"])
+        assertEquals(stringAttr("BRL"), values[":cur"])
+        assertEquals(numberAttr("1634874339000000"), values[":cr"])
+        assertEquals(numberAttr("1751749453433123"), values[":ts"])
+        assertEquals(stringAttr("8e8ae808-b154-48b5-9f3e-553935cc4543"), values[":tx"])
     }
 
     @Test
@@ -146,243 +69,5 @@ class DynamoDbBalanceSnapshotWriterTest {
         stubUpdateSucceeds()
 
         assertEquals(ApplyResult.Applied, writer.applyIfNewer(snapshot))
-    }
-
-    @Test
-    fun `a failed condition against a greater current item is obsolete and never an error`() {
-        stubConditionFailedWithCurrentItem(itemOf(transactionEvent(timestampMicros = snapshot.precedence.timestamp.micros + 1, balanceAmount = "999.00")))
-
-        assertEquals(ApplyResult.Obsolete, writer.applyIfNewer(snapshot))
-    }
-
-    @Test
-    fun `a failed condition against the same timestamp and a greater transaction id is obsolete`() {
-        stubConditionFailedWithCurrentItem(itemOf(transactionEvent(transactionId = "ffffffff-ffff-4fff-8fff-ffffffffff01")))
-
-        assertEquals(ApplyResult.Obsolete, writer.applyIfNewer(snapshot))
-    }
-
-    @Test
-    fun `a failed condition against the same key and content is a plain duplicate`() {
-        stubConditionFailedWithCurrentItem(itemOf(transactionEvent()))
-
-        assertEquals(ApplyResult.Duplicate(conflicting = false), writer.applyIfNewer(snapshot))
-    }
-
-    @Test
-    fun `a duplicate whose balance differs only by scale is not conflicting`() {
-        val stored = itemOf(transactionEvent()).toMutableMap()
-        stored["balanceAmount"] = AttributeValue.builder().n("183.120").build()
-        stubConditionFailedWithCurrentItem(stored)
-
-        assertEquals(ApplyResult.Duplicate(conflicting = false), writer.applyIfNewer(snapshot))
-
-        val normalized = itemOf(transactionEvent(balanceAmount = "183.10")).toMutableMap()
-        normalized["balanceAmount"] = AttributeValue.builder().n("183.1").build()
-        stubConditionFailedWithCurrentItem(normalized)
-        assertEquals(ApplyResult.Duplicate(conflicting = false), writer.applyIfNewer(BalanceSnapshot.from(transactionEvent(balanceAmount = "183.10"))))
-    }
-
-    @Test
-    fun `a duplicate with divergent content is a conflicting duplicate for each compared field`() {
-        val divergent =
-            mapOf(
-                "ownerId" to transactionEvent(ownerId = "dddddddd-f4af-4cd2-b298-a449e614349a"),
-                "accountStatus" to transactionEvent(accountStatus = AccountStatus.DISABLED),
-                "balanceCurrency" to transactionEvent(balanceCurrency = "USD"),
-                "balanceAmount" to transactionEvent(balanceAmount = "999.99"),
-            )
-        divergent.forEach { (field, event) ->
-            stubConditionFailedWithCurrentItem(itemOf(event))
-
-            assertEquals(ApplyResult.Duplicate(conflicting = true), writer.applyIfNewer(snapshot), field)
-        }
-    }
-
-    @Test
-    fun `there is no read before the write and none when the failed condition carries the old item`() {
-        stubUpdateSucceeds()
-        writer.applyIfNewer(snapshot)
-        stubConditionFailedWithCurrentItem(itemOf(transactionEvent()))
-        writer.applyIfNewer(snapshot)
-
-        verify(client, never()).getItem(any(GetItemRequest::class.java))
-        verify(client, times(2)).updateItem(any(UpdateItemRequest::class.java))
-    }
-
-    @Test
-    fun `without the old item a single consistent get item classifies the outcome`() {
-        stubConditionFailedWithoutCurrentItem()
-        stubGetItem(itemOf(transactionEvent(timestampMicros = snapshot.precedence.timestamp.micros + 5)))
-
-        assertEquals(ApplyResult.Obsolete, writer.applyIfNewer(snapshot))
-
-        val captor = ArgumentCaptor.forClass(GetItemRequest::class.java)
-        verify(client, times(1)).getItem(captor.capture())
-        assertTrue(captor.value.consistentRead())
-        assertEquals("AccountBalances", captor.value.tableName())
-        assertEquals(BalanceItemMapper.keyOf(snapshot.accountId), captor.value.key())
-    }
-
-    @Test
-    fun `the fallback read also distinguishes duplicate and conflicting duplicate`() {
-        stubConditionFailedWithoutCurrentItem()
-        stubGetItem(itemOf(transactionEvent()))
-        assertEquals(ApplyResult.Duplicate(conflicting = false), writer.applyIfNewer(snapshot))
-
-        stubGetItem(itemOf(transactionEvent(balanceAmount = "1.00")))
-        assertEquals(ApplyResult.Duplicate(conflicting = true), writer.applyIfNewer(snapshot))
-    }
-
-    @Test
-    fun `when the item is missing even in the fallback read the failure is transient and the event is redelivered`() {
-        stubConditionFailedWithoutCurrentItem()
-        stubGetItem(null)
-
-        val thrown = assertFailsWith<BalanceStoreUnavailableException> { writer.applyIfNewer(snapshot) }
-
-        assertEquals(StoreFailureCause.UNAVAILABLE, thrown.failureCause)
-    }
-
-    @Test
-    fun `a current item with a lower precedence than the event contradicts the failed condition and is not transient`() {
-        stubConditionFailedWithoutCurrentItem()
-        stubGetItem(itemOf(transactionEvent(timestampMicros = snapshot.precedence.timestamp.micros - 1, balanceAmount = "5555.55")))
-
-        val thrown: Throwable = assertFailsWith<IllegalStateException> { writer.applyIfNewer(snapshot) }
-
-        assertTrue(thrown !is BalanceStoreUnavailableException, "retentar para sempre bloquearia a particao")
-        assertTrue("5555.55" !in thrown.message.orEmpty() && "183.12" !in thrown.message.orEmpty(), "sem valores na mensagem")
-    }
-
-    @Test
-    fun `the same contradiction carried by the old item of the failed condition is also an internal failure`() {
-        stubConditionFailedWithCurrentItem(itemOf(transactionEvent(timestampMicros = snapshot.precedence.timestamp.micros - 1, balanceAmount = "5555.55")))
-
-        val thrown = assertFailsWith<IllegalStateException> { writer.applyIfNewer(snapshot) }
-
-        assertTrue("5555.55" !in thrown.message.orEmpty(), "sem valores na mensagem")
-        verify(client, never()).getItem(any(GetItemRequest::class.java))
-    }
-
-    @Test
-    fun `a failure of the fallback read is translated and never swallowed`() {
-        stubConditionFailedWithoutCurrentItem()
-        doThrow(ProvisionedThroughputExceededException.builder().message("x").build()).`when`(client).getItem(any(GetItemRequest::class.java))
-
-        val thrown = assertFailsWith<BalanceStoreUnavailableException> { writer.applyIfNewer(snapshot) }
-
-        assertEquals(StoreFailureCause.THROTTLED, thrown.failureCause)
-    }
-
-    @Test
-    fun `a current item without the precedence attributes is an internal failure and never a classification`() {
-        stubConditionFailedWithCurrentItem(mapOf("pk" to AttributeValue.builder().s("ACCOUNT#x").build()))
-
-        assertFailsWith<IllegalStateException> { writer.applyIfNewer(snapshot) }
-    }
-
-    @Test
-    fun `an unreadable current item fails without leaking balances or owners in the message`() {
-        stubConditionFailedWithCurrentItem(mapOf("lastTxTsMicros" to AttributeValue.builder().n("abc").build()))
-
-        val thrown = assertFailsWith<IllegalStateException> { writer.applyIfNewer(snapshot) }
-
-        assertTrue("183.12" !in thrown.message.orEmpty() && "315e3cfe" !in thrown.message.orEmpty())
-    }
-
-    @Test
-    fun `each sdk failure becomes its store failure cause and keeps the original as cause`() {
-        val transientFailures =
-            mapOf(
-                ProvisionedThroughputExceededException.builder().message("x").build() to StoreFailureCause.THROTTLED,
-                serviceError(400, "ThrottlingException") to StoreFailureCause.THROTTLED,
-                ApiCallTimeoutException.builder().message("x").build() to StoreFailureCause.TIMEOUT,
-                ApiCallAttemptTimeoutException.builder().message("x").build() to StoreFailureCause.TIMEOUT,
-                SdkClientException.builder().message("Unable to execute HTTP request").build() to StoreFailureCause.UNAVAILABLE,
-                InternalServerErrorException.builder().message("x").build() to StoreFailureCause.UNAVAILABLE,
-                serviceError(503, "ServiceUnavailable") to StoreFailureCause.UNAVAILABLE,
-            )
-        transientFailures.forEach { (failure, expected) ->
-            stubUpdateFailsWith(failure)
-
-            val thrown = assertFailsWith<BalanceStoreUnavailableException> { writer.applyIfNewer(snapshot) }
-
-            assertEquals(expected, thrown.failureCause, failure.javaClass.simpleName)
-            assertSame(failure, thrown.cause)
-        }
-    }
-
-    @Test
-    fun `a validation exception is a rejection of the store`() {
-        val validation = serviceError(400, "ValidationException")
-        stubUpdateFailsWith(validation)
-
-        val thrown = assertFailsWith<BalanceStoreRejectedException> { writer.applyIfNewer(snapshot) }
-
-        assertSame(validation, thrown.cause)
-    }
-
-    @Test
-    fun `failures that are not from the sdk propagate as they are`() {
-        val defect = IllegalStateException("defeito")
-        stubUpdateFailsWith(defect)
-
-        assertSame(defect, assertFailsWith<IllegalStateException> { writer.applyIfNewer(snapshot) })
-    }
-
-    @Test
-    fun `translated failures never carry the payload of the event`() {
-        stubUpdateFailsWith(serviceError(500, "InternalFailure"))
-
-        val thrown = assertFailsWith<BalanceStoreUnavailableException> { writer.applyIfNewer(snapshot) }
-
-        assertTrue("183.12" !in thrown.message.orEmpty() && "315e3cfe" !in thrown.message.orEmpty())
-        assertNull(thrown.cause?.cause)
-    }
-
-    private fun writeTimer(result: String) = registry.find("balance.store.write.duration").tag("result", result).timer()
-
-    @Test
-    fun `write duration is timed as applied when the condition holds`() {
-        stubUpdateSucceeds()
-
-        writer.applyIfNewer(snapshot)
-
-        assertEquals(1L, writeTimer("applied")?.count())
-        assertEquals(0L, writeTimer("condition_failed")?.count())
-        assertEquals(0L, writeTimer("error")?.count())
-    }
-
-    @Test
-    fun `write duration is timed as condition failed for duplicates and obsolete events, which are not errors`() {
-        stubConditionFailedWithCurrentItem(itemOf(transactionEvent()))
-        writer.applyIfNewer(snapshot)
-        stubConditionFailedWithCurrentItem(itemOf(transactionEvent(timestampMicros = 1751749453433999L)))
-        writer.applyIfNewer(snapshot)
-
-        assertEquals(2L, writeTimer("condition_failed")?.count())
-        assertEquals(0L, writeTimer("error")?.count())
-    }
-
-    @Test
-    fun `write duration is recorded as error when the sdk throws and is never tagged with account data`() {
-        stubUpdateFailsWith(ApiCallTimeoutException.builder().message("x").build())
-
-        assertFailsWith<BalanceStoreUnavailableException> { writer.applyIfNewer(snapshot) }
-
-        assertEquals(1L, writeTimer("error")?.count())
-        val tagKeys = registry.find("balance.store.write.duration").timers().flatMap { timer -> timer.id.tags.map { it.key } }.toSet()
-        assertEquals(setOf("result"), tagKeys)
-    }
-
-    @Test
-    fun `write duration publishes a histogram with the documented service level objectives`() {
-        stubUpdateSucceeds()
-        writer.applyIfNewer(snapshot)
-
-        val buckets = writeTimer("applied")!!.takeSnapshot().histogramCounts().map { it.bucket(TimeUnit.MILLISECONDS) }
-        assertTrue(buckets.isNotEmpty(), "sem histograma")
-        assertTrue(5.0 in buckets && 2000.0 in buckets, "buckets $buckets")
     }
 }

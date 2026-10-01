@@ -16,14 +16,10 @@ import software.amazon.awssdk.services.dynamodb.model.TableDescription
 import software.amazon.awssdk.services.dynamodb.model.TableStatus
 import java.time.Duration
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
-/**
- * Grupos de saude na porta de gerenciamento: `liveness` e `readiness` refletem so o estado do proprio
- * processo e permanecem 200 com o DynamoDB fora (a instancia nao sai de rotacao); a saude da dependencia vive no grupo
- * `dependencies` e no gauge `balance.dependency.up`.
- */
 class HealthGroupsTest : ManagedApplicationTest() {
     @Autowired
     private lateinit var groups: HealthEndpointGroups
@@ -39,6 +35,12 @@ class HealthGroupsTest : ManagedApplicationTest() {
             .describeTable(any(DescribeTableRequest::class.java))
     }
 
+    private fun awaitDependenciesStatus(expectedStatusCode: Int) {
+        await.atMost(PROBE_CACHE_TTL_WITH_MARGIN).untilAsserted {
+            assertEquals(expectedStatusCode, management("/actuator/health/dependencies").statusCode())
+        }
+    }
+
     private fun dependencyUpGauge(): Double {
         val line = management("/actuator/prometheus").body().lines().single { it.startsWith("balance_dependency_up{") }
         return line.substringAfterLast(' ').toDouble()
@@ -52,19 +54,18 @@ class HealthGroupsTest : ManagedApplicationTest() {
         val dependencies = assertNotNull(groups.get("dependencies"))
 
         assertTrue(readiness.isMember("readinessState"))
-        assertTrue(!readiness.isMember("dynamoDb"), "o DynamoDB nao pode estar na readiness")
+        assertFalse(readiness.isMember("dynamoDb"), "o DynamoDB nao pode estar na readiness")
         assertTrue(liveness.isMember("livenessState"))
-        assertTrue(!liveness.isMember("dynamoDb"), "o DynamoDB nao pode estar na liveness")
+        assertFalse(liveness.isMember("dynamoDb"), "o DynamoDB nao pode estar na liveness")
         assertTrue(dependencies.isMember("dynamoDb"))
-        assertTrue(!dependencies.isMember("readinessState") && !dependencies.isMember("livenessState"))
+        assertFalse(dependencies.isMember("readinessState") || dependencies.isMember("livenessState"))
     }
 
     @Test
     fun `with dynamodb down dependencies is 503 while liveness and readiness stay 200 and after it returns everything is up`() {
         stubDynamoDbDown()
 
-        // o resultado do probe fica em cache por 5 s (pode vir de outro teste): espera a janela renovar
-        await.atMost(Duration.ofSeconds(8)).untilAsserted { assertEquals(503, management("/actuator/health/dependencies").statusCode()) }
+        awaitDependenciesStatus(503)
         val dependencies = management("/actuator/health/dependencies")
         assertEquals("""{"status":"DOWN"}""", dependencies.body(), "show-details=never: nada alem do status")
         assertEquals(200, management("/actuator/health/liveness").statusCode())
@@ -76,7 +77,7 @@ class HealthGroupsTest : ManagedApplicationTest() {
 
         stubDynamoDbUp()
 
-        await.atMost(Duration.ofSeconds(8)).untilAsserted { assertEquals(200, management("/actuator/health/dependencies").statusCode()) }
+        awaitDependenciesStatus(200)
         assertEquals("""{"status":"UP"}""", management("/actuator/health/dependencies").body())
         assertEquals(1.0, dependencyUpGauge())
         assertEquals(200, management("/actuator/health/readiness").statusCode())
@@ -89,5 +90,9 @@ class HealthGroupsTest : ManagedApplicationTest() {
         listOf("/actuator/health", "/actuator/health/liveness", "/actuator/health/readiness", "/actuator/health/dependencies").forEach { path ->
             assertEquals(404, api(path).statusCode(), "$path nao pode responder na porta da API")
         }
+    }
+
+    private companion object {
+        val PROBE_CACHE_TTL_WITH_MARGIN: Duration = Duration.ofSeconds(8)
     }
 }

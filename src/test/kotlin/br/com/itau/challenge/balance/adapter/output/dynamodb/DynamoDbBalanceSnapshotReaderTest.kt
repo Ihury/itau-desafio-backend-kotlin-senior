@@ -7,6 +7,7 @@ import br.com.itau.challenge.balance.domain.model.BalanceSnapshot
 import br.com.itau.challenge.balance.domain.model.StoreFailureCause
 import br.com.itau.challenge.balance.testing.TransactionEventFixtures.DEFAULT_ACCOUNT_ID
 import br.com.itau.challenge.balance.testing.TransactionEventFixtures.transactionEvent
+import br.com.itau.challenge.balance.testing.stringAttr
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry
 import org.junit.jupiter.api.Test
 import org.mockito.ArgumentCaptor
@@ -41,6 +42,13 @@ class DynamoDbBalanceSnapshotReaderTest {
         val response = if (item == null) GetItemResponse.builder().build() else GetItemResponse.builder().item(item).build()
         doReturn(response).`when`(client).getItem(any(GetItemRequest::class.java))
     }
+
+    private fun itemWith(
+        attribute: String,
+        value: AttributeValue,
+    ): Map<String, AttributeValue> = BalanceItemMapper.toItem(snapshot).toMutableMap().apply { put(attribute, value) }
+
+    private fun itemWithout(attribute: String): Map<String, AttributeValue> = BalanceItemMapper.toItem(snapshot).toMutableMap().apply { remove(attribute) }
 
     private fun capturedRequest(): GetItemRequest {
         val captor = ArgumentCaptor.forClass(GetItemRequest::class.java)
@@ -102,9 +110,7 @@ class DynamoDbBalanceSnapshotReaderTest {
 
     @Test
     fun `corrupted item propagates IllegalStateException and never becomes invalid event, null or unavailable`() {
-        val corrupted = BalanceItemMapper.toItem(snapshot).toMutableMap()
-        corrupted["accountStatus"] = AttributeValue.builder().s("SUSPENDED").build()
-        respondWith(corrupted)
+        respondWith(itemWith("accountStatus", stringAttr("SUSPENDED")))
 
         val failure = assertFailsWith<IllegalStateException> { reader().find(accountId) }
 
@@ -114,9 +120,7 @@ class DynamoDbBalanceSnapshotReaderTest {
 
     @Test
     fun `corrupted item is counted in a metric so it can be alerted on`() {
-        val corrupted = BalanceItemMapper.toItem(snapshot).toMutableMap()
-        corrupted.remove("balanceAmount")
-        respondWith(corrupted)
+        respondWith(itemWithout("balanceAmount"))
 
         assertFailsWith<IllegalStateException> { reader().find(accountId) }
 
@@ -154,9 +158,7 @@ class DynamoDbBalanceSnapshotReaderTest {
 
     @Test
     fun `a corrupted item still counts as found because the database answered`() {
-        val corrupted = BalanceItemMapper.toItem(snapshot).toMutableMap()
-        corrupted.remove("balanceAmount")
-        respondWith(corrupted)
+        respondWith(itemWithout("balanceAmount"))
 
         assertFailsWith<IllegalStateException> { reader().find(accountId) }
 

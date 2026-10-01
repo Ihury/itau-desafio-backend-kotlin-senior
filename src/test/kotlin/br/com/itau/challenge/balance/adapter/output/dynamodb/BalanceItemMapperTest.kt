@@ -5,7 +5,10 @@ import br.com.itau.challenge.balance.domain.model.AccountId
 import br.com.itau.challenge.balance.domain.model.AccountStatus
 import br.com.itau.challenge.balance.domain.model.BalanceSnapshot
 import br.com.itau.challenge.balance.testing.TransactionEventFixtures.DEFAULT_ACCOUNT_ID
+import br.com.itau.challenge.balance.testing.TransactionEventFixtures.DEFAULT_TIMESTAMP_MICROS
 import br.com.itau.challenge.balance.testing.TransactionEventFixtures.transactionEvent
+import br.com.itau.challenge.balance.testing.numberAttr
+import br.com.itau.challenge.balance.testing.stringAttr
 import org.junit.jupiter.api.Test
 import software.amazon.awssdk.services.dynamodb.model.AttributeValue
 import java.math.BigDecimal
@@ -20,7 +23,7 @@ class BalanceItemMapperTest {
         balanceAmount: String = "183.12",
         balanceCurrency: String = "BRL",
         accountStatus: AccountStatus = AccountStatus.ENABLED,
-        timestampMicros: Long = 1751749453433000L,
+        timestampMicros: Long = DEFAULT_TIMESTAMP_MICROS,
         accountId: String = DEFAULT_ACCOUNT_ID,
     ): BalanceSnapshot =
         BalanceSnapshot.from(
@@ -34,10 +37,6 @@ class BalanceItemMapperTest {
         )
 
     private fun validItem(): MutableMap<String, AttributeValue> = BalanceItemMapper.toItem(snapshot()).toMutableMap()
-
-    private fun s(value: String): AttributeValue = AttributeValue.builder().s(value).build()
-
-    private fun n(value: String): AttributeValue = AttributeValue.builder().n(value).build()
 
     @Test
     fun `toItem produces exactly the attributes of the data model`() {
@@ -79,7 +78,7 @@ class BalanceItemMapperTest {
 
     @Test
     fun `round trip of the stored number keeps the exact value even when the database normalizes the scale`() {
-        val item = validItem().apply { put("balanceAmount", n("183.1")) }
+        val item = validItem().apply { put("balanceAmount", numberAttr("183.1")) }
 
         val restored = BalanceItemMapper.fromItem(item)
 
@@ -101,14 +100,13 @@ class BalanceItemMapperTest {
     }
 
     @Test
-    fun `a persisted snapshot is trusted and read back even with timestamps below the default plausibility minimums`() {
-        // os minimos (BALANCE_MIN_*) sao configuraveis e so se aplicam na ESCRITA; a leitura nao os reaplica (nem vira 500)
+    fun `a persisted snapshot is trusted and read back even with timestamps below the plausibility minimums, which only apply when writing`() {
         val transaction1995 = 803_174_400_000_000L
         val created1850 = -3_155_760_000_000_000L
         val item =
             validItem().apply {
-                put("lastTxTsMicros", n(transaction1995.toString()))
-                put("accountCreatedAtMicros", n(created1850.toString()))
+                put("lastTxTsMicros", numberAttr(transaction1995.toString()))
+                put("accountCreatedAtMicros", numberAttr(created1850.toString()))
             }
 
         val restored = BalanceItemMapper.fromItem(item)
@@ -143,34 +141,37 @@ class BalanceItemMapperTest {
 
     @Test
     fun `wrongly typed attribute is a corrupted item`() {
-        assertFailsWith<IllegalStateException> { BalanceItemMapper.fromItem(validItem().apply { put("balanceAmount", s("183.12")) }) }
-        assertFailsWith<IllegalStateException> { BalanceItemMapper.fromItem(validItem().apply { put("ownerId", n("1")) }) }
+        assertFailsWith<IllegalStateException> { BalanceItemMapper.fromItem(validItem().apply { put("balanceAmount", stringAttr("183.12")) }) }
+        assertFailsWith<IllegalStateException> { BalanceItemMapper.fromItem(validItem().apply { put("ownerId", numberAttr("1")) }) }
     }
 
     @Test
     fun `invalid numbers are a corrupted item and the message never carries the offending text`() {
         val failure =
             assertFailsWith<IllegalStateException> {
-                BalanceItemMapper.fromItem(validItem().apply { put("balanceAmount", n("12abc34")) })
+                BalanceItemMapper.fromItem(validItem().apply { put("balanceAmount", numberAttr("12abc34")) })
             }
         assertFalse("12abc34" in failure.message.orEmpty())
         assertNull(failure.cause, "causas de parser podem conter o valor")
+    }
 
-        assertFailsWith<IllegalStateException> { BalanceItemMapper.fromItem(validItem().apply { put("lastTxTsMicros", n("1.5")) }) }
+    @Test
+    fun `a fractional timestamp is a corrupted item`() {
+        assertFailsWith<IllegalStateException> { BalanceItemMapper.fromItem(validItem().apply { put("lastTxTsMicros", numberAttr("1.5")) }) }
     }
 
     @Test
     fun `unknown domain values and out of bounds data become IllegalStateException and never InvalidEventException`() {
         val cases =
             listOf(
-                validItem().apply { put("accountStatus", s("SUSPENDED")) },
-                validItem().apply { put("balanceCurrency", s("brl")) },
-                validItem().apply { put("ownerId", s("1-1-1-1-1")) },
-                validItem().apply { put("lastTxId", s("not-a-uuid")) },
-                validItem().apply { put("lastTxTsMicros", n("not-a-number")) },
-                validItem().apply { put("accountCreatedAtMicros", n("1.5")) },
-                validItem().apply { put("balanceAmount", n("123456789012345678901234567890123456789")) },
-                validItem().apply { put("pk", s("ACCOUNT#xyz")) },
+                validItem().apply { put("accountStatus", stringAttr("SUSPENDED")) },
+                validItem().apply { put("balanceCurrency", stringAttr("brl")) },
+                validItem().apply { put("ownerId", stringAttr("1-1-1-1-1")) },
+                validItem().apply { put("lastTxId", stringAttr("not-a-uuid")) },
+                validItem().apply { put("lastTxTsMicros", numberAttr("not-a-number")) },
+                validItem().apply { put("accountCreatedAtMicros", numberAttr("1.5")) },
+                validItem().apply { put("balanceAmount", numberAttr("123456789012345678901234567890123456789")) },
+                validItem().apply { put("pk", stringAttr("ACCOUNT#xyz")) },
             )
 
         cases.forEach { item ->
@@ -182,8 +183,8 @@ class BalanceItemMapperTest {
 
     @Test
     fun `unexpected key layout or schema version is a corrupted item`() {
-        assertFailsWith<IllegalStateException> { BalanceItemMapper.fromItem(validItem().apply { put("pk", s("OWNER#$DEFAULT_ACCOUNT_ID")) }) }
-        assertFailsWith<IllegalStateException> { BalanceItemMapper.fromItem(validItem().apply { put("sk", s("TX#1")) }) }
-        assertFailsWith<IllegalStateException> { BalanceItemMapper.fromItem(validItem().apply { put("schemaVersion", n("2")) }) }
+        assertFailsWith<IllegalStateException> { BalanceItemMapper.fromItem(validItem().apply { put("pk", stringAttr("OWNER#$DEFAULT_ACCOUNT_ID")) }) }
+        assertFailsWith<IllegalStateException> { BalanceItemMapper.fromItem(validItem().apply { put("sk", stringAttr("TX#1")) }) }
+        assertFailsWith<IllegalStateException> { BalanceItemMapper.fromItem(validItem().apply { put("schemaVersion", numberAttr("2")) }) }
     }
 }

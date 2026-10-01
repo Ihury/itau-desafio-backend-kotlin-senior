@@ -4,13 +4,13 @@ import br.com.itau.challenge.balance.domain.exception.BalanceStoreRejectedExcept
 import br.com.itau.challenge.balance.domain.exception.BalanceStoreUnavailableException
 import br.com.itau.challenge.balance.domain.model.StoreFailureCause
 import br.com.itau.challenge.balance.domain.model.StoreFailureDetails
+import br.com.itau.challenge.balance.testing.credentialsFailure
+import br.com.itau.challenge.balance.testing.serviceError
 import org.junit.jupiter.api.Test
-import software.amazon.awssdk.awscore.exception.AwsErrorDetails
 import software.amazon.awssdk.awscore.exception.AwsServiceException
 import software.amazon.awssdk.core.exception.ApiCallAttemptTimeoutException
 import software.amazon.awssdk.core.exception.ApiCallTimeoutException
 import software.amazon.awssdk.core.exception.SdkClientException
-import software.amazon.awssdk.services.dynamodb.model.DynamoDbException
 import software.amazon.awssdk.services.dynamodb.model.InternalServerErrorException
 import software.amazon.awssdk.services.dynamodb.model.ProvisionedThroughputExceededException
 import software.amazon.awssdk.services.dynamodb.model.RequestLimitExceededException
@@ -23,17 +23,6 @@ import kotlin.test.assertNull
 import kotlin.test.assertSame
 
 class DynamoDbExceptionTranslatorTest {
-    private fun serviceError(
-        status: Int,
-        code: String,
-    ): DynamoDbException =
-        DynamoDbException
-            .builder()
-            .statusCode(status)
-            .awsErrorDetails(AwsErrorDetails.builder().errorCode(code).errorMessage("detalhe interno").build())
-            .message("detalhe interno")
-            .build() as DynamoDbException
-
     private fun readCause(failure: Throwable): StoreFailureCause {
         val translated = DynamoDbExceptionTranslator.translateReadFailure(failure)
         assertIs<BalanceStoreUnavailableException>(translated)
@@ -61,12 +50,6 @@ class DynamoDbExceptionTranslatorTest {
         assertEquals(StoreFailureCause.UNAVAILABLE, readCause(InternalServerErrorException.builder().message("x").build()))
         assertEquals(StoreFailureCause.UNAVAILABLE, readCause(SdkClientException.builder().message("Unable to execute HTTP request").build()))
     }
-
-    private fun credentialsFailure() =
-        SdkClientException
-            .builder()
-            .message("Unable to load credentials from any of the providers in the chain AwsCredentialsProviderChain: [...]")
-            .build()
 
     @Test
     fun `missing table, denied access and credential problems are misconfigured on read`() {
@@ -125,20 +108,33 @@ class DynamoDbExceptionTranslatorTest {
     }
 
     @Test
-    fun `the diagnostic details omit what does not exist and never carry the free text of the sdk`() {
+    fun `the diagnostic details of a client side failure omit the error code and the status code`() {
         val client = detailsOf(SdkClientException.builder().message("segredo do sdk").build())
+
         assertEquals("software.amazon.awssdk.core.exception.SdkClientException", client.exceptionClass)
         assertNull(client.errorCode)
         assertNull(client.statusCode)
         assertEquals("exception=software.amazon.awssdk.core.exception.SdkClientException", client.toString())
+    }
 
+    @Test
+    fun `the diagnostic details of a service failure without error details omit the error code but keep the status code`() {
         val withoutDetails = detailsOf(AwsServiceException.builder().statusCode(418).message("segredo do sdk").build())
+
         assertNull(withoutDetails.errorCode)
         assertEquals(418, withoutDetails.statusCode)
+    }
 
-        // errorCode vem do servidor: so um token curto e seguro vai ao log (nada de quebra de linha nem de texto livre)
+    @Test
+    fun `the error code is kept only when it is a short single line token, so free text never reaches the log`() {
         assertNull(detailsOf(serviceError(400, "linha 1\nlinha 2 com espacos")).errorCode)
         assertNull(detailsOf(serviceError(400, "x".repeat(200))).errorCode)
+    }
+
+    @Test
+    fun `the diagnostic details never carry the free text of the sdk`() {
+        val client = detailsOf(SdkClientException.builder().message("segredo do sdk").build())
+        val withoutDetails = detailsOf(AwsServiceException.builder().statusCode(418).message("segredo do sdk").build())
 
         listOf(client, withoutDetails, detailsOf(serviceError(400, "ThrottlingException"))).forEach {
             assertFalse("segredo" in it.toString() || "detalhe interno" in it.toString(), it.toString())
