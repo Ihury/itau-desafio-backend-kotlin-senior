@@ -1,9 +1,5 @@
 package br.com.itau.challenge.balance.domain.model
 
-/**
- * Projecao (nunca um calculo) do evento de maior [precedence]. Todos os campos vem do mesmo evento. Tipo, valor e situacao da
- * transacao nao sao guardados (sem padrao de acesso).
- */
 data class BalanceSnapshot(
     val accountId: AccountId,
     val ownerId: OwnerId,
@@ -12,10 +8,10 @@ data class BalanceSnapshot(
     val accountCreatedAt: EventInstant,
     val precedence: Precedence,
 ) {
-    /** Vence o [current] so com precedencia estritamente maior (ou se nao ha [current]). */
+    fun isDisabled(): Boolean = status == AccountStatus.DISABLED
+
     fun supersedes(current: BalanceSnapshot?): Boolean = current == null || precedence > current.precedence
 
-    /** Nunca expoe titular nem saldo. */
     override fun toString(): String = "BalanceSnapshot(accountId=$accountId, status=$status, precedence=$precedence)"
 
     companion object {

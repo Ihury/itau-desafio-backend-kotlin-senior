@@ -12,15 +12,6 @@ import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import java.time.Clock
 
-/**
- * O snapshot e a projecao do evento de maior precedencia (nunca uma soma de transacoes) e a arbitragem e feita atomicamente
- * pelo armazenamento. Contabiliza exatamente um desfecho por evento aplicado; falhas do armazenamento propagam intactas, sem
- * desfecho contabilizado. Nunca registra saldo nem titular.
- *
- * Antes de escrever, valida que `transaction.timestamp` e `account.created_at` nao passam de `agora + tolerancia`: o relogio
- * so valida e nunca participa da precedencia. A rejeicao lanca [InvalidEventException] (`invalid_timestamp`, com o caminho do
- * campo) sem tocar o armazenamento.
- */
 @Service
 class ProcessTransactionEventService(
     private val writer: BalanceSnapshotWriter,
@@ -36,6 +27,14 @@ class ProcessTransactionEventService(
         logOutcome(snapshot, result)
         return result
     }
+
+    private fun rejectFutureTimestamps(event: TransactionEvent) {
+        val limit = clock.instant().plus(futureTolerance.duration)
+        if (event.transaction.timestamp.isAfter(limit)) throw futureTimestampRejection("transaction.timestamp")
+        if (event.account.createdAt.isAfter(limit)) throw futureTimestampRejection("account.created_at")
+    }
+
+    private fun futureTimestampRejection(path: String) = InvalidEventException(RejectionReason.INVALID_TIMESTAMP, path)
 
     private fun logOutcome(
         snapshot: BalanceSnapshot,
@@ -55,23 +54,7 @@ class ProcessTransactionEventService(
         }
     }
 
-    /** `transaction.timestamp` e verificado antes de `account.created_at`: a ordem define o caminho quando ambos falham. */
-    private fun rejectFutureTimestamps(event: TransactionEvent) {
-        val limit = latestAcceptableMicros()
-        if (event.transaction.timestamp.micros > limit) throw futureTimestampRejection("transaction.timestamp")
-        if (event.account.createdAt.micros > limit) throw futureTimestampRejection("account.created_at")
-    }
-
-    private fun latestAcceptableMicros(): Long {
-        val latest = clock.instant().plus(futureTolerance.duration)
-        return Math.addExact(Math.multiplyExact(latest.epochSecond, MICROS_PER_SECOND), latest.nano / NANOS_PER_MICRO)
-    }
-
-    private fun futureTimestampRejection(path: String) = InvalidEventException(RejectionReason.INVALID_TIMESTAMP, path)
-
     private companion object {
-        private const val MICROS_PER_SECOND = 1_000_000L
-        private const val NANOS_PER_MICRO = 1_000L
         private val log = LoggerFactory.getLogger(ProcessTransactionEventService::class.java)
     }
 }

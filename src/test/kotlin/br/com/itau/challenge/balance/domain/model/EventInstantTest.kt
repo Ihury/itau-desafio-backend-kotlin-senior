@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test
 import java.time.Instant
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class EventInstantTest {
@@ -75,6 +76,17 @@ class EventInstantTest {
         assertEquals(Instant.parse("1969-12-31T23:59:58.999999Z"), EventInstant.accountCreatedAt(-1_000_001).toInstant())
         assertEquals(Instant.parse("1900-01-01T00:00:00Z"), EventInstant.accountCreatedAt(epoch1900Micros).toInstant())
         assertEquals(Instant.parse("1970-01-01T00:00:00Z"), EventInstant.accountCreatedAt(0).toInstant())
+    }
+
+    @Test
+    fun `is after an instant only when strictly later at microsecond precision`() {
+        val limit = Instant.parse("2025-07-05T21:04:13.433123Z")
+        val atLimit = EventInstant.transactionTimestamp(1751749453433123)
+
+        assertFalse(atLimit.isAfter(limit))
+        assertTrue(EventInstant.transactionTimestamp(1751749453433124).isAfter(limit))
+        assertFalse(EventInstant.transactionTimestamp(1751749453433122).isAfter(limit))
+        assertFalse(atLimit.isAfter(limit.plusNanos(999)))
     }
 
     @Test

@@ -3,28 +3,21 @@ package br.com.itau.challenge.balance.domain.model
 import br.com.itau.challenge.balance.domain.exception.InvalidEventException
 import java.time.Instant
 
-/**
- * Instante de um evento em microssegundos desde a epoca (`Long`), sem perda de precisao. O minimo aceito depende do papel do
- * campo: [transactionTimestamp] (entra na precedencia; detecta segundos/milissegundos) e [accountCreatedAt] (contas
- * anteriores a 2000 sao legitimas, e valores anteriores a 1970 sao negativos). O maximo (agora + tolerancia) precisa de
- * relogio e e verificado na camada `application`.
- */
 @JvmInline
 value class EventInstant private constructor(
-    private val epochMicros: Long,
+    val micros: Long,
 ) : Comparable<EventInstant> {
-    val micros: Long get() = epochMicros
-
-    /** `floorDiv/floorMod` sao obrigatorios para microssegundos negativos. */
     fun toInstant(): Instant =
         Instant.ofEpochSecond(
-            Math.floorDiv(epochMicros, MICROS_PER_SECOND),
-            Math.floorMod(epochMicros, MICROS_PER_SECOND) * NANOS_PER_MICRO,
+            Math.floorDiv(micros, MICROS_PER_SECOND),
+            Math.floorMod(micros, MICROS_PER_SECOND) * NANOS_PER_MICRO,
         )
 
-    override fun compareTo(other: EventInstant): Int = epochMicros.compareTo(other.epochMicros)
+    fun isAfter(instant: Instant): Boolean = micros > toMicros(instant)
 
-    override fun toString(): String = epochMicros.toString()
+    override fun compareTo(other: EventInstant): Int = micros.compareTo(other.micros)
+
+    override fun toString(): String = micros.toString()
 
     companion object {
         private const val MICROS_PER_SECOND = 1_000_000L
@@ -44,11 +37,6 @@ value class EventInstant private constructor(
             minimum: Instant = DEFAULT_ACCOUNT_CREATED_AT_MINIMUM,
         ): EventInstant = of(micros, minimum)
 
-        /**
-         * Reidrata um instante que ja foi validado na escrita, sem checar faixa. Os minimos de plausibilidade sao configuraveis
-         * e valem para o evento que ENTRA: um snapshot persistido e confiavel e nao pode virar erro de leitura por uma
-         * configuracao diferente da vigente quando foi gravado. Uso exclusivo de adapters de saida ao reidratar dado proprio.
-         */
         fun fromPersisted(micros: Long): EventInstant = EventInstant(micros)
 
         private fun of(

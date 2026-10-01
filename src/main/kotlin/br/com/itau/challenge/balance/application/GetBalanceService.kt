@@ -2,19 +2,13 @@ package br.com.itau.challenge.balance.application
 
 import br.com.itau.challenge.balance.domain.exception.AccountDisabledException
 import br.com.itau.challenge.balance.domain.exception.AccountNotFoundException
-import br.com.itau.challenge.balance.domain.exception.BalanceStoreUnavailableException
 import br.com.itau.challenge.balance.domain.model.AccountId
-import br.com.itau.challenge.balance.domain.model.AccountStatus
 import br.com.itau.challenge.balance.domain.model.BalanceSnapshot
 import br.com.itau.challenge.balance.port.input.GetBalanceUseCase
 import br.com.itau.challenge.balance.port.output.BalanceSnapshotReader
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 
-/**
- * A decisao depende so do snapshot vigente. Falhas do armazenamento ([BalanceStoreUnavailableException]) propagam intactas e
- * jamais viram "conta nao encontrada". Nunca registra saldo nem titular.
- */
 @Service
 class GetBalanceService(
     private val reader: BalanceSnapshotReader,
@@ -26,7 +20,7 @@ class GetBalanceService(
                     log.debug("balance query: account not found accountId={}", accountId)
                     throw AccountNotFoundException(accountId)
                 }
-        if (snapshot.status == AccountStatus.DISABLED) {
+        if (snapshot.isDisabled()) {
             log.debug("balance query: account disabled accountId={}", accountId)
             throw AccountDisabledException(accountId)
         }
