@@ -6,108 +6,36 @@ import br.com.itau.challenge.balance.domain.model.BalanceSnapshot
 import br.com.itau.challenge.balance.domain.model.StoreFailureCause
 import br.com.itau.challenge.balance.port.output.BalanceSnapshotWriter
 import io.micrometer.core.instrument.MeterRegistry
-import io.micrometer.core.instrument.Timer
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient
 import software.amazon.awssdk.services.dynamodb.model.AttributeValue
 import software.amazon.awssdk.services.dynamodb.model.ConditionalCheckFailedException
 import software.amazon.awssdk.services.dynamodb.model.GetItemRequest
-import software.amazon.awssdk.services.dynamodb.model.ReturnValuesOnConditionCheckFailure
-import software.amazon.awssdk.services.dynamodb.model.UpdateItemRequest
-import java.math.BigDecimal
-import java.util.concurrent.TimeUnit
 
-/**
- * Uma unica `UpdateItem` condicional: o proprio banco arbitra, de forma atomica entre threads e instancias, se o evento supera
- * o vigente pela precedencia `(lastTxTsMicros, lastTxId)`. Nunca le antes (nada de read-modify-write) nem usa lock local,
- * `BatchWriteItem` ou `TransactWriteItems`.
- *
- * - Condicao verdadeira (conta ausente ou precedencia maior) -> [ApplyResult.Applied]; todos os campos mudam juntos.
- * - `ConditionalCheckFailedException` nao e erro: o vigente tem precedencia maior ou igual. O item vigente vem na propria
- *   excecao (`ALL_OLD`, sem leitura extra) e classifica o desfecho: mesma `(lastTxTsMicros, lastTxId)` -> [ApplyResult.Duplicate]
- *   (`conflicting` se dono, situacao, moeda ou saldo divergem; saldo por `compareTo`, pois o DynamoDB pode normalizar
- *   `183.10` -> `183.1`); demais casos -> [ApplyResult.Obsolete]. Se a excecao nao trouxer o item (comportamento inesperado
- *   do endpoint), uma unica `GetItem` fortemente consistente o obtem (caminho raro); item ausente ai e transitorio (a proxima
- *   tentativa cria a conta).
- * - Item vigente inferior ao evento com a condicao falsa e uma contradicao ([IllegalStateException], sem valores): nao e
- *   indisponibilidade, entao o consumer a trata como nao classificada (3 entregas e DLT).
- * - Demais falhas do SDK sao traduzidas por [DynamoDbExceptionTranslator.translateWriteFailure] e nunca engolidas; excecoes que
- *   nao sao do SDK propagam como estao.
- * - A latencia da `UpdateItem` vai para `balance.store.write.duration{result=applied|condition_failed|error}` (com histograma),
- *   inclusive quando o SDK lanca.
- *
- * O `lastTxId` e comparado como string pelo banco (bytes UTF-8): o [BalanceItemMapper] grava o UUID canonico em minusculas.
- */
 class DynamoDbBalanceSnapshotWriter(
     private val client: DynamoDbClient,
     private val tableName: String,
     meterRegistry: MeterRegistry,
 ) : BalanceSnapshotWriter {
-    private val writeTimers: Map<String, Timer> = RESULTS.associateWith { result -> writeTimer(meterRegistry, result) }
+    private val timers = writeTimers(meterRegistry)
 
     override fun applyIfNewer(snapshot: BalanceSnapshot): ApplyResult {
-        val item = BalanceItemMapper.toItem(snapshot)
-        val request =
-            UpdateItemRequest
-                .builder()
-                .tableName(tableName)
-                .key(BalanceItemMapper.keyOf(snapshot.accountId))
-                .updateExpression(UPDATE_EXPRESSION)
-                .conditionExpression(CONDITION_EXPRESSION)
-                .expressionAttributeValues(
-                    mapOf(
-                        ":v" to item.getValue(BalanceAttributes.SCHEMA_VERSION),
-                        ":o" to item.getValue(BalanceAttributes.OWNER_ID),
-                        ":st" to item.getValue(BalanceAttributes.ACCOUNT_STATUS),
-                        ":amt" to item.getValue(BalanceAttributes.BALANCE_AMOUNT),
-                        ":cur" to item.getValue(BalanceAttributes.BALANCE_CURRENCY),
-                        ":cr" to item.getValue(BalanceAttributes.ACCOUNT_CREATED_AT_MICROS),
-                        ":ts" to item.getValue(BalanceAttributes.LAST_TX_TS_MICROS),
-                        ":tx" to item.getValue(BalanceAttributes.LAST_TX_ID),
-                    ),
-                ).returnValuesOnConditionCheckFailure(ReturnValuesOnConditionCheckFailure.ALL_OLD)
-                .build()
-        val startedNanos = System.nanoTime()
+        val request = BalanceUpdateRequestFactory.create(tableName, snapshot)
+        val startedNanos = timers.startNanos()
         try {
             client.updateItem(request)
         } catch (failure: ConditionalCheckFailedException) {
-            // O timer cobre so a chamada ao banco, nao a classificacao.
-            recordDuration(CONDITION_FAILED, startedNanos)
-            return classifyConflict(snapshot, failure)
+            timers.record(WriteResult.CONDITION_FAILED, startedNanos)
+            val currentItem = if (failure.hasItem()) failure.item() else fetchCurrentItemConsistently(snapshot)
+            return ConflictClassifier.classify(snapshot, currentItem)
         } catch (failure: RuntimeException) {
-            recordDuration(ERROR, startedNanos)
-            throw DynamoDbExceptionTranslator.translateWriteFailure(failure) ?: failure
+            timers.record(WriteResult.ERROR, startedNanos)
+            throw DynamoDbExceptionTranslator.translateWriteFailure(failure)
         }
-        recordDuration(APPLIED, startedNanos)
+        timers.record(WriteResult.APPLIED, startedNanos)
         return ApplyResult.Applied
     }
 
-    private fun recordDuration(
-        result: String,
-        startedNanos: Long,
-    ) = writeTimers.getValue(result).record(System.nanoTime() - startedNanos, TimeUnit.NANOSECONDS)
-
-    private fun classifyConflict(
-        candidate: BalanceSnapshot,
-        failure: ConditionalCheckFailedException,
-    ): ApplyResult {
-        val current = if (failure.hasItem()) failure.item() else fetchCurrentItem(candidate)
-        val currentTimestamp = current.long(BalanceAttributes.LAST_TX_TS_MICROS)
-        val currentTransactionId = current.text(BalanceAttributes.LAST_TX_ID)
-        val byTimestamp = currentTimestamp.compareTo(candidate.precedence.timestamp.micros)
-        val byTransactionId = currentTransactionId.compareTo(candidate.precedence.transactionId.value)
-        val currentComparedToCandidate = if (byTimestamp != 0) byTimestamp else byTransactionId
-        return when {
-            currentComparedToCandidate == 0 -> ApplyResult.Duplicate(conflicting = hasDivergentContent(candidate, current))
-            currentComparedToCandidate > 0 -> ApplyResult.Obsolete
-            // Contradicao, nao indisponibilidade: reentregar para sempre (transitoria) bloquearia a particao se a causa fosse
-            // permanente (p.ex. item gravado fora do padrao). Por isso e falha interna, "nao classificada" no consumer: 3
-            // entregas e DLT `unprocessable_event`, com log e metrica.
-            else -> throw IllegalStateException("current balance item contradicts the failed condition")
-        }
-    }
-
-    /** Caminho raro: a excecao veio sem o item; uma unica leitura fortemente consistente o obtem. Item ausente e transitorio. */
-    private fun fetchCurrentItem(candidate: BalanceSnapshot): Map<String, AttributeValue> {
+    private fun fetchCurrentItemConsistently(candidate: BalanceSnapshot): Map<String, AttributeValue> {
         val request =
             GetItemRequest
                 .builder()
@@ -119,63 +47,9 @@ class DynamoDbBalanceSnapshotWriter(
             try {
                 client.getItem(request)
             } catch (failure: RuntimeException) {
-                throw DynamoDbExceptionTranslator.translateWriteFailure(failure) ?: failure
+                throw DynamoDbExceptionTranslator.translateWriteFailure(failure)
             }
         if (!response.hasItem()) throw BalanceStoreUnavailableException(StoreFailureCause.UNAVAILABLE)
         return response.item()
-    }
-
-    /** Conteudo divergente de um mesmo evento: dono, situacao, moeda ou saldo (`compareTo`, nao `equals`). */
-    private fun hasDivergentContent(
-        candidate: BalanceSnapshot,
-        current: Map<String, AttributeValue>,
-    ): Boolean =
-        current.text(BalanceAttributes.OWNER_ID) != candidate.ownerId.value ||
-            current.text(BalanceAttributes.ACCOUNT_STATUS) != candidate.status.name ||
-            current.text(BalanceAttributes.BALANCE_CURRENCY) != candidate.balance.currency.value ||
-            current.decimal(BalanceAttributes.BALANCE_AMOUNT).compareTo(candidate.balance.amount) != 0
-
-    /** Atributo ausente ou ilegivel no item vigente: falha interna sem valores na mensagem (nunca classifica no escuro). */
-    private fun Map<String, AttributeValue>.text(name: String): String = this[name]?.s() ?: unreadable(name)
-
-    private fun Map<String, AttributeValue>.long(name: String): Long =
-        try {
-            (this[name]?.n() ?: unreadable(name)).toLong()
-        } catch (_: NumberFormatException) {
-            unreadable(name)
-        }
-
-    private fun Map<String, AttributeValue>.decimal(name: String): BigDecimal =
-        try {
-            BigDecimal(this[name]?.n() ?: unreadable(name))
-        } catch (_: NumberFormatException) {
-            unreadable(name)
-        }
-
-    private fun unreadable(attribute: String): Nothing = throw IllegalStateException("unreadable current balance item: invalid attribute '$attribute'")
-
-    private companion object {
-        const val APPLIED = "applied"
-        const val CONDITION_FAILED = "condition_failed"
-        const val ERROR = "error"
-        val RESULTS = listOf(APPLIED, CONDITION_FAILED, ERROR)
-
-        /** As tres series nascem em zero para as consultas enxergarem a serie. */
-        fun writeTimer(
-            registry: MeterRegistry,
-            result: String,
-        ): Timer =
-            Timer
-                .builder("balance.store.write.duration")
-                .description("Latencia da UpdateItem condicional do snapshot")
-                .tag("result", result)
-                .serviceLevelObjectives(*StoreLatencyObjectives.OBJECTIVES)
-                .register(registry)
-
-        const val UPDATE_EXPRESSION =
-            "SET schemaVersion = :v, ownerId = :o, accountStatus = :st, balanceAmount = :amt, balanceCurrency = :cur, " +
-                "accountCreatedAtMicros = :cr, lastTxTsMicros = :ts, lastTxId = :tx"
-        const val CONDITION_EXPRESSION =
-            "attribute_not_exists(pk) OR lastTxTsMicros < :ts OR (lastTxTsMicros = :ts AND lastTxId < :tx)"
     }
 }

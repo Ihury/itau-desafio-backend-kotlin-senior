@@ -1,6 +1,5 @@
 package br.com.itau.challenge.balance.adapter.output.dynamodb
 
-import org.springframework.boot.context.properties.ConfigurationProperties
 import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
@@ -14,95 +13,30 @@ import software.amazon.awssdk.http.apache5.Apache5HttpClient
 import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.retries.api.RetryStrategy
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient
-import java.net.URI
 import java.time.Duration
-
-/**
- * Propriedades `dynamodb.*`. Pertencem ao adapter: nenhuma camada pode depender do pacote `config`. [endpoint] em branco
- * significa producao (endpoint AWS e cadeia padrao de credenciais).
- */
-@ConfigurationProperties("dynamodb")
-class DynamoDbClientProperties(
-    val endpoint: String?,
-    val region: String,
-    val tableName: String,
-    val connectTimeout: Duration,
-    val acquireTimeout: Duration,
-    val read: Read,
-    val write: Write,
-) {
-    /** Cliente de leitura (API): a unica camada de retry e o SDK; timeouts curtos para falhar rapido. */
-    class Read(
-        val consistent: Boolean,
-        val attemptTimeout: Duration,
-        val callTimeout: Duration,
-        val maxAttempts: Int,
-        val maxConnections: Int,
-    )
-
-    /**
-     * Cliente de escrita (consumer): sem retry no SDK (uma tentativa); a unica camada de retry e o error handler do consumer.
-     * Pool proprio, isolado do da leitura.
-     */
-    class Write(
-        val attemptTimeout: Duration,
-        val callTimeout: Duration,
-        val maxConnections: Int,
-    )
-}
-
-internal data class HttpSettings(
-    val connectTimeout: Duration,
-    val acquireTimeout: Duration,
-    val socketTimeout: Duration,
-    val maxConnections: Int,
-)
 
 @Configuration
 @EnableConfigurationProperties(DynamoDbClientProperties::class)
 class DynamoDbClientsConfig {
-    /** `maxAttempts` inclui a tentativa inicial (2 = 1 retry). */
     @Bean
     fun dynamoDbReadClient(properties: DynamoDbClientProperties): DynamoDbClient =
         buildClient(
             properties = properties,
-            http = readHttpSettings(properties),
+            http = HttpSettings.forRead(properties),
             retryStrategy = AwsRetryStrategy.standardRetryStrategy().toBuilder().maxAttempts(properties.read.maxAttempts).build(),
             attemptTimeout = properties.read.attemptTimeout,
             callTimeout = properties.read.callTimeout,
         )
 
-    /**
-     * Cliente separado: a estrategia de retry e por cliente (o override por requisicao so cobre timeouts) e uma rajada de
-     * ingestao nao pode esgotar as conexoes da API.
-     */
     @Bean
     fun dynamoDbWriteClient(properties: DynamoDbClientProperties): DynamoDbClient =
         buildClient(
             properties = properties,
-            http = writeHttpSettings(properties),
+            http = HttpSettings.forWrite(properties),
             retryStrategy = AwsRetryStrategy.doNotRetry(),
             attemptTimeout = properties.write.attemptTimeout,
             callTimeout = properties.write.callTimeout,
         )
-
-    internal fun readHttpSettings(properties: DynamoDbClientProperties): HttpSettings =
-        HttpSettings(
-            connectTimeout = properties.connectTimeout,
-            acquireTimeout = properties.acquireTimeout,
-            socketTimeout = properties.read.attemptTimeout,
-            maxConnections = properties.read.maxConnections,
-        )
-
-    internal fun writeHttpSettings(properties: DynamoDbClientProperties): HttpSettings =
-        HttpSettings(
-            connectTimeout = properties.connectTimeout,
-            acquireTimeout = properties.acquireTimeout,
-            socketTimeout = properties.write.attemptTimeout,
-            maxConnections = properties.write.maxConnections,
-        )
-
-    internal fun endpointOf(properties: DynamoDbClientProperties): URI? = properties.endpoint?.takeIf { it.isNotBlank() }?.let(URI::create)
 
     private fun buildClient(
         properties: DynamoDbClientProperties,
@@ -131,14 +65,14 @@ class DynamoDbClientsConfig {
                         .apiCallTimeout(callTimeout)
                         .build(),
                 )
-        endpointOf(properties)?.let { builder.endpointOverride(it) }
+        properties.endpointUri?.let { builder.endpointOverride(it) }
         return builder.build()
     }
 
     private fun credentialsOf(properties: DynamoDbClientProperties): AwsCredentialsProvider =
-        if (endpointOf(properties) != null) {
-            StaticCredentialsProvider.create(AwsBasicCredentials.create("local", "local"))
-        } else {
-            DefaultCredentialsProvider.builder().build()
-        }
+        if (properties.endpointUri != null) LOCAL_CREDENTIALS else DefaultCredentialsProvider.builder().build()
+
+    private companion object {
+        val LOCAL_CREDENTIALS: AwsCredentialsProvider = StaticCredentialsProvider.create(AwsBasicCredentials.create("local", "local"))
+    }
 }

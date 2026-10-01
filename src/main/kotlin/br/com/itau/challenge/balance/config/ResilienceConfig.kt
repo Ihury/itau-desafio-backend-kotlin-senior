@@ -1,5 +1,6 @@
 package br.com.itau.challenge.balance.config
 
+import br.com.itau.challenge.balance.adapter.output.dynamodb.CircuitBreakerProperties
 import br.com.itau.challenge.balance.adapter.output.dynamodb.readCircuitBreakerConfig
 import io.github.resilience4j.circuitbreaker.CircuitBreaker
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry
@@ -10,38 +11,25 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 
-/**
- * Circuit breaker programatico da leitura (Resilience4j core, sem starter Spring): registry, breaker e binding das metricas no
- * Micrometer (todo `MeterBinder` e ligado pelo Spring Boot).
- */
 @Configuration
 @EnableConfigurationProperties(CircuitBreakerProperties::class)
 class ResilienceConfig {
     @Bean
     fun circuitBreakerRegistry(properties: CircuitBreakerProperties): CircuitBreakerRegistry =
-        CircuitBreakerRegistry.of(
-            readCircuitBreakerConfig(
-                slidingWindow = properties.window,
-                minCalls = properties.minCalls,
-                failureRateThresholdPercent = properties.failureRate,
-                slowCallThreshold = properties.slowCall,
-                slowCallRateThresholdPercent = properties.slowRate,
-                openWait = properties.openWait,
-                halfOpenCalls = properties.halfOpenCalls,
-            ),
-        )
+        CircuitBreakerRegistry.of(readCircuitBreakerConfig(properties))
 
     @Bean
     fun dynamoDbReadCircuitBreaker(registry: CircuitBreakerRegistry): CircuitBreaker =
-        registry.circuitBreaker(DYNAMODB_READ_BREAKER_NAME).also { breaker ->
-            // WARN so nas transicoes de estado: com o circuito aberto as rejeicoes por requisicao nao logam.
-            breaker.eventPublisher.onStateTransition { event ->
-                log.warn("circuit breaker {} changed state {} -> {}", event.circuitBreakerName, event.stateTransition.fromState, event.stateTransition.toState)
-            }
-        }
+        registry.circuitBreaker(DYNAMODB_READ_BREAKER_NAME).also(::warnOnStateTransition)
 
     @Bean
     fun circuitBreakerMetrics(registry: CircuitBreakerRegistry): MeterBinder = TaggedCircuitBreakerMetrics.ofCircuitBreakerRegistry(registry)
+
+    private fun warnOnStateTransition(breaker: CircuitBreaker) {
+        breaker.eventPublisher.onStateTransition { event ->
+            log.warn("circuit breaker {} changed state {} -> {}", event.circuitBreakerName, event.stateTransition.fromState, event.stateTransition.toState)
+        }
+    }
 
     private companion object {
         private val log = LoggerFactory.getLogger(ResilienceConfig::class.java)

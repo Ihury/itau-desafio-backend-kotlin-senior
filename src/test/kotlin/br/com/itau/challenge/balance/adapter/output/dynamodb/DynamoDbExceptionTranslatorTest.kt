@@ -175,8 +175,10 @@ class DynamoDbExceptionTranslatorTest {
 
     @Test
     fun `an exception that does not come from the sdk is not translated`() {
-        assertNull(DynamoDbExceptionTranslator.translateReadFailure(IllegalStateException("x")))
-        assertNull(DynamoDbExceptionTranslator.translateWriteFailure(RuntimeException("x")))
+        val unrelatedRead = IllegalStateException("x")
+        val unrelatedWrite = RuntimeException("x")
+        assertSame(unrelatedRead, DynamoDbExceptionTranslator.translateReadFailure(unrelatedRead))
+        assertSame(unrelatedWrite, DynamoDbExceptionTranslator.translateWriteFailure(unrelatedWrite))
     }
 
     @Test

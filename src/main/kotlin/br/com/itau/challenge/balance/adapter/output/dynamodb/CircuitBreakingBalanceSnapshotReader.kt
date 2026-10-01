@@ -8,44 +8,23 @@ import br.com.itau.challenge.balance.port.output.BalanceSnapshotReader
 import io.github.resilience4j.circuitbreaker.CallNotPermittedException
 import io.github.resilience4j.circuitbreaker.CircuitBreaker
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig
-import java.time.Duration
 
-/**
- * So [BalanceStoreUnavailableException] conta como falha: item encontrado, ausente (`null`) e falhas internas como
- * [IllegalStateException] (item corrompido: o banco respondeu) contam como sucesso, pois nao indicam indisponibilidade do
- * armazenamento. A pilha da rejeicao com o circuito aberto e desligada (`writableStackTraceEnabled(false)`): ela ocorre por
- * requisicao e a pilha so custaria CPU e ruido.
- */
-@Suppress("LongParameterList")
-fun readCircuitBreakerConfig(
-    slidingWindow: Duration,
-    minCalls: Int,
-    failureRateThresholdPercent: Float,
-    slowCallThreshold: Duration,
-    slowCallRateThresholdPercent: Float,
-    openWait: Duration,
-    halfOpenCalls: Int,
-): CircuitBreakerConfig =
+fun readCircuitBreakerConfig(properties: CircuitBreakerProperties): CircuitBreakerConfig =
     CircuitBreakerConfig
         .custom()
         .slidingWindowType(CircuitBreakerConfig.SlidingWindowType.TIME_BASED)
-        .slidingWindowSize(slidingWindow.seconds.toInt().coerceAtLeast(1))
-        .minimumNumberOfCalls(minCalls)
-        .failureRateThreshold(failureRateThresholdPercent)
-        .slowCallDurationThreshold(slowCallThreshold)
-        .slowCallRateThreshold(slowCallRateThresholdPercent)
-        .waitDurationInOpenState(openWait)
+        .slidingWindowSize(properties.window.seconds.toInt().coerceAtLeast(1))
+        .minimumNumberOfCalls(properties.minCalls)
+        .failureRateThreshold(properties.failureRate)
+        .slowCallDurationThreshold(properties.slowCall)
+        .slowCallRateThreshold(properties.slowRate)
+        .waitDurationInOpenState(properties.openWait)
         .automaticTransitionFromOpenToHalfOpenEnabled(true)
-        .permittedNumberOfCallsInHalfOpenState(halfOpenCalls)
+        .permittedNumberOfCallsInHalfOpenState(properties.halfOpenCalls)
         .recordExceptions(BalanceStoreUnavailableException::class.java)
         .writableStackTraceEnabled(false)
         .build()
 
-/**
- * Decorator do [BalanceSnapshotReader] com circuit breaker. Com o circuito aberto a chamada falha com
- * [BalanceStoreCircuitOpenException] (uma [BalanceStoreUnavailableException]) sem invocar o delegate; jamais devolve `null`
- * nem saldo presumido.
- */
 class CircuitBreakingBalanceSnapshotReader(
     private val delegate: BalanceSnapshotReader,
     private val circuitBreaker: CircuitBreaker,

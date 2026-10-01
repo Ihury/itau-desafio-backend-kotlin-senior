@@ -1,5 +1,6 @@
 package br.com.itau.challenge.balance.config
 
+import br.com.itau.challenge.balance.adapter.output.dynamodb.CircuitBreakerProperties
 import io.github.resilience4j.circuitbreaker.CircuitBreaker
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry
@@ -44,13 +45,6 @@ class ResilienceConfigTest {
     }
 
     @Test
-    fun `retry after is the open wait in whole seconds and never below one`() {
-        assertEquals(10L, properties.retryAfterSeconds)
-        assertEquals(1L, propertiesWith(openWait = Duration.ofMillis(200)).retryAfterSeconds)
-        assertEquals(3L, propertiesWith(openWait = Duration.ofMillis(2100)).retryAfterSeconds)
-    }
-
-    @Test
     fun `registry provides the dynamodb read breaker with the configured thresholds`() {
         assertEquals("dynamodb-read", readBreaker.name)
         assertSame(readBreaker, registry.circuitBreaker("dynamodb-read"))
@@ -80,15 +74,4 @@ class ResilienceConfigTest {
     fun `the application meter registry already carries the breaker metrics`() {
         assertNotNull(meterRegistry.find("resilience4j.circuitbreaker.state").tag("name", "dynamodb-read").gauge())
     }
-
-    private fun propertiesWith(openWait: Duration) =
-        CircuitBreakerProperties(
-            window = Duration.ofSeconds(10),
-            minCalls = 20,
-            failureRate = 50f,
-            slowCall = Duration.ofMillis(500),
-            slowRate = 80f,
-            openWait = openWait,
-            halfOpenCalls = 5,
-        )
 }

@@ -1,5 +1,6 @@
 package br.com.itau.challenge.balance.config
 
+import br.com.itau.challenge.balance.adapter.output.dynamodb.CircuitBreakerProperties
 import br.com.itau.challenge.balance.adapter.output.dynamodb.CircuitBreakingBalanceSnapshotReader
 import br.com.itau.challenge.balance.adapter.output.dynamodb.readCircuitBreakerConfig
 import br.com.itau.challenge.balance.domain.exception.BalanceStoreUnavailableException
@@ -48,13 +49,15 @@ class ResilienceLoggingTest {
         val registry =
             CircuitBreakerRegistry.of(
                 readCircuitBreakerConfig(
-                    slidingWindow = Duration.ofSeconds(10),
-                    minCalls = 4,
-                    failureRateThresholdPercent = 50f,
-                    slowCallThreshold = Duration.ofSeconds(5),
-                    slowCallRateThresholdPercent = 80f,
-                    openWait = Duration.ofSeconds(30),
-                    halfOpenCalls = 2,
+                    CircuitBreakerProperties(
+                        window = Duration.ofSeconds(10),
+                        minCalls = 4,
+                        failureRate = 50f,
+                        slowCall = Duration.ofSeconds(5),
+                        slowRate = 80f,
+                        openWait = Duration.ofSeconds(30),
+                        halfOpenCalls = 2,
+                    ),
                 ),
             )
         return ResilienceConfig().dynamoDbReadCircuitBreaker(registry)

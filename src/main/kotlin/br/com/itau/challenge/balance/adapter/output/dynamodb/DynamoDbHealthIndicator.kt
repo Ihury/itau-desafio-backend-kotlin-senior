@@ -11,56 +11,45 @@ import software.amazon.awssdk.services.dynamodb.model.TableStatus
 import java.time.Clock
 import java.time.Duration
 import java.time.Instant
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 
-/**
- * Probe `DescribeTable` da tabela do snapshot, com timeout curto ([PROBE_TIMEOUT], por cima dos timeouts do cliente de
- * leitura) e resultado em cache por [CACHE_TTL] (o probe e barato, mas a saude e consultada por operadores e por raspagens
- * de metricas). Sem detalhes: nem mensagem de excecao nem nome de infraestrutura chegam a resposta ou aos logs (so a classe
- * da excecao, na transicao de estado).
- *
- * Pertence ao grupo `dependencies`, nunca a `liveness` nem a `readiness`: com o DynamoDB fora a instancia continua em rotacao
- * e a API responde 503 + `Retry-After` de forma explicita.
- *
- * O gauge `balance.dependency.up{dependency=dynamodb}` (1 = ultimo probe OK, 0 = falhou) le o mesmo estado em cache: avaliar o
- * gauge pode disparar o probe, entao o estado e renovado a cada raspagem mesmo que ninguem consulte
- * `/actuator/health/dependencies`.
- */
 class DynamoDbHealthIndicator(
     private val client: DynamoDbClient,
     private val tableName: String,
     meterRegistry: MeterRegistry,
     private val clock: Clock,
 ) : HealthIndicator {
-    private val lock = Any()
-    private var lastProbeAt: Instant? = null
-    private var lastProbeUp: Boolean = false
+    private data class ProbeResult(
+        val at: Instant,
+        val up: Boolean,
+    )
+
+    private val lock = ReentrantLock()
+    private var lastProbe: ProbeResult? = null
 
     init {
         Gauge
-            .builder("balance.dependency.up") { if (isUpRefreshingIfStale()) 1.0 else 0.0 }
+            .builder(GAUGE_NAME) { if (isUpRefreshingIfStale()) 1.0 else 0.0 }
             .description("1 se o ultimo probe da dependencia foi bem sucedido, 0 se falhou (mesmo estado do grupo de saude dependencies)")
-            .tag("dependency", "dynamodb")
+            .tag(DEPENDENCY_TAG, DEPENDENCY)
             .register(meterRegistry)
     }
 
     override fun health(): Health = if (isUpRefreshingIfStale()) Health.up().build() else Health.down().build()
 
-    /** Estado em cache; um unico thread executa o probe e os demais reaproveitam o resultado. */
     private fun isUpRefreshingIfStale(): Boolean =
-        synchronized(lock) {
+        lock.withLock {
             val now = clock.instant()
-            val previousProbeAt = lastProbeAt
-            if (previousProbeAt == null || !now.isBefore(previousProbeAt.plus(CACHE_TTL))) {
-                val previousUp = if (previousProbeAt == null) null else lastProbeUp
-                val failureReason = probeFailureReason()
-                lastProbeUp = failureReason == null
-                lastProbeAt = now
-                logTransition(previousUp, failureReason)
-            }
-            lastProbeUp
+            val previous = lastProbe
+            if (previous != null && now.isBefore(previous.at.plus(CACHE_TTL))) return@withLock previous.up
+            val failureReason = probeFailureReason()
+            val current = ProbeResult(now, up = failureReason == null)
+            lastProbe = current
+            logTransition(previous?.up, failureReason)
+            current.up
         }
 
-    /** `null` quando a tabela esta utilizavel; caso contrario o motivo para o log (classe da excecao ou estado da tabela). */
     private fun probeFailureReason(): String? =
         try {
             val request =
@@ -72,7 +61,6 @@ class DynamoDbHealthIndicator(
             val status = client.describeTable(request).table()?.tableStatus()
             if (status == TableStatus.ACTIVE || status == TableStatus.UPDATING) null else "table status ${status ?: "unknown"}"
         } catch (failure: RuntimeException) {
-            // So a classe da excecao vai ao log, nunca a mensagem.
             log.debug("dynamodb probe failed exception={}", failure.javaClass.simpleName)
             failure.javaClass.simpleName
         }
@@ -89,6 +77,9 @@ class DynamoDbHealthIndicator(
 
     private companion object {
         private val log = LoggerFactory.getLogger(DynamoDbHealthIndicator::class.java)
+        const val GAUGE_NAME = "balance.dependency.up"
+        const val DEPENDENCY_TAG = "dependency"
+        const val DEPENDENCY = "dynamodb"
         val CACHE_TTL: Duration = Duration.ofSeconds(5)
         val PROBE_TIMEOUT: Duration = Duration.ofMillis(500)
     }

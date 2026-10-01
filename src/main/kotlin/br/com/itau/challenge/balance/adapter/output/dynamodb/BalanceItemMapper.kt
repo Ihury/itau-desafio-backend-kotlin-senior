@@ -13,34 +13,6 @@ import br.com.itau.challenge.balance.domain.model.TransactionId
 import software.amazon.awssdk.services.dynamodb.model.AttributeValue
 import java.math.BigDecimal
 
-internal object BalanceAttributes {
-    const val PK = "pk"
-    const val SK = "sk"
-    const val SCHEMA_VERSION = "schemaVersion"
-    const val OWNER_ID = "ownerId"
-    const val ACCOUNT_STATUS = "accountStatus"
-    const val BALANCE_AMOUNT = "balanceAmount"
-    const val BALANCE_CURRENCY = "balanceCurrency"
-    const val ACCOUNT_CREATED_AT_MICROS = "accountCreatedAtMicros"
-    const val LAST_TX_TS_MICROS = "lastTxTsMicros"
-    const val LAST_TX_ID = "lastTxId"
-
-    const val PK_PREFIX = "ACCOUNT#"
-    const val SK_VALUE = "BALANCE"
-    const val CURRENT_SCHEMA_VERSION = "1"
-}
-
-/**
- * `balanceAmount` e `N` escrito com `toPlainString()` (sem notacao cientifica) e lido com `BigDecimal(String)`: o banco
- * normaliza zeros a direita (`183.10` -> `183.1`) sem alterar o valor.
- *
- * Os instantes sao reidratados sem checagem de faixa ([EventInstant.fromPersisted]): os minimos configuraveis foram aplicados
- * na escrita e a leitura confia no dado persistido.
- *
- * Um item que nao respeita o layout ou os tipos do dominio (corrompido ou legado) e sempre uma [IllegalStateException] (falha
- * interna), nunca `InvalidEventException` (que a API leria como requisicao invalida) nem dado errado. A mensagem cita apenas
- * o nome do atributo; jamais o valor.
- */
 internal object BalanceItemMapper {
     fun keyOf(accountId: AccountId): Map<String, AttributeValue> =
         mapOf(
@@ -66,34 +38,46 @@ internal object BalanceItemMapper {
         if (item.number(BalanceAttributes.SCHEMA_VERSION) != BalanceAttributes.CURRENT_SCHEMA_VERSION) {
             corrupted(BalanceAttributes.SCHEMA_VERSION)
         }
-        val partitionKey = item.text(BalanceAttributes.PK)
-        if (!partitionKey.startsWith(BalanceAttributes.PK_PREFIX)) corrupted(BalanceAttributes.PK)
-
         return BalanceSnapshot(
-            accountId = readAttribute(BalanceAttributes.PK) { AccountId.parse(partitionKey.removePrefix(BalanceAttributes.PK_PREFIX)) },
-            ownerId = readAttribute(BalanceAttributes.OWNER_ID) { OwnerId.parse(item.text(BalanceAttributes.OWNER_ID)) },
-            status = readAttribute(BalanceAttributes.ACCOUNT_STATUS) { AccountStatus.parse(item.text(BalanceAttributes.ACCOUNT_STATUS)) },
-            balance =
-                readAttribute(BalanceAttributes.BALANCE_AMOUNT) {
-                    Money.of(
-                        BigDecimal(item.number(BalanceAttributes.BALANCE_AMOUNT)),
-                        CurrencyCode.parse(item.text(BalanceAttributes.BALANCE_CURRENCY)),
-                    )
-                },
-            accountCreatedAt =
-                readAttribute(BalanceAttributes.ACCOUNT_CREATED_AT_MICROS) {
-                    EventInstant.fromPersisted(item.number(BalanceAttributes.ACCOUNT_CREATED_AT_MICROS).toLong())
-                },
-            precedence =
-                Precedence(
-                    timestamp =
-                        readAttribute(BalanceAttributes.LAST_TX_TS_MICROS) {
-                            EventInstant.fromPersisted(item.number(BalanceAttributes.LAST_TX_TS_MICROS).toLong())
-                        },
-                    transactionId = readAttribute(BalanceAttributes.LAST_TX_ID) { TransactionId.parse(item.text(BalanceAttributes.LAST_TX_ID)) },
-                ),
+            accountId = accountIdOf(item),
+            ownerId = ownerOf(item),
+            status = statusOf(item),
+            balance = balanceOf(item),
+            accountCreatedAt = instantOf(item, BalanceAttributes.ACCOUNT_CREATED_AT_MICROS),
+            precedence = precedenceOf(item),
         )
     }
+
+    fun ownerOf(item: Map<String, AttributeValue>): OwnerId =
+        readOrCorrupted(BalanceAttributes.OWNER_ID) { OwnerId.parse(item.text(BalanceAttributes.OWNER_ID)) }
+
+    fun statusOf(item: Map<String, AttributeValue>): AccountStatus =
+        readOrCorrupted(BalanceAttributes.ACCOUNT_STATUS) { AccountStatus.parse(item.text(BalanceAttributes.ACCOUNT_STATUS)) }
+
+    fun balanceOf(item: Map<String, AttributeValue>): Money =
+        readOrCorrupted(BalanceAttributes.BALANCE_AMOUNT) {
+            Money.of(
+                BigDecimal(item.number(BalanceAttributes.BALANCE_AMOUNT)),
+                CurrencyCode.parse(item.text(BalanceAttributes.BALANCE_CURRENCY)),
+            )
+        }
+
+    fun precedenceOf(item: Map<String, AttributeValue>): Precedence =
+        Precedence(
+            timestamp = instantOf(item, BalanceAttributes.LAST_TX_TS_MICROS),
+            transactionId = readOrCorrupted(BalanceAttributes.LAST_TX_ID) { TransactionId.parse(item.text(BalanceAttributes.LAST_TX_ID)) },
+        )
+
+    private fun accountIdOf(item: Map<String, AttributeValue>): AccountId {
+        val partitionKey = item.text(BalanceAttributes.PK)
+        if (!partitionKey.startsWith(BalanceAttributes.PK_PREFIX)) corrupted(BalanceAttributes.PK)
+        return readOrCorrupted(BalanceAttributes.PK) { AccountId.parse(partitionKey.removePrefix(BalanceAttributes.PK_PREFIX)) }
+    }
+
+    private fun instantOf(
+        item: Map<String, AttributeValue>,
+        attribute: String,
+    ): EventInstant = readOrCorrupted(attribute) { EventInstant.fromPersisted(item.number(attribute).toLong()) }
 
     private fun stringAttribute(value: String): AttributeValue = AttributeValue.builder().s(value).build()
 
@@ -103,11 +87,7 @@ internal object BalanceItemMapper {
 
     private fun Map<String, AttributeValue>.number(name: String): String = this[name]?.n() ?: corrupted(name)
 
-    /**
-     * Falhas de validacao do dominio ou de parse numerico (`NumberFormatException`, inclusive expoente fora de faixa) viram
-     * [IllegalStateException] sem causa (a causa de um parser pode conter o valor).
-     */
-    private fun <T> readAttribute(
+    private fun <T> readOrCorrupted(
         attribute: String,
         block: () -> T,
     ): T =

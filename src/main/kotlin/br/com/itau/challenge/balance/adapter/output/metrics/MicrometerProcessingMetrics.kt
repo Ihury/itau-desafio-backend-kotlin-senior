@@ -1,5 +1,6 @@
 package br.com.itau.challenge.balance.adapter.output.metrics
 
+import br.com.itau.challenge.balance.adapter.output.ResultTimers
 import br.com.itau.challenge.balance.domain.model.ApplyResult
 import br.com.itau.challenge.balance.domain.model.RejectionReason
 import br.com.itau.challenge.balance.domain.model.StoreFailureCause
@@ -9,26 +10,17 @@ import br.com.itau.challenge.balance.port.output.IngestOutcome
 import br.com.itau.challenge.balance.port.output.OutcomeMetrics
 import io.micrometer.core.instrument.Counter
 import io.micrometer.core.instrument.MeterRegistry
-import io.micrometer.core.instrument.Timer
 import org.springframework.stereotype.Component
-import java.time.Duration
-import java.util.concurrent.TimeUnit
 
-/**
- * Um contador `balance.events{outcome, reason}` por desfecho (`reason=none` fora de `rejected`; `rejected` tem um por motivo
- * do catalogo, todos registrados em zero). `balance.events.anomalies{type=conflicting_duplicate}` e adicional: nao conta um
- * segundo desfecho. `balance.dlt.publish.failures` e `balance.consumer.backpressure{cause}` nao sao desfechos.
- * `balance.ingest.duration{outcome}` nasce com as cinco series em zero.
- */
 @Component
 class MicrometerProcessingMetrics(
     registry: MeterRegistry,
 ) : OutcomeMetrics,
     ConsumerFailureMetrics,
     IngestMetrics {
-    private val processedCounter = outcomeCounter(registry, "processed")
-    private val obsoleteCounter = outcomeCounter(registry, "obsolete")
-    private val duplicateCounter = outcomeCounter(registry, "duplicate")
+    private val processedCounter = eventCounter(registry, "processed", NO_REASON)
+    private val obsoleteCounter = eventCounter(registry, "obsolete", NO_REASON)
+    private val duplicateCounter = eventCounter(registry, "duplicate", NO_REASON)
     private val conflictingDuplicate =
         Counter
             .builder("balance.events.anomalies")
@@ -37,14 +29,7 @@ class MicrometerProcessingMetrics(
             .register(registry)
 
     private val rejectedCounters: Map<RejectionReason, Counter> =
-        RejectionReason.entries.associateWith { reason ->
-            Counter
-                .builder("balance.events")
-                .description("Desfecho de cada evento consumido")
-                .tag("outcome", "rejected")
-                .tag("reason", reason.code)
-                .register(registry)
-        }
+        RejectionReason.entries.associateWith { reason -> eventCounter(registry, "rejected", reason.code) }
     private val dltPublishFailuresCounter =
         Counter
             .builder("balance.dlt.publish.failures")
@@ -60,15 +45,15 @@ class MicrometerProcessingMetrics(
                 .register(registry)
         }
 
-    private val ingestTimers: Map<IngestOutcome, Timer> =
-        IngestOutcome.entries.associateWith { outcome ->
-            Timer
-                .builder("balance.ingest.duration")
-                .description("Parse, validacao e escrita de cada mensagem consumida")
-                .tag("outcome", outcome.name.lowercase())
-                .serviceLevelObjectives(*INGEST_OBJECTIVES)
-                .register(registry)
-        }
+    private val ingestTimers =
+        ResultTimers(
+            registry = registry,
+            name = "balance.ingest.duration",
+            description = "Parse, validacao e escrita de cada mensagem consumida",
+            tagName = "outcome",
+            results = IngestOutcome.entries,
+            objectivesMillis = INGEST_OBJECTIVES_MILLIS,
+        )
 
     override fun record(result: ApplyResult) {
         when (result) {
@@ -90,20 +75,22 @@ class MicrometerProcessingMetrics(
     override fun ingestDuration(
         outcome: IngestOutcome,
         nanos: Long,
-    ) = ingestTimers.getValue(outcome).record(nanos, TimeUnit.NANOSECONDS)
+    ) = ingestTimers.recordElapsed(outcome, nanos)
 
-    private fun outcomeCounter(
+    private fun eventCounter(
         registry: MeterRegistry,
-        label: String,
+        outcome: String,
+        reason: String,
     ): Counter =
         Counter
             .builder("balance.events")
             .description("Desfecho de cada evento consumido")
-            .tag("outcome", label)
-            .tag("reason", "none")
+            .tag("outcome", outcome)
+            .tag("reason", reason)
             .register(registry)
 
     private companion object {
-        val INGEST_OBJECTIVES = listOf(5L, 10L, 25L, 50L, 100L, 250L, 500L, 1_000L, 2_500L).map(Duration::ofMillis).toTypedArray()
+        const val NO_REASON = "none"
+        val INGEST_OBJECTIVES_MILLIS = listOf(5L, 10L, 25L, 50L, 100L, 250L, 500L, 1_000L, 2_500L)
     }
 }

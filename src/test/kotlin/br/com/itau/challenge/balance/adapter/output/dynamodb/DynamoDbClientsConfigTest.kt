@@ -62,13 +62,13 @@ class DynamoDbClientsConfigTest {
 
     @Test
     fun `write client http settings follow the properties with its own pool size`() {
-        val settings = config.writeHttpSettings(properties())
+        val settings = HttpSettings.forWrite(properties())
 
         assertEquals(Duration.ofMillis(300), settings.connectTimeout)
         assertEquals(Duration.ofMillis(300), settings.acquireTimeout)
         assertEquals(Duration.ofSeconds(2), settings.socketTimeout)
         assertEquals(50, settings.maxConnections)
-        assertEquals(100, config.readHttpSettings(properties()).maxConnections)
+        assertEquals(100, HttpSettings.forRead(properties()).maxConnections)
     }
 
     @Test
@@ -96,7 +96,7 @@ class DynamoDbClientsConfigTest {
 
     @Test
     fun `read client http settings follow the properties`() {
-        val settings = config.readHttpSettings(properties())
+        val settings = HttpSettings.forRead(properties())
 
         assertEquals(Duration.ofMillis(300), settings.connectTimeout)
         assertEquals(Duration.ofMillis(300), settings.acquireTimeout)
@@ -130,8 +130,8 @@ class DynamoDbClientsConfigTest {
 
     @Test
     fun `a blank endpoint property resolves to no endpoint override`() {
-        assertNull(config.endpointOf(properties(null)))
-        assertNull(config.endpointOf(properties("")))
-        assertEquals(URI.create("http://localhost:8000"), config.endpointOf(properties()))
+        assertNull(properties(null).endpointUri)
+        assertNull(properties("").endpointUri)
+        assertEquals(URI.create("http://localhost:8000"), properties().endpointUri)
     }
 }
